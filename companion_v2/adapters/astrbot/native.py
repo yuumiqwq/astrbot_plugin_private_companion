@@ -257,7 +257,7 @@ def persona_instruction(persona):
     # （4.29.1 的现场就是保存映射失败、提示人格提示词或对话示例格式无法读取）。
     # 这里只要求 role/content 存在且可用，注入前再把多余字段剥掉。
     if not isinstance(dialogs, list) or any(
-        not isinstance(d, dict) or d.get("role") not in ("user", "assistant")
+        not isinstance(d, dict) or d.get("role") not in ("system", "user", "assistant")
         or not isinstance(d.get("content"), str) for d in dialogs
     ):
         raise TaskError("host_persona_invalid", "persona examples require the verified text format")

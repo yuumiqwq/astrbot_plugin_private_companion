@@ -24,11 +24,19 @@ class PersonaExampleTests(unittest.TestCase):
 
     def test_examples_still_require_role_and_text(self):
         for broken in ([{"role": "user"}],
-                       [{"role": "system", "content": "x"}],
+                       [{"role": "tool", "content": "x"}],
                        [{"role": "user", "content": ["x"]}],
                        [{"role": "user", "content": "x", "extra": 1}][:0] + ["raw"]):
             with self.assertRaises(TaskError):
                 persona_instruction({"prompt": "p", "_begin_dialogs_processed": broken})
+
+    def test_host_preset_system_guidance_is_retained_with_the_examples(self):
+        dialogs = [{"role": "system", "content": "Use assistant examples for style.", "_no_save": True},
+                   {"role": "user", "content": "Question", "_no_save": True},
+                   {"role": "assistant", "content": "Answer", "_no_save": True}]
+        text = persona_instruction({"prompt": "Native persona", "_begin_dialogs_processed": dialogs})
+        examples = json.loads(text.split("\n", 3)[-1])
+        self.assertEqual(examples, [{"role": d["role"], "content": d["content"]} for d in dialogs])
 
     def test_plain_prompt_without_examples_is_unchanged(self):
         self.assertEqual(persona_instruction({"prompt": "只有提示词。"}), "只有提示词。")

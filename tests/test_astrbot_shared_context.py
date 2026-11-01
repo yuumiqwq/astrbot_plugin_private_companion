@@ -258,6 +258,24 @@ class SharedHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(item.owner == "astrbot.conversation"
                              for item in refreshed.context.materials), 1)
 
+    async def test_native_preset_guidance_is_shared_once_in_all_background_modes(self):
+        examples = [{"role": "system", "content": "Use assistant examples for style.", "_no_save": True},
+                    {"role": "user", "content": "Preset question", "_no_save": True},
+                    {"role": "assistant", "content": "Preset answer", "_no_save": True}]
+        self.bridge.verified_persona.return_value = {
+            "prompt": "persona and examples", "system_prompt": "exact persona", "begin_dialogs": examples}
+        for output, mode in (("proactive_contact", "simple"), ("proactive_contact", "companion"),
+                             ("role_daily_review", "companion")):
+            with self.subTest(output=output, mode=mode):
+                request = replace(self.request, output_format=output, proactive_mode=mode)
+                result = await self.loader(await self.loader(request))
+                budgeted = self.native.prepare_session_request.await_args.args[2]
+                self.assertEqual(budgeted.contexts, examples + self.history)
+                self.assertEqual(result.role_instruction, "exact persona")
+                history = json.loads(result.context.materials[-1].payload)
+                self.assertEqual(history[:3], [{"role": d["role"], "content": d["content"]} for d in examples])
+                self.assertEqual(sum(m["content"] == examples[0]["content"] for m in history), 1)
+
     async def test_new_native_session_uses_empty_history_with_the_current_persona(self):
         self.manager.get_curr_conversation_id.return_value = None
         result = await self.loader(self.request)

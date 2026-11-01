@@ -83,6 +83,7 @@ class NativeInputTests(NativeFixture, unittest.IsolatedAsyncioTestCase):
     async def test_verified_persona_exposes_native_presets_without_serializing_them_into_the_system_prompt(self):
         await self.envelope()
         self.native.persona["_begin_dialogs_processed"] = [
+            {"role": "system", "content": "Use assistant examples for style.", "_no_save": True},
             {"role": "user", "content": "Preset question", "_no_save": True},
             {"role": "assistant", "content": "Preset answer", "_no_save": True},
         ]
