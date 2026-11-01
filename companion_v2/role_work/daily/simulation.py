@@ -63,13 +63,21 @@ async def simulate_daily_review(app, context, instruction, *, attempt_id):
         if finish not in (None, "stop", "end_turn"):
             raise TaskError("daily_output_incomplete", "daily preview requires a complete response")
         run.validate()
-        output.parse(service, context, inputs, text)
-        value = object_output(text)
-        result = {**base, "state": "passed", "result": value, "raw_response": text,
-                  "task_id": task_id, "call_id": completion.call_id,
+        result = {**base, "state": "passed", "result": None, "raw_response": text,
+                  "task_id": task_id, "call_id": completion.call_id, "finish_reason": finish,
                   "generated_at": stamp(service.tasks.now()),
                   "stages": [{"stage": stage, "state": "passed"} for stage in
-                             ("source_capture", "model_generation", "output_validation")]}
+                             ("source_capture", "model_generation")]}
+        try:
+            output.parse(service, context, inputs, text)
+            result["result"] = object_output(text)
+            result["stages"].append({"stage": "output_validation", "state": "passed"})
+        except (TaskError, ValueError, TypeError, KeyError) as error:
+            result.update(state="failed", stage="output_validation",
+                          code=getattr(error, "code", "daily_output_invalid"), error=str(error))
+            result["stages"].append({"stage": "output_validation", "state": "failed"})
+            # Keep the actual returned body even when the domain contract rejects
+            # it. This is an administrator-requested preview, never a domain save.
         key = RESULT_PREFIX + context.key + ":" + attempt_id
         operation_id = "daily-simulation-result-" + digest([context.key, attempt_id])
         operation = OperationRef(operation_id, "daily.simulation", context.scope,

@@ -177,7 +177,9 @@ class RoleDailyReview:
             "本轮只调用一次模型。启用的各部分遵守下述资料与格式，关闭或已存在的部分严格输出 null。"
             "只返回 JSON 对象 {\"diary\":对象或null,\"day_plan\":对象或null,\"memory\":对象或null}。"
             "在总输出预算内简明完整地写完三个字段。日记通常简短，记忆只保留值得长期记住的少量变化。\n"
-            + "\n\n".join(inputs["instructions"]))
+            + "\n\n".join(inputs["instructions"])
+            + "\n本轮完整输出结构如下；保留字段名称、对象层级和数据类型，关闭项为 null：\n"
+            + encode(daily_inputs.DAILY_SCHEMA))
         materials = (PromptMaterial(OWNER, "daily_parts", encode({"local_date": inputs["local_date"],
             "timezone": inputs["timezone"], "enabled": inputs["parts"]})), *inputs["materials"])
         return PromptRequest(event, inputs["instruction"], SealedForegroundContext(tuple(materials), (), ()),

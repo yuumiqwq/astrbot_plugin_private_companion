@@ -1,12 +1,14 @@
 """Daily previews exercise the production request and validators without domain writes."""
 
 import unittest
+import json
 from unittest.mock import patch
 
 from companion_v2.configuration.registry import FieldRegistry
 from companion_v2.execution.models import TaskError, encode
 from companion_v2.model_gateway.routing import configuration_fields
 from companion_v2.role_work.daily.service import daily_profile
+from companion_v2.role_work.daily.inputs import DAILY_SCHEMA
 from companion_v2.role_work.daily.simulation import RESULT_PREFIX, simulate_daily_review
 from tests import test_role_daily_review as daily_support
 from tests.test_role_state import StateFixture
@@ -50,6 +52,7 @@ class DailySimulationTests(StateFixture, unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(result["parts_enabled"].values()))
         self.assertEqual(set(result["result"]), {"diary", "day_plan", "memory"})
         self.assertEqual(len(self.daily_calls()), 1)
+        self.assertIn(encode(DAILY_SCHEMA), self.daily_calls()[0].original.instruction)
         self.assertEqual(self.sent, [])
         self.assertEqual(self.protected(app), before)
         self.assertFalse(app.role_state.settings(context)[0]["planning_enabled"])
@@ -64,8 +67,13 @@ class DailySimulationTests(StateFixture, unittest.IsolatedAsyncioTestCase):
             return answered(encode({"diary": {"body": "无效日记"}, "day_plan": {"items": []},
                 "memory": {"summary": "", "proposals": [], "pending_decisions": [], "anniversaries": []}}))
         self.model_behavior = invalid
-        with self.assertRaises(TaskError):
-            await self.preview(app, context)
+        result = await self.preview(app, context)
+        self.assertEqual(result["state"], "failed")
+        self.assertEqual(result["stage"], "output_validation")
+        self.assertEqual(result["error"], "diary must identify its selected original materials")
+        self.assertEqual(json.loads(result["raw_response"])["diary"]["body"], "无效日记")
+        saved = app.runtime.read_one("SELECT value FROM runtime_metadata WHERE key LIKE ?", (RESULT_PREFIX + "%",))
+        self.assertEqual(json.loads(saved["value"])["raw_response"], result["raw_response"])
         self.assertEqual(len(self.daily_calls()), 1)
         self.assertEqual(self.protected(app), before)
         self.assertEqual(self.sent, [])
