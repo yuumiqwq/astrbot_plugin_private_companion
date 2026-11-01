@@ -27,6 +27,10 @@ window.CompanionWeatherSourcePage = (() => {
     staging_host_terminated:"插件已停止，请重新打开插件页面。",
     invalid_response:"数据源配置未能读取，请重新读取。",
   };
+  const confirmedErrorCodes = new Set([
+    ...Object.keys(errors).filter(code => code !== "invalid_response"),
+    "host_options_request_invalid", "host_options_unavailable",
+  ]);
   let root = null, status = null, draft = null, busy = false, pending = false, stale = false;
   let generation = 0, abort = null, message = "", leavePrompt = null;
   const askConfirm = options => typeof window.CompanionConfirm === "function"
@@ -77,6 +81,12 @@ window.CompanionWeatherSourcePage = (() => {
           || typeof value.edit_token !== "string" || !/^[a-f0-9]{64}$/.test(value.edit_token)
           || typeof value.has_credential !== "boolean") throw new Error("invalid_response");
       return value;
+    } catch (failure) {
+      // AstrBot's iframe bridge preserves a server rejection as Error(code).
+      // Transport errors still leave the result of a write unconfirmed.
+      const code = failure?.code || failure?.message;
+      if (confirmedErrorCodes.has(code)) throw Object.assign(new Error(code), {code, confirmed:true});
+      throw failure;
     } finally {clearTimeout(timer);}
   }
   function render() {

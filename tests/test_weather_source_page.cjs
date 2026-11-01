@@ -22,7 +22,11 @@ function harness(options = {}) {
   };
   const bridge = {
     apiGet: async () => status,
-    apiPost: async (_endpoint, body) => {posts.push(body); return options.postStatus || status;},
+    apiPost: async (_endpoint, body) => {
+      posts.push(body);
+      if (options.postError) throw options.postError;
+      return options.postStatus || status;
+    },
   };
   const window = {
     CompanionProduct: {bridgeNow: () => bridge, bridgeFor: async () => bridge, scopeKey: () => "role-scope"},
@@ -35,7 +39,8 @@ function harness(options = {}) {
     removeEventListener(type) { delete listeners[type]; },
     dispatch(type, event) { return listeners[type]?.(event); },
   };
-  vm.runInNewContext(source, {window, Promise, Object, String, Number, Error, AbortController, setTimeout, clearTimeout});
+  vm.runInNewContext(source, {window, Promise, Object, String, Number, Error, AbortController, setTimeout, clearTimeout,
+    document:{dispatchEvent(){}}, CustomEvent:class {constructor(type){this.type=type;}}});
   return {window, root, confirmations, posts, status, page: window.CompanionWeatherSourcePage};
 }
 
@@ -184,5 +189,50 @@ test("a saved signed JWT cannot be saved with a cleared required field", async (
   await flush();
   assert.equal(posts.length, 0);
   assert.match(root.innerHTML, /私钥自动签发需要同时填写 JWT 凭据 ID/);
+  page.unmount();
+});
+
+test("a server rejection passed through the AstrBot bridge retains editable credentials", async () => {
+  const {page, root, posts} = harness({postError:new Error("weather_source_invalid")});
+  page.mount(root);
+  await flush();
+  root.dispatch("input", {target:{name:"api_host",value:"abc123.re.qweatherapi.com"}});
+  root.dispatch("input", {target:{name:"credential",value:"draft-weather-credential"}});
+  submit(root);
+  await flush();
+  assert.equal(posts.length,1);
+  assert.match(root.innerHTML,/请按当前认证方式核对/);
+  assert.doesNotMatch(root.innerHTML,/保存结果尚未确认/);
+  assert.match(root.innerHTML,/value="draft-weather-credential"/);
+  assert.doesNotMatch(root.innerHTML,/<button[^>]*type="submit"[^>]*disabled/);
+  submit(root);
+  await flush();
+  assert.equal(posts.length,2);
+  page.unmount();
+});
+
+test("a bridge conflict is confirmed but still requires a fresh edit token", async () => {
+  const {page, root} = harness({postError:new Error("host_options_conflict")});
+  page.mount(root);
+  await flush();
+  root.dispatch("input", {target:{name:"refresh_minutes",value:"10"}});
+  submit(root);
+  await flush();
+  assert.match(root.innerHTML,/数据源已被其他页面修改/);
+  assert.doesNotMatch(root.innerHTML,/保存结果尚未确认/);
+  assert.match(root.innerHTML,/<button[^>]*type="submit"[^>]*disabled/);
+  page.unmount();
+});
+
+test("a transport failure remains an unconfirmed write", async () => {
+  const {page, root} = harness({postError:new Error("bridge_timeout")});
+  page.mount(root);
+  await flush();
+  root.dispatch("input", {target:{name:"credential",value:"draft-weather-credential"}});
+  submit(root);
+  await flush();
+  assert.match(root.innerHTML,/保存结果尚未确认/);
+  assert.doesNotMatch(root.innerHTML,/value="draft-weather-credential"/);
+  assert.match(root.innerHTML,/<button[^>]*type="submit"[^>]*disabled/);
   page.unmount();
 });
