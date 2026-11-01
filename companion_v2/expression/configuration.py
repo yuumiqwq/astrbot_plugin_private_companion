@@ -49,6 +49,7 @@ LIMITS = {
     "group_new_messages": (5, 80),
 }
 DEFAULTS = {
+    "enabled": True,
     "private_learning_enabled": True,
     "group_learning_enabled": False,
     "window_hours": 720,
@@ -85,7 +86,7 @@ ROLE_SCOPE_DEFAULTS = {
 }
 SCOPED_FIELDS = frozenset(("group_member_mode", "group_member_ids"))
 ROLE_DEFAULTS = {name: value for name, value in DEFAULTS.items() if name not in SCOPED_FIELDS}
-BOOLEAN_FIELDS = ("private_learning_enabled", "group_learning_enabled", "private_application_enabled",
+BOOLEAN_FIELDS = ("enabled", "private_learning_enabled", "group_learning_enabled", "private_application_enabled",
                   "group_application_enabled", "sample_review_enabled", "style_review_enabled")
 ROLE_BOOLEAN_FIELDS = tuple(name for name in BOOLEAN_FIELDS if name not in SCOPED_FIELDS)
 TEXT_FIELDS = {"learning_mode": 16}
@@ -382,6 +383,7 @@ class ExpressionLearningSettings:
     group_new_messages: int = 20
     group_member_mode: str = "all"
     group_member_ids: str = ""
+    enabled: bool = True
 
     def __post_init__(self):
         if any(type(getattr(self, name)) is not bool for name in BOOLEAN_FIELDS):
@@ -407,13 +409,19 @@ class ExpressionLearningSettings:
     @classmethod
     def from_values(cls, values=None):
         values = values or {}
-        return cls(**{name: values.get(name, default) for name, default in DEFAULTS.items()})
+        effective = {name: values.get(name, default) for name, default in DEFAULTS.items()}
+        if effective["enabled"] is False:
+            for name in ("private_learning_enabled", "group_learning_enabled",
+                         "private_application_enabled", "group_application_enabled"):
+                effective[name] = False
+        return cls(**effective)
 
     def with_group_learning(self, enabled):
-        return ExpressionLearningSettings(**{**self.__dict__, "group_learning_enabled": enabled})
+        return ExpressionLearningSettings.from_values({**self.__dict__, "group_learning_enabled": enabled})
 
     def applies_to(self, context):
-        return self.group_application_enabled if context.scope.kind.value == "group" else self.private_application_enabled
+        return self.enabled and (self.group_application_enabled if context.scope.kind.value == "group"
+                                 else self.private_application_enabled)
 
     @property
     def selected_members(self):

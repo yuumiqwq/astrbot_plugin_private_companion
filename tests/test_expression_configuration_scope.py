@@ -88,6 +88,35 @@ class ExpressionConfigurationScopeTests(unittest.TestCase):
         self.assertEqual(settings.sample_limit, 60)
         self.assertEqual(settings.min_samples, 2)
 
+    def test_master_switch_disables_learning_and_application_without_rewriting_child_settings(self):
+        owner = ExpressionConfigurationOwner(self.runtime)
+        fields = configuration_fields()
+        role = ConfigTarget(INSTALLATION, ConfigLayer.ROLE, ROLE_A, bot_id=SCOPE_A.bot_id)
+        snapshot = owner.read(role, fields)
+        owner.write(role, fields, changes={GROUP + ".enabled": False,
+                    GROUP + ".group_learning_enabled": True}, reset=(),
+                    expected_revision=snapshot.revision, observed_at=NOW)
+        for scope in (SCOPE_A, PRIVATE_SCOPE):
+            context = self.context(scope)
+            subject = SubjectRef(INSTALLATION, SubjectKind.HUMAN, "person-a")
+            context.actor = SimpleNamespace(subject=subject)
+            context.audience = SimpleNamespace(recipients=(subject,))
+            policy = read_settings(self.runtime, context)
+            self.assertFalse(policy.enabled)
+            self.assertFalse(policy.private_learning_enabled)
+            self.assertFalse(policy.group_learning_enabled)
+            self.assertFalse(policy.applies_to(context))
+            self.assertFalse(policy.with_group_learning(True).group_learning_enabled)
+        saved = owner.read(role, fields)
+        self.assertTrue(saved.fields[GROUP + ".group_learning_enabled"].value)
+        self.assertTrue(saved.fields[GROUP + ".private_application_enabled"].value)
+        self.assertTrue(read_settings(self.runtime, self.context(SCOPE_B, ROLE_B)).enabled)
+        owner.write(role, fields, changes={GROUP + ".enabled": True}, reset=(),
+                    expected_revision=saved.revision, observed_at=NOW)
+        restored = read_settings(self.runtime, self.context())
+        self.assertTrue(restored.group_learning_enabled)
+        self.assertTrue(restored.applies_to(self.context()))
+
     def test_role_profile_controls_map_owner_selected_and_all_modes(self):
         context = self.context(PRIVATE_SCOPE, ROLE_A)
         profile_owner = RoleProfileConfigurationOwner(self.runtime)
