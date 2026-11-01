@@ -226,6 +226,9 @@ class MemorySchedule:
                     (stamp(next_due(now, settings["zone"], settings["local_time"])), key, row["next_at"]))
                 if not changed.rowcount:
                     continue
+            delegated = getattr(self, "delegated", None)
+            if delegated is not None and delegated(TaskContext.restore(json.loads(row["context_json"]))):
+                continue
             worker = asyncio.create_task(self._run(dict(row), now), name="companion:memory-daily:" + key)
             self.workers[key] = worker
             worker.add_done_callback(lambda done: self.notify())

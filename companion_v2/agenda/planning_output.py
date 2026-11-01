@@ -114,7 +114,7 @@ def parse_output(text, job):
                     or set(item) - {"title", "start", "minutes", "detail", "goal_id", "parent_id"}):
                 raise ValueError("invalid fields")
             start = datetime.fromisoformat(item["start"])
-            if start.tzinfo is None or not job["at"] <= start < job["end"]:
+            if start.tzinfo is None or not max(job["at"], job.get("start", job["at"])) <= start < job["end"]:
                 raise ValueError("outside the current planning window")
             if type(item["minutes"]) is not int or not 1 <= item["minutes"] <= 1440:
                 raise ValueError("invalid duration")

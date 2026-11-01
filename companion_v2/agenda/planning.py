@@ -15,6 +15,7 @@ from companion_v2.foundation.refs import OperationRef, VersionRef
 from companion_v2.identity_policy.interventions import (CALENDAR_INTERVENTION,
     REST_WAKE_INTERVENTION, require_capability)
 from companion_v2.model_gateway.models import ModelTaskProfile
+from companion_v2.model_gateway.shared_role_context import prepare_role_context
 from companion_v2.role_work.state.ownership import role_schedule_key
 from companion_v2.storage.models import OperationState
 from companion_v2.storage.repositories import OperationRepository
@@ -381,7 +382,7 @@ class CalendarPlanning:
             tuple(materials), (), ()),
             prompt_instruction, context.role_binding, output_format="calendar_planning", response_format="json_object")
         if self.request_context is not None:
-            request = await self.request_context(request)
+            request = await prepare_role_context(self.request_context, request, context)
         completion = await self.gateway.generate(run, request)
         try:
             if completion.draft is None:
@@ -446,6 +447,9 @@ class CalendarPlanning:
         settings_token = self.app.role_state.planning_settings_token(context)
         for mode, period in (("daily", local.date().isoformat()),
                              ("horizon", "%04d-W%02d" % local.isocalendar()[:2])):
+            daily = getattr(self.app, "daily_review", None)
+            if mode == "daily" and daily is not None and daily.handles(context):
+                continue
             slot = mode + ":" + settings["planning_timezone"] + ":" + period + ":settings:" + settings_token
             if not self.attempted(context, slot, automatic=True):
                 return mode, slot, None

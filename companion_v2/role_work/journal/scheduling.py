@@ -94,6 +94,9 @@ class JournalScheduleDriver:
                 today = datetime.combine(local_now.date(), schedule.local_time, ZoneInfo(schedule.timezone))
                 if today.astimezone(utc_timezone.utc) > now:
                     continue
+            delegated = getattr(self, "delegated", None)
+            if delegated is not None and delegated(schedule.context):
+                continue
             worker = asyncio.create_task(self._run(schedule, local_now.date().isoformat()),
                                          name="companion:journal-daily:" + key)
             self._workers[key] = worker

@@ -144,7 +144,7 @@ def calendar_inventory(app, context, *, role_global=False):
 
 
 def capture(planner, context, instruction, mode, slot, occurrence=None, *, weather=None, weather_location=None,
-            manual=False, refresh=False, role_global=False):
+            manual=False, refresh=False, role_global=False, planning_date=None):
     app, at = planner.app, planner.tasks.now()
     app.calendar.access.check(context, "calendar.write", at=at)
     settings = planning_values(app.role_state.settings(context)[0])
@@ -156,9 +156,11 @@ def capture(planner, context, instruction, mode, slot, occurrence=None, *, weath
         raise TaskError("planning_mode_inactive", "automatic planning is inactive in continuous schedule mode")
     zone = ZoneInfo(settings["planning_timezone"])
     window_days = min(31, settings["planning_horizon_days"]) if mode == "intervention" else settings["planning_horizon_days"]
-    end = (datetime.combine(at.astimezone(zone).date() + timedelta(days=1), time(), zone)
+    day = planning_date or at.astimezone(zone).date()
+    start = datetime.combine(day, time(), zone) if planning_date is not None else at
+    end = (datetime.combine(day + timedelta(days=1), time(), zone)
            if mode == "daily" else at + timedelta(days=window_days))
-    calendar_context = planning_calendar_context(at, end, zone,
+    calendar_context = planning_calendar_context(start, end, zone,
                                                  configured_annual_calendars(settings["planning_annual_calendars"]))
     inventory, calendar_snapshot = calendar_inventory(app, context, role_global=role_global)
     sources, calendar, goals, memories, inputs = [], [], [], [], []
@@ -323,7 +325,7 @@ def capture(planner, context, instruction, mode, slot, occurrence=None, *, weath
     refresh_ids = {item["id"] for item in refresh_plans}
     existing = [(item["title"], item["schedule"]["anchor"], item["duration_minutes"])
                 for item in inventory["items"] if item["state"] != "cancelled" and item["id"] not in refresh_ids]
-    material = {"mode": mode, "now": at.isoformat(), "end": end.isoformat(),
+    material = {"mode": mode, "now": at.isoformat(), "start": start.isoformat(), "end": end.isoformat(),
         "timezone": settings["planning_timezone"], "max_items": settings["planning_max_items"],
         "planning_preferences": settings["planning_prompt"], "calendar_context": calendar_context,
         "planning_scope": "role" if role_global else "conversation",
@@ -346,7 +348,7 @@ def capture(planner, context, instruction, mode, slot, occurrence=None, *, weath
         if used_chars + size <= MATERIAL_CHARS:
             material["recent_life"] = recent_life
             used_chars += size
-    return {"context": context, "instruction": instruction, "mode": mode, "slot": slot, "at": at, "end": end,
+    return {"context": context, "instruction": instruction, "mode": mode, "slot": slot, "at": at, "start": start, "end": end,
         "settings": settings, "sources": tuple(sources),
         "goal_refs": goal_refs, "calendar_refs": calendar_refs, "memory_refs": memory_refs, "growth_refs": growth_refs,
         "experience_refs": experience_refs, "existing": existing, "refresh_plans": refresh_plans,
