@@ -7,9 +7,9 @@ window.CompanionModelsPage = (() => {
   const TASK_CONFIG_TIMEOUT_MS = 30000;
   const TASK_CONFIG_RETRY_TIMEOUT_MS = 30000;
   const VOICE_SAVE_TIMEOUT_MS = 30000;
-  const fields = ["provider", "fallback", "prompt", "max_output_tokens", "timeout_seconds", "replacement_rules", "fallback_on_refusal", "refusal_terms", "replacement_scope"];
+  const fields = ["provider", "fallback", "prompt", "max_output_tokens", "timeout_seconds", "reasoning_effort", "replacement_rules", "fallback_on_refusal", "refusal_terms", "replacement_scope"];
   const fieldLabel = { provider: "主模型提供方", fallback: "备用模型提供方", prompt: "附加提示词",
-    max_output_tokens: "输出上限", timeout_seconds: "请求超时", replacement_rules: "替换规则",
+    max_output_tokens: "输出上限", timeout_seconds: "请求超时", reasoning_effort: "思考强度", replacement_rules: "替换规则",
     fallback_on_refusal: "拒答替代", refusal_terms: "拒答匹配词", replacement_scope: "替换作用范围" };
   const groups = [
     ["对话", [["conversation.reply", "对话回复", "AstrBot 核心回复与 V2 附加提示"],
@@ -160,6 +160,7 @@ window.CompanionModelsPage = (() => {
       if (task.fields.fallback_on_refusal === undefined) task.fields.fallback_on_refusal = plainField(false);
       if (task.fields.refusal_terms === undefined) task.fields.refusal_terms = plainField("");
       if (task.fields.timeout_seconds === undefined) task.fields.timeout_seconds = plainField(60);
+      if (task.fields.reasoning_effort === undefined) task.fields.reasoning_effort = plainField("");
       if (task.fields.replacement_scope === undefined) task.fields.replacement_scope = plainField("all"); }
     return data; }
   function patchFor(task, draft) { const changes = {}, reset = [];
@@ -246,6 +247,7 @@ window.CompanionModelsPage = (() => {
     if (Object.hasOwn(p.changes, "prompt") && (typeof p.changes.prompt !== "string" || p.changes.prompt.length > 8000)) return false;
     if (Object.hasOwn(p.changes, "max_output_tokens") && (!Number.isInteger(p.changes.max_output_tokens) || p.changes.max_output_tokens < 1 || p.changes.max_output_tokens > MAX_MODEL_OUTPUT_TOKENS)) return false;
     if (Object.hasOwn(p.changes, "timeout_seconds") && (!Number.isInteger(p.changes.timeout_seconds) || p.changes.timeout_seconds < 1 || p.changes.timeout_seconds > 600)) return false;
+    if (Object.hasOwn(p.changes, "reasoning_effort") && !["", "low", "high", "max"].includes(p.changes.reasoning_effort)) return false;
     if (Object.hasOwn(p.changes, "replacement_scope") && !["plugin", "conversation", "all"].includes(p.changes.replacement_scope)) return false;
     if (Object.hasOwn(p.changes, "fallback_on_refusal") && typeof p.changes.fallback_on_refusal !== "boolean") return false;
     if (Object.hasOwn(p.changes, "replacement_rules") && (typeof p.changes.replacement_rules !== "string" || p.changes.replacement_rules.length > 24000)) return false;
@@ -387,6 +389,8 @@ window.CompanionModelsPage = (() => {
           <label class="model-fd"><span class="model-cap">单次输出上限</span>
             <span class="model-unit"><input type="number" min="1" max="${limit}" step="1" data-model-field="max_output_tokens" data-model-kind="${esc(task.kind)}" value="${esc(effective(task, draft, "max_output_tokens"))}" ${fieldLocked ? "disabled" : ""}><i>令牌</i></span></label>
         </div>
+        <label class="model-fd"><span class="model-cap">思考强度</span>
+          <select data-model-field="reasoning_effort" data-model-kind="${esc(task.kind)}" ${fieldLocked ? "disabled" : ""}>${[["","跟随 Provider"],["low","低"],["high","高"],["max","最高"]].map(([value,label]) => `<option value="${value}" ${effective(task,draft,"reasoning_effort") === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
         <label class="model-fd dash"><span class="model-cap">任务附加提示词 <em>最多 8000 字</em></span>
           <textarea rows="3" maxlength="8000" data-model-field="prompt" data-model-kind="${esc(task.kind)}" ${fieldLocked ? "disabled" : ""}>${esc(draft.inherited.prompt ? task.fields.prompt.inherited_value : draft.values.prompt)}</textarea></label>
         <div class="model-inh"><span class="lab">未单独设置时跟随上级</span>
@@ -501,6 +505,7 @@ window.CompanionModelsPage = (() => {
       try { const result = await configureTask(payload);
         if (ticket !== version) return;
         if (result?.task?.kind !== kind || typeof result.replayed !== "boolean") throw failure("invalid_response");
+        normalize({tasks:[result.task],configuration_layer:s.layer});
         storePending(kind, null); draft.pending = null;
         if (result.task.configuration_layer && result.task.configuration_layer !== s.layer) {
           layerChanged = true;

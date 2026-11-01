@@ -306,6 +306,54 @@ test('multi-select assigns one provider to several tasks and keeps capability mi
   assert.match(node.innerHTML, /2<\/b> 项改动待保存/);
 });
 
+test('reasoning effort saves only its task and reads the confirmed value back', async () => {
+  const h = harness(), node = h.root(), initial = status();
+  initial.tasks.push(editable('proactive.compose', 'primary', ['text'], 'background'));
+  h.page.mount(node);
+  h.requests[0].resolve(initial);
+  await flush();
+  node.click('[data-model-open]', {modelOpen:'proactive.compose'});
+  assert.match(node.innerHTML, /data-model-field="reasoning_effort" data-model-kind="proactive.compose"[^>]*><option value="" selected>跟随 Provider/);
+  node.change('[data-model-field]', {modelField:'reasoning_effort',modelKind:'proactive.compose',value:'max'});
+  node.click('[data-model-action]', {modelAction:'save-one',modelKind:'proactive.compose'});
+  const post = h.requests.find(request => request.method === 'POST');
+  assert.equal(post.values.kind, 'proactive.compose');
+  assert.equal(post.values.edit_token, TOKEN);
+  assert.deepEqual({...post.values.changes}, {reasoning_effort:'max'});
+  assert.deepEqual([...post.values.reset], []);
+  const saved = editable('proactive.compose', 'primary', ['text'], 'background');
+  saved.fields.reasoning_effort = {value:'max',inherited_value:'high',source:'role',inherited_source:'installation',explicit:true};
+  post.resolve({task:saved,replayed:false});
+  await flush();
+  assert.match(node.innerHTML, /<option value="max" selected>最高/);
+  assert.doesNotMatch(node.innerHTML, /项改动待保存/);
+  assert.equal(h.requests.filter(request => request.method === 'POST').length, 1);
+  h.page.unmount();
+});
+
+test('provider reasoning default and parent inheritance remain separate choices', async () => {
+  const h = harness(), node = h.root(), initial = status();
+  const item = editable('proactive.compose', 'primary', ['text'], 'background');
+  item.fields.reasoning_effort = {value:'max',inherited_value:'high',source:'role',inherited_source:'installation',explicit:true};
+  initial.tasks = [item];
+  h.page.mount(node);h.requests[0].resolve(initial);await flush();
+  node.click('[data-model-open]', {modelOpen:'proactive.compose'});
+  node.change('[data-model-field]', {modelField:'reasoning_effort',modelKind:'proactive.compose',value:''});
+  node.click('[data-model-action]', {modelAction:'save-one',modelKind:'proactive.compose'});
+  const post = h.requests.find(request => request.method === 'POST');
+  assert.deepEqual({...post.values.changes}, {reasoning_effort:''});
+  const saved = {...item,fields:{...item.fields,reasoning_effort:{...item.fields.reasoning_effort,value:''}}};
+  post.resolve({task:saved,replayed:false});await flush();
+  node.change('[data-model-inherit]', {modelInherit:'reasoning_effort',modelKind:'proactive.compose',checked:true});
+  assert.match(node.innerHTML, /<option value="high" selected>高/);
+  node.click('[data-model-action]', {modelAction:'save-one',modelKind:'proactive.compose'});
+  const reset = h.requests.filter(request => request.method === 'POST').at(-1);
+  assert.deepEqual({...reset.values.changes}, {});
+  assert.deepEqual([...reset.values.reset], ['reasoning_effort']);
+  reset.resolve({task:{...saved,fields:{...saved.fields,reasoning_effort:{...saved.fields.reasoning_effort,value:'high',explicit:false}}},replayed:false});
+  await flush();h.page.unmount();
+});
+
 test('restoring inheritance resets explicit fields through the reset list', async () => {
   const {page, requests, root} = harness();
   const node = root();
