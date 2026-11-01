@@ -180,9 +180,11 @@ class SharedHistoryTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(output=output, mode=mode):
                 result = await self.loader(replace(self.request, output_format=output, proactive_mode=mode))
                 messages = json.loads(result.context.materials[-1].payload)
-                self.assertEqual([m["content"] for m in messages[:2]], ["Preset question", "Preset answer"])
+                dialogue = [m for m in messages if m["role"] in {"user", "assistant"}]
+                self.assertEqual([m["content"] for m in dialogue[:2]], ["Preset question", "Preset answer"])
                 self.assertEqual(messages[-1]["content"],
-                    "[QQ消息发送时间：2026-11-01T05:21:27+08:00；Asia/Shanghai]\n晚安姐姐")
+                    "[QQ消息发送时间：2026-11-01 05:21:27]\n晚安姐姐")
+                self.assertEqual(sum(m["content"].count("Asia/Shanghai") for m in messages), 1)
                 self.assertEqual(json.loads(self.manager.get_conversation.return_value.history), history)
 
     async def test_simple_does_not_collect_companion_materials_and_budgets_native_presets(self):
