@@ -13,7 +13,7 @@ from openai.types.chat import ChatCompletion
 
 from companion_v2.conversation.foreground import PromptMaterial
 from companion_v2.model_gateway.failures import ModelFailure
-from companion_v2.proactive.response_schema import contact_schema
+from companion_v2.proactive.response_schema import contact_schema, final_task_prompt
 from tests.native_adapter_support import FakeProvider, NativeFixture
 
 
@@ -63,10 +63,11 @@ class ProactiveNativeContractTests(NativeFixture, unittest.IsolatedAsyncioTestCa
                 sent = state.calls[-1]
                 self.assertEqual(sent["response_format"], {"type": "json_object"})
                 self.assertNotIn("response_format", sent["extra_body"])
-                self.assertEqual(sent["messages"][-3:-1], history)
-                task = json.loads(sent["messages"][-1]["content"])["task"]
-                self.assertEqual(task["response_schema"], schema)
-                self.assertEqual(json.loads(state.text), task["skip_example"])
+                self.assertEqual(sent["messages"][-4:-2], history)
+                self.assertIn("materials", json.loads(sent["messages"][-2]["content"]))
+                task = sent["messages"][-1]
+                self.assertEqual(task, {"role": "user", "content": final_task_prompt(mode, schema)})
+                self.assertIn(state.text, task["content"])
 
     async def test_blank_provider_output_stays_rejected_and_reaches_diagnostic_sink(self):
         envelope = await self.envelope()

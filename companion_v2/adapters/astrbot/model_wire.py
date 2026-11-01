@@ -196,9 +196,6 @@ def build_wire(envelope, *, model_name=""):
     current = {"materials": materials,
                "deferred": [{"owner": c.owner, "purpose": c.purpose} for c in request.context.deferred],
                "unavailable": [{"owner": c.owner, "purpose": c.purpose} for c in request.context.unavailable]}
-    if request.output_format == "proactive_contact" and request.response_schema_json:
-        from companion_v2.proactive.response_schema import final_task
-        current["task"] = final_task(request.proactive_mode, strict_json(request.response_schema_json))
     messages = [*composition.system_messages, *host_history,
                 {"role": "user", "content": encode(current)}]
     if request.images:
@@ -269,6 +266,10 @@ def build_wire(envelope, *, model_name=""):
                         "audio_status": "not_inspected"})},
                         {"type": "image_url", "image_url": {"url": "data:image/png;base64," + image.data_base64, "detail": "auto"}}))
         messages[-1]["content"] = content
+    if request.output_format == "proactive_contact" and request.response_schema_json:
+        from companion_v2.proactive.response_schema import final_task_prompt
+        messages.append({"role": "user", "content": final_task_prompt(
+            request.proactive_mode, strict_json(request.response_schema_json))})
     for exchange in envelope.tool_history:
         messages.extend(({"role": "assistant", "content": None, "tool_calls": [{"id": exchange.call.call_id,
             "type": "function", "function": {"name": tool_alias(exchange.call.action),
