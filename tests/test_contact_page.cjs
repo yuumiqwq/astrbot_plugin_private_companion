@@ -208,8 +208,8 @@ function harness({nativeApi = NATIVE, configApi = CONFIG, modelApi, promptMode =
     },
     AstrBotPluginPage: {
       ready: () => Promise.resolve({pluginName: HOST}),
-      apiGet: (route, params) => new Promise((resolve, reject) => requests.push({method: 'GET', route, params, resolve, reject})),
-      apiPost: (route, values) => new Promise((resolve, reject) => requests.push({method: 'POST', route, values, resolve, reject})),
+      apiGet: (route, params, options) => new Promise((resolve, reject) => requests.push({method: 'GET', route, params, options, resolve, reject})),
+      apiPost: (route, values, options) => new Promise((resolve, reject) => requests.push({method: 'POST', route, values, options, resolve, reject})),
     },
     document: {
       addEventListener: () => {},
@@ -1983,10 +1983,15 @@ test('模拟响应断开后保留失败状态并允许再次模拟', async () =>
   h.element.dispatch('click', {target:{closest:sel => sel === '[data-view]' ? {dataset:{view:'tests'}} : null}});
   h.element.dispatch('click', {target:{closest:sel => sel === '[data-test-run]' ? {dataset:{testRun:'care'}} : null}});
   await h.settle();
+  assert.equal(h.requests.at(-1).options.timeoutMs, 180000);
   h.requests.at(-1).reject(new Error('network failed'));
   await h.settle();
   assert.equal(h.page.state.data.testResults.care.state, 'unknown');
   assert.match(h.element.innerHTML, /模拟结果未收到/);
+  assert.match(h.element.innerHTML, /卡在模拟请求与结果接收/);
+  assert.match(h.element.innerHTML, /simulation_request_failed/);
+  assert.match(h.element.innerHTML, /network failed/);
+  assert.doesNotMatch(h.element.innerHTML, /模型选择不发送/);
   assert.doesNotMatch(h.element.innerHTML, /核对.*QQ|解除测试锁/);
   assert.equal(h.localStore.size, 0);
   const count = h.requests.length;
@@ -2010,7 +2015,26 @@ test('模拟不依赖浏览器持久化，旧投递响应不能显示为模拟�
   h.reply(h.requests.at(-1), {state:'passed',delivery_state:'delivered',parts:['不应显示']});
   await h.settle();
   assert.equal(h.page.state.data.testResults.news.state, 'unknown');
+  assert.equal(h.page.state.data.testResults.news.stage, 'response_validation');
+  assert.equal(h.page.state.data.testResults.news.code, 'invalid_response');
   assert.doesNotMatch(h.element.innerHTML, /data-simulation-part=/);
+});
+
+test('模式核对异常显示未提交并保留原错误，既不运行模型也不自动重试', async () => {
+  for (const failure of [new Error('bridge_timeout'),new Error('HTTP 502 <upstream>')]) {
+    const h=harness();await boot(h);openPromptTests(h);
+    const count=h.requests.length;
+    h.window.CompanionContactPrompts.confirmMode=()=>{throw failure;};
+    runMessageTest(h,'affection');await settle();
+    const result=h.page.state.data.testResults.affection;
+    assert.equal(h.requests.length,count);
+    assert.equal(result.state,'unknown');assert.equal(result.stage,'mode_confirmation');
+    assert.equal(result.error,failure.message);assert.equal(h.page.state.data.testBusy,'');
+    assert.match(h.element.innerHTML,/模式确认未完成，模拟尚未提交/);
+    assert.doesNotMatch(h.element.innerHTML,/模型选择不发送|<upstream>/);
+    if(failure.message==='bridge_timeout')assert.equal(result.code,'bridge_timeout');
+    else assert.match(h.element.innerHTML,/HTTP 502 &lt;upstream&gt;/);
+  }
 });
 
 test('消息测试入口在窄屏保留直达性，列表具备响应式和键盘焦点样式', () => {

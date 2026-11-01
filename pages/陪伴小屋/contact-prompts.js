@@ -57,8 +57,8 @@ window.CompanionContactPrompts = (() => {
     try {
       const product = window.CompanionProduct;
       const bridge = product.bridgeNow?.() || await product.bridgeFor();
-      const response = await Promise.race([method === "GET" ? bridge.apiGet(path,body) : bridge.apiPost(path,body),
-        new Promise((_,reject) => { timer = setTimeout(() => reject(new Error("bridge_timeout")),30000); })]);
+      const response = await Promise.race([method === "GET" ? bridge.apiGet(path,body,{timeoutMs:30000}) : bridge.apiPost(path,body,{timeoutMs:30000}),
+        new Promise((_,reject) => { timer = setTimeout(() => reject(Object.assign(new Error("bridge_timeout"),{code:"bridge_timeout"})),30000); })]);
       const wrapped = ["ok","error"].includes(response?.status) && Object.hasOwn(response,"data") ? response
         : ["ok","error"].includes(response?.data?.status) && Object.hasOwn(response.data,"data") ? response.data : null;
       if (wrapped?.status === "error") {

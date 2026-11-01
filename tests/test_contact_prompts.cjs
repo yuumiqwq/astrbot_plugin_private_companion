@@ -40,8 +40,8 @@ function harness() {
   const root = {innerHTML:'',isConnected:true,handlers:{},querySelector:()=>null,
     addEventListener(type,handler){this.handlers[type]=handler;},removeEventListener(type){delete this.handlers[type];}};
   const window = {CompanionProduct:{role:()=>({model_api:modelApi}),identity:()=>({installation_id:'i',operator_id:'o'}),
-    bridgeNow:()=>({apiGet:(route,body)=>new Promise((resolve,reject)=>requests.push({method:'GET',route,body,resolve,reject})),
-      apiPost:(route,body)=>new Promise((resolve,reject)=>requests.push({method:'POST',route,body,resolve,reject}))})}};
+    bridgeNow:()=>({apiGet:(route,body,options)=>new Promise((resolve,reject)=>requests.push({method:'GET',route,body,options,resolve,reject})),
+      apiPost:(route,body,options)=>new Promise((resolve,reject)=>requests.push({method:'POST',route,body,options,resolve,reject}))})}};
   vm.runInNewContext(source,{window,console,setTimeout,clearTimeout});
   const page=window.CompanionContactPrompts;
   const mount=(selected='chat',mode)=>page.mount(root,{items,selected,mode,onSelect:id=>chosen.push(id),onModeChange:value=>modes.push(value)});
@@ -235,6 +235,7 @@ test('模拟前确认当前作用域的已保存模式，并保留未保存提�
   await h.boot(simple);h.edit('simple','保留未保存的简洁草稿');
   const confirmed=h.page.confirmMode();await settle();
   const request=h.requests.at(-1);assert.equal(request.method,'GET');assert.equal(request.body.layer,'window');
+  assert.equal(request.options.timeoutMs,30000);
   h.reply(request,{tasks:[task()]});assert.equal(await confirmed,'companion');
   assert.equal(h.page.state.currentMode,'companion');assert.equal(h.modes.at(-1),'companion');
   assert.equal(h.page.state.drafts.get('simple').text,'保留未保存的简洁草稿');

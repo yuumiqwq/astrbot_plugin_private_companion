@@ -506,7 +506,7 @@ window.CompanionContactPage = (() => {
   async function api(method, path, body, timeoutMs = 15000) {
     let response;
     try {
-      response = await bounded(method === "GET" ? bridge.apiGet(path, body) : bridge.apiPost(path, body), timeoutMs);
+      response = await bounded(method === "GET" ? bridge.apiGet(path, body, {timeoutMs}) : bridge.apiPost(path, body, {timeoutMs}), timeoutMs);
     } catch (error) {
       const message = typeof error?.message === "string" ? error.message.trim() : "";
       if (!error?.code && CODE.test(message) && Object.prototype.hasOwnProperty.call(errors, message)
@@ -1327,6 +1327,7 @@ window.CompanionContactPage = (() => {
     </div>`;
   }
   const TEST_STAGE_LABELS = {
+    mode_confirmation:"模式确认", simulation_response:"模拟请求与结果接收", response_validation:"返回结果校验",
     request:"诊断请求", authorization:"管理员身份", binding:"管理员私聊绑定", runtime:"运行环境",
     settings:"主动联系设置", purpose:"联系目的", trusted_candidate:"联系机会/来源", contact_admission:"主动联系准入",
     news_fetch:"真实资讯抓取", weather_fetch:"真实天气获取", screen_capture:"本次真实截图", screen_interpretation:"本次视觉分析",
@@ -1391,7 +1392,7 @@ window.CompanionContactPage = (() => {
     const technical = result.code || result.error ? `<details class="ct-test-technical"><summary>展开技术详情</summary>
       ${result.code ? `<code>${e(result.code)}</code>` : ""}${result.error ? `<pre>${e(result.error)}</pre>` : ""}</details>` : "";
     return `<section class="ct-test-result is-${state}" data-simulation-mode="${mode}" role="status" aria-live="polite">
-      <strong>${mode === "simple" ? "简洁" : "陪伴插件"} · ${e(title)}${state === "failed" && stage ? ` · 卡在${e(stage)}` : ""}</strong>
+      <strong>${mode === "simple" ? "简洁" : "陪伴插件"} · ${e(title)}${["failed","unknown"].includes(state) && stage ? ` · 卡在${e(stage)}` : ""}</strong>
       ${parts.length ? `<ol class="ct-simulation-messages" aria-label="模拟消息">${parts.map((part,index) => `<li class="ct-simulation-message" data-simulation-part="${index}">${e(part)}</li>`).join("")}</ol>` : ""}
       ${typeof result.reaction_intent === "string" && result.reaction_intent ? `<p><b>图片意图</b> ${e(result.reaction_intent)}</p>` : ""}
       ${result.failure_title ? `<p class="ct-test-cause"><b>失败原因</b>${e(result.failure_title)}</p>` : ""}
@@ -2229,10 +2230,11 @@ window.CompanionContactPage = (() => {
     if ((!simple && !item) || mode !== data.promptMode || data.testBusy) return;
     const ticket = version;
     data.testBusy = id;
-    const confirmMode = window.CompanionContactPrompts?.confirmMode?.();
+    let stage = "mode_confirmation";
     notice("正在核对模拟模式…");
     render();
     try {
+      const confirmMode = window.CompanionContactPrompts?.confirmMode?.();
       const confirmedMode = confirmMode ? await confirmMode : await loadPromptMode(ticket,true);
       if (!live(ticket)) return;
       if (confirmedMode) {
@@ -2251,9 +2253,11 @@ window.CompanionContactPage = (() => {
           ...(id === "environment" ? {variant:data.testVariants?.environment || "weather"} : {}),
           ...(id === "mobile_location" ? {variant:"mobile_location"} : {}),
           ...(id === "reaction_image" ? {diagnostic_image:true} : {})};
+      stage = "simulation_response";
       const result = await api("POST", "setup/proactive-diagnostic",payload,
         id === "screen" && !synthetic ? 300000 : 180000);
       if (!live(ticket)) return;
+      stage = "response_validation";
       if (result.simulation !== true || (result.mode && result.mode !== mode)
           || !["passed", "skipped", "failed"].includes(result.state)
           || (result.state === "passed" && (result.decision !== "send" || !Array.isArray(result.parts)
@@ -2263,8 +2267,11 @@ window.CompanionContactPage = (() => {
         ? "模拟完成，模型选择不发送。" : "模拟未完成，查看具体阶段。", result.state === "failed");
     } catch (error) {
       if (!live(ticket)) return;
+      const rawMessage = typeof error?.message === "string" ? error.message.trim().slice(0,4000) : "";
+      const code = error?.code || (CODE.test(rawMessage) ? rawMessage : "simulation_request_failed");
       data.testResults[id] = {mode,simulation:true,state:error?.confirmed ? "failed" : "unknown",
-        code:error?.code || "",error:error?.confirmed ? reason(error.code) : "尚未收到模拟结果。"};
+        stage,code,error:error?.confirmed ? [reason(code),rawMessage].filter(Boolean).join("\n") : rawMessage || reason(code),
+        failure_title:stage === "mode_confirmation" ? "模式确认未完成，模拟尚未提交" : ""};
       if (data.promptMode === mode) notice(error?.confirmed ? "模拟未完成，查看具体原因。" : "模拟结果未确认，请稍后重试。",true);
     } finally {
       if (live(ticket)) { data.testBusy = ""; render(); }
