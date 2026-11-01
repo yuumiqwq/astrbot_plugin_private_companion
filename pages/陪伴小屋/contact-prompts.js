@@ -1,8 +1,10 @@
-/* Editable proactive prompt sources, scoped to the selected role or window. */
+/* Editable proactive and daily prompt sources, scoped to the selected role or window. */
 "use strict";
-window.CompanionContactPrompts = (() => {
+(() => {
+function createPromptEditor(settings = {}) {
   const PREFIX = "/astrbot_plugin_private_companion/";
-  const KIND = "proactive.compose";
+  const KIND = settings.kind || "proactive.compose";
+  const DAILY = settings.daily === true;
   const TASK = "task_prompt";
   const scopes = new Map();
   const messages = {
@@ -11,7 +13,7 @@ window.CompanionContactPrompts = (() => {
     model_configuration_invalid:"提示词未通过校验，请核对长度与格式变量。",
     model_prompt_template_invalid:"提示词格式变量无效。",
     model_prompt_section_readonly:"当前范围不支持编辑这个提示片段。",
-    model_task_unavailable:"主动联系模型尚未就绪。",
+    model_task_unavailable:DAILY ? "每日整理模型尚未就绪。" : "主动联系模型尚未就绪。",
     model_request_invalid:"请求未通过校验，请重新读取。",
     idempotency_key_conflict:"原保存请求已变化，请重新读取核对。",
     core_access_required:"当前账号没有编辑权限。",
@@ -25,7 +27,7 @@ window.CompanionContactPrompts = (() => {
   let root = null, state = null, options = null, version = 0;
   function current(ticket, s) { return state === s && root?.isConnected; }
   function sectionOf(s, key) {
-    if (key === TASK) return s.task && {key:TASK,label:"模型任务提示",condition:"每次主动联系",editable:true,
+    if (key === TASK) return s.task && {key:TASK,label:"模型任务提示",condition:DAILY ? "每日整理" : "每次主动联系",editable:true,
       prompt:s.task.fields?.prompt?.value ?? "", default_prompt:s.task.default_prompt ?? "", variables:[],
       field:s.task.fields?.prompt,edit_token:s.task.edit_token,configuration_layer:s.layer};
     return s.task?.prompt_sections?.find(item => item.key === key);
@@ -50,7 +52,7 @@ window.CompanionContactPrompts = (() => {
       }
       if (!draft.conflict) { draft.token = section.edit_token; draft.base = baseline(section); }
     }
-    if (state === s) options?.onModeChange?.(s.currentMode);
+    if (!DAILY && state === s) options?.onModeChange?.(s.currentMode);
   }
   async function api(method, path, body) {
     let timer;
@@ -89,7 +91,7 @@ window.CompanionContactPrompts = (() => {
     } finally { s.loading = false; if (current(ticket,s)) render(); }
   }
   function operationKey() {
-    return "contact-prompt:" + (window.crypto?.randomUUID?.() || Date.now().toString(36) + ":" + Math.random().toString(36).slice(2));
+    return (DAILY ? "daily-prompt:" : "contact-prompt:") + (window.crypto?.randomUUID?.() || Date.now().toString(36) + ":" + Math.random().toString(36).slice(2));
   }
   async function save(key) {
     const s = state, section = sectionOf(s,key);
@@ -181,10 +183,11 @@ window.CompanionContactPrompts = (() => {
     const draft = draftOf(state,section);
     const locked = !!state.busy || !!state.modePending || !!draft.pending || state.loading || !section.editable;
     const source = section.field?.source;
+    const fieldId = (DAILY ? "ct-daily-prompt-" : "ct-prompt-") + e(key);
     return `<section class="ct-prompt-field${draft.dirty ? " is-dirty" : ""}" data-prompt-editor="${e(key)}">
-      <header><label for="ct-prompt-${e(key)}">${e(section.label)}</label><span data-prompt-state>${draft.pending ? "待核对保存" : draft.conflict ? "版本冲突" : draft.dirty ? "未保存" : draft.saved ? "已保存" : sourceLabel(source)}</span></header>
+      <header><label for="${fieldId}">${e(section.label)}</label><span data-prompt-state>${draft.pending ? "待核对保存" : draft.conflict ? "版本冲突" : draft.dirty ? "未保存" : draft.saved ? "已保存" : sourceLabel(source)}</span></header>
       ${section.condition ? `<p class="ct-prompt-condition">${e(section.condition)}</p>` : ""}
-      <textarea id="ct-prompt-${e(key)}" data-prompt-text="${e(key)}" rows="${key.startsWith("purpose.") ? 7 : 5}" maxlength="8000" spellcheck="false"${locked ? " disabled" : ""}>${e(draft.text)}</textarea>
+      <textarea id="${fieldId}" data-prompt-text="${e(key)}" rows="${key.startsWith("purpose.") ? 7 : 5}" maxlength="8000" spellcheck="false"${locked ? " disabled" : ""}>${e(draft.text)}</textarea>
       ${section.variables?.length ? `<div class="ct-prompt-variables">格式变量 ${section.variables.map(name => `<code>${e(key === "simple" ? "{{" + name + "}}" : "{" + name + "}")}</code>`).join(" ")}</div>` : ""}
       ${draft.error ? `<p class="ct-prompt-error" role="alert">${e(draft.error)}</p>` : ""}
       ${draft.conflict ? `<details class="ct-prompt-current"><summary>当前保存内容</summary><pre>${e(section.prompt)}</pre></details>` : ""}
@@ -208,6 +211,7 @@ window.CompanionContactPrompts = (() => {
   }
   function render() {
     if (!root || !state) return;
+    if (DAILY) { renderDaily(); return; }
     const assembly = state.task?.prompt_assembly;
     const mode = promptMode();
     const primary = primaryKeys();
@@ -231,6 +235,31 @@ window.CompanionContactPrompts = (() => {
         ${group("common","共用提示",common)}${group("conditional","条件提示",conditional)}`}
         <details class="ct-prompt-group" data-prompt-group="assembly"${state.open.has("assembly") ? " open" : ""}><summary>组装顺序</summary>
           <ol class="ct-prompt-order">${order.map(item => `<li><strong>${e(item.label)}</strong>${item.sections?.length ? `<span>${item.sections.filter(key => !key.startsWith("purpose.") || key === primary[0]).map(key => e(sectionOf(state,key)?.label || key)).join(" · ")}</span>` : ""}</li>`).join("")}</ol>
+        </details>` : ""}
+    </section>`;
+  }
+  function readOnlySection(key, label) {
+    const section = sectionOf(state,key);
+    if (!section) return "";
+    return `<details class="ct-prompt-group" data-prompt-group="${e(key)}"${state.open.has(key) ? " open" : ""}>
+      <summary>${e(label || section.label)}</summary><div><pre class="ct-prompt-readonly">${e(section.prompt)}</pre></div></details>`;
+  }
+  function renderDaily() {
+    const assembly = state.task?.prompt_assembly;
+    root.innerHTML = `<section class="ct-prompt-panel" aria-label="每日整理提示词">
+      <header class="ct-prompt-header"><h3>每日整理提示词</h3><span class="ct-prompt-draft-count">${[...state.drafts.values()].filter(d => d.dirty).length} 项未保存</span></header>
+      <div class="ct-prompt-controls ct-prompt-controls-daily">
+        <label>生效范围<select data-prompt-layer aria-label="每日整理提示词生效范围"${state.busy ? " disabled" : ""}><option value="window"${state.layer === "window" ? " selected" : ""}>当前窗口</option><option value="role"${state.layer === "role" ? " selected" : ""}>角色默认</option></select></label>
+        <button type="button" class="ct-btn" data-prompt-action="refresh"${state.loading || state.busy ? " disabled" : ""}>${state.loading ? "读取中…" : "重新读取"}</button>
+      </div>
+      ${state.error ? `<p class="ct-prompt-error" role="alert">${e(state.error)}</p>` : ""}
+      ${state.task ? `<div class="ct-prompt-primary">${editor("global")}</div>
+        ${group("daily-tasks","日程、日记与记忆整理",["day_plan","diary","diary_style","memory",TASK])}
+        ${readOnlySection("automatic_context","自动上下文来源")}
+        ${readOnlySection("output_contract","输出格式")}
+        ${(state.task.prompt_sections || []).filter(section => section.editable === false && !["automatic_context","output_contract"].includes(section.key)).map(section => readOnlySection(section.key)).join("")}
+        <details class="ct-prompt-group" data-prompt-group="assembly"${state.open.has("assembly") ? " open" : ""}><summary>组装顺序</summary>
+          <ol class="ct-prompt-order">${(assembly?.order || []).map(item => `<li><strong>${e(item.label)}</strong>${item.sections?.length ? `<span>${item.sections.map(key => e(sectionOf(state,key)?.label || key)).join(" · ")}</span>` : ""}</li>`).join("")}</ol>
         </details>` : ""}
     </section>`;
   }
@@ -303,7 +332,7 @@ window.CompanionContactPrompts = (() => {
   }
   function scopeState(scope,path,layer) {
     const key = JSON.stringify([scope,path,layer]);
-    if (!scopes.has(key)) scopes.set(key,{scope,path,layer,task:null,drafts:new Map(),open:new Set(),
+    if (!scopes.has(key)) scopes.set(key,{scope,path,layer,task:null,drafts:new Map(),open:new Set(DAILY ? ["daily-tasks"] : []),
       selected:"chat",conditionKey:"",modePending:null,modeError:"",loading:false,busy:"",error:""});
     return scopes.get(key);
   }
@@ -334,4 +363,7 @@ window.CompanionContactPrompts = (() => {
     render(); if (!state.task && !state.loading) void load();
   }
   return {mount,unmount,select,confirmMode,get state(){return state;}};
+}
+window.CompanionContactPrompts = createPromptEditor();
+window.CompanionDailyPrompts = createPromptEditor({kind:"role.daily_review",daily:true});
 })();

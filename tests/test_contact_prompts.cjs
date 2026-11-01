@@ -34,7 +34,7 @@ function task() {
         {key:'request_instruction',label:'简洁主动提示',sections:['simple']},
         {key:'materials',label:'会话历史',sections:[]}]}};
 }
-function harness() {
+function harness(kind = 'proactive.compose') {
   const requests = [], chosen = [], modes = [];
   let modelApi = endpoint;
   const root = {innerHTML:'',isConnected:true,handlers:{},querySelector:()=>null,
@@ -43,15 +43,82 @@ function harness() {
     bridgeNow:()=>({apiGet:(route,body,options)=>new Promise((resolve,reject)=>requests.push({method:'GET',route,body,options,resolve,reject})),
       apiPost:(route,body,options)=>new Promise((resolve,reject)=>requests.push({method:'POST',route,body,options,resolve,reject}))})}};
   vm.runInNewContext(source,{window,console,setTimeout,clearTimeout});
-  const page=window.CompanionContactPrompts;
+  const page=kind === 'role.daily_review' ? window.CompanionDailyPrompts : window.CompanionContactPrompts;
   const mount=(selected='chat',mode)=>page.mount(root,{items,selected,mode,onSelect:id=>chosen.push(id),onModeChange:value=>modes.push(value)});
   function event(type,selector,node) {return root.handlers[type]?.({target:{closest:query=>query===selector?node:null}});}
   const action=(name,key)=>event('click','[data-prompt-action]',{dataset:{promptAction:name,promptKey:key}});
   const edit=(key,value)=>event('input','[data-prompt-text]',{dataset:{promptText:key},value});
   const reply=(request,data)=>request.resolve({status:'ok',data});
   async function boot(value=task()) {mount();await settle();reply(requests.at(-1),{tasks:[value]});await settle();}
-  return {page,root,requests,chosen,modes,mount,event,action,edit,reply,boot,setPath:value=>{modelApi=value;}};
+  return {page,window,root,requests,chosen,modes,mount,event,action,edit,reply,boot,setPath:value=>{modelApi=value;}};
 }
+
+function dailyTask() {
+  return {kind:'role.daily_review',edit_token:'b'.repeat(64),default_prompt:'默认每日任务',
+    fields:{prompt:{value:'每日任务原文',inherited_value:'上级每日任务',explicit:false,source:'role'}},
+    prompt_sections:[...['global','diary','day_plan','memory','diary_style'].map(key=>section(key)),
+      {...section('output_contract','{"diary":null,"day_plan":null,"memory":null}'),editable:false},
+      {...section('automatic_context','当前人格、预设对话与统一会话历史'),editable:false},
+      {...section('wire_contract','固定 JSON 输出指令'),editable:false},
+      {...section('terminal_prompt_guard','末尾每日任务约束'),editable:false}],
+    prompt_assembly:{order:[{key:'role_instruction',label:'人格和预设'},
+      {key:'automatic_context',label:'自动上下文',sections:['automatic_context']},
+      {key:'global',label:'全局提示',sections:['global']},
+      {key:'task_parts',label:'三个任务',sections:['diary','day_plan','memory']},
+      {key:'task_prompt',label:'模型任务提示'},
+      {key:'output_contract',label:'固定输出格式',sections:['output_contract']}]}};
+}
+
+test('每日整理复用独立编辑器，完整显示实际任务原文与只读schema和上下文',async()=>{
+  const h=harness('role.daily_review');await h.boot(dailyTask());
+  assert.equal(h.requests.length,1);assert.equal(h.requests[0].method,'GET');
+  for(const key of ['global','diary','day_plan','memory','diary_style','task_prompt'])
+    assert.ok(h.root.innerHTML.includes('data-prompt-text="'+key+'"'));
+  assert.match(h.root.innerHTML,/当前人格、预设对话与统一会话历史/);
+  assert.match(h.root.innerHTML,/&quot;day_plan&quot;:null/);
+  assert.doesNotMatch(h.root.innerHTML,/data-prompt-text="(?:output_contract|automatic_context|wire_contract|terminal_prompt_guard)"|data-prompt-mode|data-prompt-entry/);
+  assert.match(h.root.innerHTML,/固定 JSON 输出指令|末尾每日任务约束/);
+  assert.match(h.root.innerHTML,/id="ct-daily-prompt-task_prompt"/);
+  assert.ok(h.root.innerHTML.indexOf('<strong>全局提示')<h.root.innerHTML.indexOf('<strong>三个任务'));
+  assert.deepEqual(h.modes,[]);
+});
+
+test('每日整理保存只提交对应daily片段，不改变主动聊天任务与模式',async()=>{
+  const h=harness('role.daily_review');await h.boot(dailyTask());h.edit('day_plan','新的安排日程要求');
+  h.action('save','day_plan');await settle();const request=h.requests.at(-1);
+  assert.equal(request.body.kind,'role.daily_review');assert.equal(request.body.section,'day_plan');
+  assert.deepEqual(JSON.parse(JSON.stringify(request.body.changes)),{prompt:'新的安排日程要求'});
+  assert.match(request.body.operation_key,/^daily-prompt:/);
+  const saved=dailyTask();saved.prompt_sections[2]=section('day_plan','新的安排日程要求');
+  h.reply(request,{task:saved});await settle();
+  assert.equal(h.page.state.drafts.get('day_plan').dirty,false);
+  assert.equal(h.window.CompanionContactPrompts.state,null);
+  assert.deepEqual(h.modes,[]);
+});
+
+test('每日整理隐藏再打开保留未保存草稿，任务提示保存使用既有task字段',async()=>{
+  const h=harness('role.daily_review');await h.boot(dailyTask());h.edit('memory','记忆草稿');
+  h.page.unmount();h.mount();assert.match(h.root.innerHTML,/记忆草稿/);assert.equal(h.requests.length,1);
+  h.edit('task_prompt','每日模型任务');h.action('save','task_prompt');await settle();
+  const request=h.requests.at(-1);assert.equal(request.body.kind,'role.daily_review');
+  assert.equal(Object.hasOwn(request.body,'section'),false);
+  const saved=dailyTask();saved.fields.prompt.value='每日模型任务';h.reply(request,{task:saved});await settle();
+  assert.equal(h.page.state.drafts.get('memory').text,'记忆草稿');
+  assert.equal(h.page.state.drafts.get('memory').dirty,true);
+});
+
+test('每日schema只读且保存冲突保留草稿与当前服务端版本',async()=>{
+  const h=harness('role.daily_review');await h.boot(dailyTask());
+  h.edit('output_contract','篡改schema');h.action('save','output_contract');await settle();
+  assert.equal(h.requests.length,1);
+  h.edit('global','全局草稿');h.action('save','global');await settle();
+  h.requests.at(-1).resolve({status:'error',data:{code:'configuration_revision_conflict'}});await settle();
+  const updated=dailyTask();updated.prompt_sections[0]=section('global','别人已保存的全局提示');
+  h.reply(h.requests.at(-1),{tasks:[updated]});await settle();
+  assert.equal(h.page.state.drafts.get('global').text,'全局草稿');
+  assert.equal(h.page.state.drafts.get('global').conflict,true);
+  assert.match(h.root.innerHTML,/别人已保存的全局提示/);
+});
 
 test('只读取当前窗口的真实模型提示，17入口均能定位目的原文',async()=>{
   const h=harness();await h.boot();

@@ -73,6 +73,23 @@ function runMessageTest(h,id) {
   h.element.dispatch('click',{target:{closest:selector => selector === '[data-test-run]' ? {dataset:{testRun:id}} : null}});
 }
 
+test('每日整理旁可展开独立提示词编辑器，打开和收起都不运行模型测试',async()=>{
+  const h=harness();await boot(h);openPromptTests(h);
+  const mounts=[],unmounts=[];const dailyHost={};
+  h.window.CompanionDailyPrompts={mount:host=>mounts.push(host),unmount:()=>unmounts.push(true)};
+  const count=h.requests.length;
+  assert.match(h.element.innerHTML,/data-daily-prompt-toggle/);
+  assert.doesNotMatch(h.element.innerHTML,/data-daily-prompts>/);
+  h.element.__register('[data-daily-prompts]',dailyHost);
+  h.element.dispatch('click',{target:{closest:selector=>selector==='[data-daily-prompt-toggle]'?{}:null}});
+  assert.equal(h.page.state.data.dailyPromptOpen,true);assert.equal(mounts.at(-1),dailyHost);
+  assert.match(h.element.innerHTML,/data-daily-prompts/);assert.equal(h.requests.length,count);
+  dailyHost.__sel='';
+  h.element.dispatch('click',{target:{closest:selector=>selector==='[data-daily-prompt-toggle]'?{}:null}});
+  assert.equal(h.page.state.data.dailyPromptOpen,false);assert.ok(unmounts.length);
+  assert.equal(h.requests.length,count);
+});
+
 test('当前窗口简洁模式从配置读取，仅显示统一测试并隐藏契机入口',async()=>{
   const h = harness({modelApi:'/'+HOST+'/targets/t/roles/r/model',promptMode:'simple'});
   await boot(h);

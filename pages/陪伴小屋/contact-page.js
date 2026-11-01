@@ -467,7 +467,7 @@ window.CompanionContactPage = (() => {
       /* 草稿：只放用户真的改过的字段。提交时只发这些，未动的字段一个都不发——
          避免把「没看过的字段」当成「要保持的值」写回去。 */
       draft:{}, touched:new Set(), tierDraft:null, pendingWrite:null,
-      testBusy:"", testResults:{}, testModes:{}, testVariants:{},
+      testBusy:"", testResults:{}, testModes:{}, testVariants:{}, dailyPromptOpen:false,
       /* pulse 是「下一次渲染要闪哪几片盘面」，pulseNow 是这一帧真正在闪的。
          两者分开是因为 render() 每次都会重写 DOM，类必须由渲染时的状态决定，
          当场往节点上加类会被紧接着的重写丢掉（切档位那次动画就是这么消失的）。 */
@@ -1249,9 +1249,10 @@ window.CompanionContactPage = (() => {
   }
   function testsView() {
     const daily = `<section class="ct-daily-test" aria-label="每日整理测试">
-      <header><h3>每日整理</h3><button type="button" class="ct-btn is-primary" data-daily-test-run
+      <header><h3>每日整理</h3><div class="ct-daily-actions"><button type="button" class="ct-btn" data-daily-prompt-toggle aria-expanded="${data.dailyPromptOpen}">${data.dailyPromptOpen ? "收起提示词" : "编辑提示词"}</button><button type="button" class="ct-btn is-primary" data-daily-test-run
         ${data.testBusy ? " disabled" : ""}>${data.testBusy === "daily_review"
-          ? '<span class="ct-spinner" aria-hidden="true"></span><span>模拟中…</span>' : "测试每日整理"}</button></header>
+          ? '<span class="ct-spinner" aria-hidden="true"></span><span>模拟中…</span>' : "测试每日整理"}</button></div></header>
+      ${data.dailyPromptOpen ? '<div data-daily-prompts></div>' : ""}
       ${dailyResultMarkup()}
     </section>`;
     if (data.promptMode === "simple") return `<div class="ct-tests" data-proactive-mode="simple">
@@ -2023,6 +2024,9 @@ window.CompanionContactPage = (() => {
       selected:data.promptTestId,mode:data.promptMode,onSelect:id => { if (data === mountedData) data.promptTestId = id; },
       onModeChange:mode => { if (data === mountedData) acceptPromptMode(mode); }});
     else window.CompanionContactPrompts?.unmount();
+    const dailyPromptHost = root.querySelector?.("[data-daily-prompts]");
+    if (dailyPromptHost) window.CompanionDailyPrompts?.mount(dailyPromptHost);
+    else window.CompanionDailyPrompts?.unmount();
     if (data.view === "materials") updateMaterialFilters();
     const screenObservationHost = root.querySelector?.("[data-screen-observation]");
     if (screenObservationHost) window.CompanionScreenObservation?.mount(screenObservationHost);
@@ -2052,6 +2056,11 @@ window.CompanionContactPage = (() => {
     return focusGateSettings();
   }
   function clicked(event) {
+    if (event.target.closest("[data-daily-prompt-toggle]")) {
+      data.dailyPromptOpen = !data.dailyPromptOpen;
+      render();
+      return;
+    }
     const promptEntry = event.target.closest("[data-test-prompt-select]")?.dataset.testPromptSelect;
     if (promptEntry) {
       data.promptTestId = promptEntry;
@@ -2428,6 +2437,7 @@ window.CompanionContactPage = (() => {
   }
   function unmount() {
     window.CompanionContactPrompts?.unmount();
+    window.CompanionDailyPrompts?.unmount();
     window.CompanionScreenObservation?.unmount();
     ++version;
     if (autoRecoveryTimer !== null) clearTimeout(autoRecoveryTimer);
