@@ -493,7 +493,7 @@ window.CompanionContactPage = (() => {
   }
   function blank() {
     return {view:"dial", purposeQuery:"", purposeBucket:"all", purposeFilter:"all",
-      testQuery:"", testBucket:"all", testCoverage:"all", materialQuery:"", materialCategory:"all",
+      testQuery:"", testBucket:"all", testCoverage:"all", promptTestId:"chat", materialQuery:"", materialCategory:"all",
       materialKind:"window", materialWindow:"all", materialDay:localDayKey(), materialTimezone:localTimezone(),
       nativePath:"", configPath:"",
       settings:null, effective:null, effectiveSettings:null, purposes:{}, hostState:"",
@@ -1279,22 +1279,23 @@ window.CompanionContactPage = (() => {
         <div><dt>生产器来源</dt><dd>${e(item.source)}</dd></div>
         <div><dt>生产器验收场景</dt><dd>${e(item.setup)}</dd></div>
       </dl>
-      <section class="ct-test-prompt"><h4>类型指令</h4><p>${e(item.instruction)}</p></section>
       <p class="ct-test-expect"><strong>通过条件</strong>${e(item.expect)}</p>
       ${testModeMarkup(item.id)}
       ${testResultMarkup(item.id)}
       ${item.id === "screen" ? '<div data-screen-observation></div>' : ""}
       <footer class="ct-test-actions">
+        <button type="button" class="ct-btn" data-test-prompt-select="${e(item.id)}">编辑提示词</button>
         <button type="button" class="ct-btn is-primary ct-test-run" data-test-run="${e(item.id)}"
           ${data.testBusy || data.testUncertain || item.coverage !== "ready" ? " disabled" : ""}>
           ${data.testBusy === item.id ? '<span class="ct-spinner" aria-hidden="true"></span><span>测试中…</span>'
             : data.testUncertain ? `${ICON.alert}<span>先核对投递结果</span>`
             : `${ICON.test}<span>运行测试</span>`}
         </button>
-        <button type="button" class="ct-btn ct-test-copy" data-test-copy="${e(item.id)}">${ICON.copy}<span>复制提示词</span></button>
+        <button type="button" class="ct-btn ct-test-copy" data-test-copy="${e(item.id)}">${ICON.copy}<span>复制测试说明</span></button>
       </footer>
     </article>`).join("");
     return `<div class="ct-tests">
+      <div data-contact-prompts></div>
       <div class="ct-test-overview">
         <p>主动联系目的与拓展发送链路分别验收，来源、素材和投递回执各自可核对。</p>
         <div class="ct-test-coverage-summary" aria-label="生产器覆盖情况">
@@ -2059,6 +2060,10 @@ window.CompanionContactPage = (() => {
     if (gateSettingsArea) gateSettingsArea.hidden = data.view !== "gates";
     if (data.view === "purposes") updatePurposeFilters();
     if (data.view === "tests") updateTestFilters();
+    const promptHost = root.querySelector?.("[data-contact-prompts]");
+    if (promptHost) window.CompanionContactPrompts?.mount(promptHost,{items:TEST_INSTRUCTIONS,
+      selected:data.promptTestId,onSelect:id => { if (data) data.promptTestId = id; }});
+    else window.CompanionContactPrompts?.unmount();
     if (data.view === "materials") updateMaterialFilters();
     const screenObservationHost = root.querySelector?.("[data-screen-observation]");
     if (screenObservationHost) window.CompanionScreenObservation?.mount(screenObservationHost);
@@ -2090,6 +2095,13 @@ window.CompanionContactPage = (() => {
     return focusGateSettings();
   }
   function clicked(event) {
+    const promptEntry = event.target.closest("[data-test-prompt-select]")?.dataset.testPromptSelect;
+    if (promptEntry) {
+      data.promptTestId = promptEntry;
+      window.CompanionContactPrompts?.select(promptEntry);
+      root.querySelector?.("[data-contact-prompts]")?.scrollIntoView?.({block:"start",behavior:"auto"});
+      return;
+    }
     const view = event.target.closest("[data-view]");
     if (view) {
       switchView(view.dataset.view); render();
@@ -2448,6 +2460,7 @@ window.CompanionContactPage = (() => {
     }
   }
   function unmount() {
+    window.CompanionContactPrompts?.unmount();
     window.CompanionScreenObservation?.unmount();
     ++version;
     if (autoRecoveryTimer !== null) clearTimeout(autoRecoveryTimer);

@@ -38,6 +38,30 @@ test('关系联系测试不再要求用户先说固定词', () => {
   assert.doesNotMatch(source, /分别用晚安、明确表达亲近和无关语境验收/);
 });
 
+test('消息测试接入真实提示词编辑区，17张卡片均可选择且不运行测试', async () => {
+  const h = harness();
+  await boot(h);
+  const promptHost = {scrollIntoView() {}};
+  h.element.__register('[data-contact-prompts]', promptHost);
+  const mounts = [], selected = [];
+  h.window.CompanionContactPrompts = {
+    mount(host, options) { mounts.push({host,options}); },
+    unmount() {},
+    select(id) { selected.push(id); },
+  };
+  const count = h.requests.length;
+  h.element.dispatch('click', {target: {closest: sel => sel === '[data-view]' ? {dataset:{view:'tests'}} : null}});
+  assert.equal(mounts.at(-1).host, promptHost);
+  assert.equal(mounts.at(-1).options.items.length, 17);
+  assert.equal((h.element.innerHTML.match(/data-test-prompt-select=/g) || []).length, 17);
+  assert.ok(h.element.innerHTML.indexOf('data-contact-prompts') < h.element.innerHTML.indexOf('ct-tests-grid'));
+  assert.doesNotMatch(h.element.innerHTML, /<h4>类型指令<\/h4>/);
+  h.element.dispatch('click', {target: {closest: sel => sel === '[data-test-prompt-select]' ? {dataset:{testPromptSelect:'mobile_location'}} : null}});
+  assert.deepEqual(selected, ['mobile_location']);
+  assert.equal(h.page.state.data.promptTestId, 'mobile_location');
+  assert.equal(h.requests.length, count);
+});
+
 const baseSettings = () => ({
   enabled: true, automatic_enabled: true, quiet_enabled: true, quiet_start: '23:00', quiet_end: '07:00',
   quiet_timezone: 'Asia/Shanghai', proactive_intensity_preset: 'balanced',

@@ -3061,6 +3061,41 @@ button.summary-record:hover strong,.summary-memory:hover>strong,.summary-note:ho
   .ct-tier:hover{transform:none}
 }
 
+/* contact-prompts.css */
+.ct-prompt-panel{display:flex;flex-direction:column;gap:var(--sp-4);min-width:0;padding:var(--sp-4);border:1px solid var(--t-line);border-radius:var(--r-sm);background:var(--t-surface)}
+.ct-prompt-header{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:var(--sp-2)}
+.ct-prompt-header h3{margin:0;color:var(--t-text-strong);font-size:var(--fs-lead)}
+.ct-prompt-draft-count{color:var(--t-text-faint);font-size:var(--fs-tiny)}
+.ct-prompt-controls{display:grid;grid-template-columns:minmax(180px,1fr) minmax(130px,200px) auto;gap:var(--sp-3);align-items:end}
+.ct-prompt-controls label,.ct-prompt-section-selector{display:flex;flex-direction:column;gap:var(--sp-1);min-width:0;font-size:var(--fs-tiny);color:var(--t-text-soft)}
+.ct-prompt-controls select,.ct-prompt-section-selector select{min-width:0;width:100%;padding:var(--sp-2);border:1px solid var(--t-line-firm);border-radius:var(--r-xs);background:var(--t-surface-raised);color:var(--t-text);font:inherit;font-size:var(--fs-body)}
+.ct-prompt-primary,.ct-prompt-group>div{display:flex;flex-direction:column;gap:var(--sp-4);min-width:0}
+.ct-prompt-field{display:flex;flex-direction:column;gap:var(--sp-2);min-width:0;padding:var(--sp-3);border:1px solid var(--t-line);border-radius:var(--r-sm)}
+.ct-prompt-field.is-dirty{border-color:var(--t-accent)}
+.ct-prompt-field>header{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:var(--sp-2)}
+.ct-prompt-field>header label{font-size:var(--fs-body);font-weight:650;color:var(--t-text-strong)}
+.ct-prompt-field>header span{font-size:var(--fs-tiny);color:var(--t-text-faint)}
+.ct-prompt-field textarea{box-sizing:border-box;min-width:0;width:100%;min-height:100px;resize:vertical;padding:var(--sp-3);border:1px solid var(--t-line-firm);border-radius:var(--r-xs);background:var(--t-surface-raised);color:var(--t-text);font:inherit;font-size:var(--fs-body);line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}
+.ct-prompt-field textarea:focus,.ct-prompt-controls select:focus{outline:2px solid var(--t-focus);outline-offset:1px}
+.ct-prompt-condition{margin:0;color:var(--t-text-faint);font-size:var(--fs-tiny);line-height:1.5;overflow-wrap:anywhere}
+.ct-prompt-field footer{display:flex;flex-wrap:wrap;gap:var(--sp-2);justify-content:flex-end}
+.ct-prompt-variables{display:flex;align-items:center;flex-wrap:wrap;gap:var(--sp-2);color:var(--t-text-faint);font-size:var(--fs-tiny)}
+.ct-prompt-variables code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--t-accent-ink)}
+.ct-prompt-group{min-width:0;border-top:1px solid var(--t-line);padding-top:var(--sp-3)}
+.ct-prompt-group>summary{cursor:pointer;list-style:revert;color:var(--t-text-strong);font-weight:650;font-size:var(--fs-body)}
+.ct-prompt-group>summary span{margin-left:var(--sp-2);color:var(--t-text-faint);font-size:var(--fs-tiny);font-weight:400}
+.ct-prompt-group>div{padding-top:var(--sp-3)}
+.ct-prompt-error{margin:0;color:var(--t-risk-ink);font-size:var(--fs-tiny);line-height:1.5;overflow-wrap:anywhere}
+.ct-prompt-current{font-size:var(--fs-tiny);color:var(--t-text-soft)}
+.ct-prompt-current summary{cursor:pointer}
+.ct-prompt-current pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;line-height:1.6}
+.ct-prompt-order{display:grid;gap:var(--sp-3);padding-left:var(--sp-5);font-size:var(--fs-tiny);color:var(--t-text-soft)}
+.ct-prompt-order li{padding-left:var(--sp-1)}
+.ct-prompt-order strong{display:block;color:var(--t-text-strong)}
+.ct-prompt-order span{display:block;margin-top:var(--sp-1);line-height:1.6;overflow-wrap:anywhere}
+@container (max-width:600px){.ct-prompt-controls{grid-template-columns:minmax(0,1fr)}.ct-prompt-controls>.ct-btn{justify-self:start}.ct-prompt-field{padding:var(--sp-2)}.ct-prompt-field footer .ct-btn{flex:1 1 110px}}
+@media(max-width:600px){.ct-prompt-controls{grid-template-columns:minmax(0,1fr)}.ct-prompt-controls>.ct-btn{justify-self:start}.ct-prompt-field{padding:var(--sp-2)}.ct-prompt-field footer .ct-btn{flex:1 1 110px}}
+
 /* learning-page.css */
 /* 陪伴小屋 · 学习与反思（培育轨道）
    这一域是六个专题域里唯一「有方向」的：一条技能或目标从提出走到达成，
