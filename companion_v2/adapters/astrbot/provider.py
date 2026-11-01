@@ -934,6 +934,12 @@ class AstrBotTextProvider:
             diagnostics = replace(diagnostics, error_type=error_type,
                 error_code=task_error_code if task_error_code != "unavailable" else None,
                 status_code=status_code if type(status_code) is int else None)
+            if (final_failure is ModelFailure.WIRE_DECODE and raw is not None
+                    and envelope.record_rejected_output is not None):
+                rejected = capture(raw)
+                reason = ("model response contains only whitespace; expected a JSON object"
+                          if not rejected.text.strip() else str(error)[:1024])
+                envelope.record_rejected_output(rejected, reason, type(error).__name__)
             if (raw is None and transcript is None
                     and (definitely_not_sent(error) or rejected_before_generation(error))):
                 logger.warning("[CompanionV2] 模型请求确认未生成，标记为未开始 provider=%s error_type=%s",

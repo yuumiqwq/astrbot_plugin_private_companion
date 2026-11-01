@@ -13,6 +13,7 @@ from companion_v2.execution.models import TaskError, TaskResult, TaskSpec, diges
 from companion_v2.execution.runner import ExactTaskRunner
 from companion_v2.foundation.refs import OperationRef, VersionRef
 from companion_v2.model_gateway.shared_role_context import prepare_role_context
+from companion_v2.model_gateway.models import ModelOutputError
 from companion_v2.storage.models import OperationState
 from companion_v2.storage.repositories import OperationRepository
 
@@ -27,6 +28,28 @@ from .official_alert_events import SOURCE_OWNER as ALERT_OWNER, attribution_suff
 
 
 RESULT_PREFIX = "proactive.simulation.v1:"
+
+
+def _save_result(app, contacts, run, context, attempt_id, result):
+    key = RESULT_PREFIX + context.key + ":" + attempt_id
+    operation_id = "simulation-result-" + digest([context.key, attempt_id])
+    operation = OperationRef(operation_id, "proactive.simulation", context.scope,
+                             VersionRef(operation_id, 1), operation_id)
+    operations = OperationRepository(app.runtime)
+    with app.runtime.transaction() as db:
+        run.validate()
+        run.begin_effect()
+        require(operations.reserve(operation, parameter_hash=digest(result), observed_at=contacts.tasks.now()))
+        db.execute("INSERT INTO runtime_metadata(key,value) VALUES (?,?)", (key, encode(result)))
+        stale = db.execute("SELECT key FROM runtime_metadata WHERE key LIKE ? ORDER BY rowid DESC LIMIT -1 OFFSET 20",
+                           (RESULT_PREFIX + context.key + ":%",)).fetchall()
+        for row in stale:
+            db.execute("DELETE FROM runtime_metadata WHERE key=?", (row["key"],))
+        require(operations.transition(operation_id, expected_state=OperationState.ACCEPTED,
+            next_state=OperationState.COMPLETED, observed_at=contacts.tasks.now()))
+        run.record_operation(operation_id)
+    return TaskResult("succeeded", effect="committed", result_ref=key,
+                      operation_id=operation_id, receipt_ref=operation_id)
 
 
 def _memory_preview(contacts, job, records):
@@ -84,6 +107,15 @@ async def simulate_contact(app, context, candidate, *, attempt_id, diagnostic_im
         diagnostic_origin=candidate.get("diagnostic_origin"))
     result, completion_call = None, None
 
+    def failed_output(request, text, call_id, code, error, error_type, finish_reason="stop"):
+        return {"simulation": True, "state": "failed", "stage": "output_parsing",
+            "code": code, "error": error, "error_type": error_type,
+            "decision": None, "parts": [], "raw_response": text,
+            "mode": request.proactive_mode, "task_id": task_id, "call_id": call_id,
+            "finish_reason": finish_reason, "generated_at": stamp(contacts.tasks.now()),
+            "stages": [{"stage": "model_generation", "state": "passed"},
+                       {"stage": "output_parsing", "state": "failed"}]}
+
     async def generate(run):
         nonlocal result, completion_call
         current = contacts._policy(context, intent.purpose, contacts.tasks.now(),
@@ -121,7 +153,15 @@ async def simulate_contact(app, context, candidate, *, attempt_id, diagnostic_im
             request = replace(request, instruction=request.instruction + "\n" + extra)
         if contacts.request_context is not None:
             request = await prepare_role_context(contacts.request_context, request, context)
-        completion = await contacts.gateway.generate(run, request)
+        try:
+            completion = await contacts.gateway.generate(run, request)
+        except ModelOutputError as error:
+            completion_call = error.call_id
+            raw = error.output
+            result = failed_output(request, raw.text if raw else None, error.call_id,
+                error.code, error.parse_error or str(error), error.error_type,
+                raw.finish_reason if raw else None)
+            return _save_result(app, contacts, run, context, attempt_id, result)
         completion_call = completion.call_id
         if completion.draft is None:
             raise TaskError("simulation_output_missing", "the model did not return a message decision")
@@ -131,7 +171,9 @@ async def simulate_contact(app, context, candidate, *, attempt_id, diagnostic_im
             decision, body, reaction = parse_contact_output(completion.draft.text,
                 mode=request.proactive_mode, official_alert=alert)
         except (TypeError, ValueError, KeyError) as error:
-            raise TaskError("simulation_output_invalid", "the model response does not match the active message schema") from error
+            result = failed_output(request, completion.draft.text, completion.call_id,
+                "simulation_output_invalid", str(error), type(error).__name__)
+            return _save_result(app, contacts, run, context, attempt_id, result)
         parts, reason = (), None
         if body is not None:
             body = strip_voice_markup(strip_internal_expression_protocol(body))
@@ -162,24 +204,7 @@ async def simulate_contact(app, context, candidate, *, attempt_id, diagnostic_im
             "generated_at": stamp(contacts.tasks.now()),
             "stages": [{"stage": stage, "state": "passed"} for stage in
                        ("model_generation", "output_parsing", "segmentation")]}
-        key = RESULT_PREFIX + context.key + ":" + attempt_id
-        operation_id = "simulation-result-" + digest([context.key, attempt_id])
-        operation = OperationRef(operation_id, "proactive.simulation", context.scope,
-                                 VersionRef(operation_id, 1), operation_id)
-        operations = OperationRepository(app.runtime)
-        with app.runtime.transaction() as db:
-            run.begin_effect()
-            require(operations.reserve(operation, parameter_hash=digest(result), observed_at=contacts.tasks.now()))
-            db.execute("INSERT INTO runtime_metadata(key,value) VALUES (?,?)", (key, encode(result)))
-            stale = db.execute("SELECT key FROM runtime_metadata WHERE key LIKE ? ORDER BY rowid DESC LIMIT -1 OFFSET 20",
-                               (RESULT_PREFIX + context.key + ":%",)).fetchall()
-            for row in stale:
-                db.execute("DELETE FROM runtime_metadata WHERE key=?", (row["key"],))
-            require(operations.transition(operation_id, expected_state=OperationState.ACCEPTED,
-                next_state=OperationState.COMPLETED, observed_at=contacts.tasks.now()))
-            run.record_operation(operation_id)
-        return TaskResult("succeeded", effect="committed", result_ref=key,
-                          operation_id=operation_id, receipt_ref=operation_id)
+        return _save_result(app, contacts, run, context, attempt_id, result)
 
     runner = ExactTaskRunner(contacts.tasks, frozenset({CONTACT_KIND}), generate)
     invocation = asyncio.current_task()

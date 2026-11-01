@@ -16,6 +16,7 @@ MODES = ("companion", "simple")
 
 def simple_request(request, job, preferences):
     from .prompt_catalog import effective_prompt
+    from .response_schema import contact_schema
 
     materials = []
     local_now = preferences.observed_at
@@ -40,6 +41,7 @@ def simple_request(request, job, preferences):
     prompt = prompt.replace("{{current_time}}", str(local_now))
     prompt = prompt.replace("{{unanswered_count}}", str(unanswered))
     return replace(request, instruction=prompt, proactive_mode="simple",
+        response_schema_json=json.dumps(contact_schema("simple")),
         context=replace(request.context, materials=tuple(materials)),
         prompt_overrides=(
             ("task_prompt", ""),

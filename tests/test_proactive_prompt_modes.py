@@ -10,6 +10,7 @@ from companion_v2.proactive.morning_rhythm import NUDGE_INSTRUCTION
 from companion_v2.proactive.prompt_catalog import presentation_instructions
 from companion_v2.proactive.prompts import INSTRUCTION, request_for
 from companion_v2.proactive.simple_prompts import parse_contact_output
+from companion_v2.proactive.response_schema import contact_schema
 from tests.proactive_support import ContactFixture
 from tests.test_role_tool_loop import answered
 
@@ -99,6 +100,9 @@ class ProactivePromptModeTests(ContactFixture, unittest.IsolatedAsyncioTestCase)
         self.assertNotIn("Companion-only rules", system)
         self.assertNotIn(self.called[-1].task_prompt, system)
         self.assertNotIn("decision", system)
+        final_task = json.loads(wire.messages[-1]["content"])["task"]
+        self.assertEqual(final_task["response_schema"], contact_schema("simple"))
+        self.assertEqual(final_task["skip_example"], {"send": False, "message": ""})
         self.assertEqual([item.text for item in self.sent], ["Simple message"])
 
     async def test_companion_request_also_uses_provider_json_mode(self):
@@ -106,6 +110,9 @@ class ProactivePromptModeTests(ContactFixture, unittest.IsolatedAsyncioTestCase)
         self.assertEqual(result.task.state, "succeeded")
         self.assertEqual(self.called[-1].original.proactive_mode, "companion")
         self.assertEqual(self.called[-1].original.response_format, "json_object")
+        final_task = json.loads(build_wire(self.called[-1]).messages[-1]["content"])["task"]
+        self.assertEqual(final_task["response_schema"], contact_schema())
+        self.assertEqual(final_task["skip_example"]["decision"], "skip")
 
     async def test_simple_skip_does_not_send_an_empty_message(self):
         self.patch_mode("simple").unwrap()

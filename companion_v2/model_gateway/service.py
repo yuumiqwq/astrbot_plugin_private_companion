@@ -18,7 +18,7 @@ from companion_v2.sources.repositories import SourceRepository
 
 from .budget import BudgetDeferral, BudgetLedger
 from .failures import ModelFailure
-from .models import MAX_TOOL_CATALOG, Amount, ModelCompletion, ProviderResponse, ToolSpec
+from .models import MAX_TOOL_CATALOG, Amount, ModelCompletion, ModelOutputError, ProviderResponse, ToolSpec
 from .refusal import matches_refusal_text
 from .routing import ModelRouter
 from .response_diagnostics import checked_response_diagnostics
@@ -218,6 +218,10 @@ class LocalModelGateway:
                 self.ledger.record_cache_signature(run, call_id, provider.binding, signature)
 
             prefix_committed = False
+            rejected_output = []
+
+            def record_rejected_output(output, reason, error_type):
+                rejected_output[:] = [output, reason, error_type]
 
             async def publish_prefix(draft):
                 nonlocal prefix_committed
@@ -243,6 +247,8 @@ class LocalModelGateway:
                     provider.generate(replace(provider_envelope, before_dispatch=before_dispatch,
                                               record_cache_signature=record_cache_signature,
                                               record_prompt_snapshot=(record_prompt_snapshot
+                                                  if envelope.original.output_format == "proactive_contact" else None),
+                                              record_rejected_output=(record_rejected_output
                                                   if envelope.original.output_format == "proactive_contact" else None),
                                               on_reply_prefix=publish_prefix if on_reply_prefix is not None else None,
                                               reply_prefix_ready=reply_prefix_ready)),
@@ -368,7 +374,7 @@ class LocalModelGateway:
                         diagnostics.parse_state if diagnostics is not None else "unavailable")
                     continue
                 if not prefix_committed and failure is ModelFailure.WIRE_DECODE and usage_known:
-                    raise TaskError("model_output_invalid", "provider output did not match the task's response contract")
+                    raise ModelOutputError(call_id, *rejected_output)
                 raise TaskError("model_usage_unknown", "provider processing is unknown; no fallback was dispatched")
         raise TaskError("model_not_started", "configured providers confirmed they did not process the request")
 

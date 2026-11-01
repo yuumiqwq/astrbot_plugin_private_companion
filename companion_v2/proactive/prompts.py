@@ -29,6 +29,7 @@ from .prompt_templates import (EXPRESSION_INSTRUCTION, LENGTH_INSTRUCTION, NEWS_
                                NEWS_SHARING_INSTRUCTION, NEWLINE_INSTRUCTION, OUTPUT_INSTRUCTION,
                                TERMINAL_INSTRUCTION, effective_template)
 from .prompt_catalog import effective_prompt, rendered_prompt
+from .response_schema import contact_schema
 
 
 def history_round_groups(items):
@@ -487,6 +488,7 @@ def request_for(job, records, preferences, history=(), *, last_reply=None, reply
                          ("\n" + diagnostic_instruction if diagnostic_instruction else "") +
                          (rendered_prompt(preferences.values, "style_wrapper", style=style) if style else ""),
                          context.role_binding, output_format="proactive_contact", response_format="json_object",
+                         response_schema_json=json.dumps(contact_schema(official_alert=official_alert)),
                          prompt_overrides=tuple((key, effective_prompt(preferences.values, section)) for key, section in
                              (("output_contract", "output"), ("terminal_prompt_guard", "terminal"),
                               ("capability_instruction", "capability"))))

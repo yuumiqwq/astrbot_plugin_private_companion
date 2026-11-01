@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock
 
 from companion_v2.conversation.foreground import PromptMaterial
 from companion_v2.execution.models import TaskError
+from companion_v2.model_gateway.failures import ModelFailure
+from companion_v2.model_gateway.models import Amount, CapturedModelOutput, ProviderResponse
 from companion_v2.proactive.simulation import RESULT_PREFIX, simulate_contact
 from tests.proactive_support import ContactFixture
 from tests.test_role_tool_loop import answered
@@ -85,12 +87,35 @@ class ProactiveSimulationTests(ContactFixture, unittest.IsolatedAsyncioTestCase)
         async def model(_):
             return answered('{"send":false,"message":"unexpected text"}')
         self.model_behavior = model
-        with self.assertRaises(TaskError) as caught:
-            await self.preview(app)
-        self.assertEqual(caught.exception.code, "simulation_output_invalid")
+        result = await self.preview(app)
+        self.assertEqual(result["state"], "failed")
+        self.assertEqual(result["code"], "simulation_output_invalid")
+        self.assertEqual(result["raw_response"], '{"send":false,"message":"unexpected text"}')
+        self.assertIn("boolean send", result["error"])
         self.assertEqual(self.sent, [])
         self.assertEqual(self.protected_counts(app), before)
         self.assertFalse(app.proactive._pending)
+
+    async def test_adapter_rejection_preserves_raw_only_in_local_preview(self):
+        app = await self.enabled()
+        before = self.protected_counts(app)
+        raw = " \n\t" * 7
+        async def model(envelope):
+            envelope.record_rejected_output(CapturedModelOutput(raw),
+                "model response contains only whitespace; expected a JSON object", "JSONDecodeError")
+            return ProviderResponse("unknown", usage=Amount(20, 0), receipt_ref="rejected-preview",
+                                    failure=ModelFailure.WIRE_DECODE)
+        self.model_behavior = model
+        result = await self.preview(app)
+        self.assertEqual((result["state"], result["code"], result["parts"]),
+                         ("failed", "model_output_invalid", []))
+        self.assertEqual(result["raw_response"], raw)
+        self.assertIn("only whitespace", result["error"])
+        self.assertEqual(result["error_type"], "JSONDecodeError")
+        self.assertTrue(result["call_id"].startswith("model-call-"))
+        self.assertEqual(len(self.called), 1)
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.protected_counts(app), before)
 
     async def test_model_failure_has_no_delivery_fallback(self):
         app = await self.enabled()

@@ -8,7 +8,7 @@ import json
 from typing import Awaitable, Callable
 
 from companion_v2.conversation.foreground import ModelDraft, PromptRequest
-from companion_v2.execution.models import Lane, ProviderBinding, digest, encode
+from companion_v2.execution.models import Lane, ProviderBinding, TaskError, digest, encode
 from companion_v2.identity_policy.models import _opaque
 
 from .failures import ModelFailure
@@ -324,6 +324,7 @@ class ModelEnvelope:
     before_dispatch: Callable[[], object] | None = field(default=None, compare=False, repr=False)
     record_cache_signature: Callable[[CacheSignature], object] | None = field(default=None, compare=False, repr=False)
     record_prompt_snapshot: Callable[[list[dict]], object] | None = field(default=None, compare=False, repr=False)
+    record_rejected_output: Callable[[CapturedModelOutput, str, str], object] | None = field(default=None, compare=False, repr=False)
     model_override: str = ""
     provider_capabilities: tuple[str, ...] = ()
     on_reply_prefix: Callable[[ModelDraft], Awaitable[bool]] | None = field(default=None, compare=False, repr=False)
@@ -343,6 +344,15 @@ class CapturedModelOutput:
             raise ValueError("captured model output must be bounded text")
         if self.finish_reason not in ("stop", "length", "refusal", "invalid", "oversized"):
             raise ValueError("captured output requires a known completion classification")
+
+
+class ModelOutputError(TaskError):
+    """Ephemeral rejected text, available to an authorized local diagnostic owner."""
+
+    def __init__(self, call_id, output=None, reason=None, error_type=None):
+        super().__init__("model_output_invalid", "provider output did not match the task's response contract")
+        self.call_id, self.output = call_id, output
+        self.parse_error, self.error_type = reason, error_type
 
 
 @dataclass(frozen=True)
