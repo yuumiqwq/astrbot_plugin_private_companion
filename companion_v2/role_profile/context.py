@@ -69,6 +69,8 @@ class ConversationRoleProfileContext:
     def capture(self, context, at):
         del at
         snapshot = self.owner.read(target_for(context), self.fields)
+        if snapshot.fields[f"{GROUP}.enabled"].value is False:
+            return None
         values = {
             name: snapshot.fields[f"{GROUP}.{name}"].value.strip()
             for name in FIELD_LIMITS if name not in CONTROL_FIELDS
@@ -88,6 +90,9 @@ class ConversationRoleProfileContext:
                 or snapshot["role_id"] != context.role_binding.role.subject_id
                 or type(snapshot["revision"]) is not int or snapshot["revision"] < 0):
             raise TaskError("role_profile_snapshot_invalid", "the sealed role profile does not match this role")
+        current = self.owner.read(target_for(context), self.fields)
+        if current.fields[f"{GROUP}.enabled"].value is False:
+            return ""
         try:
             fields = snapshot["fields"]
             if (type(fields) is dict and set(fields).issubset(FIELD_LIMITS)

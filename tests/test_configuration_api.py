@@ -128,7 +128,8 @@ class ConfigurationWebAPITests(MultiFixture, unittest.IsolatedAsyncioTestCase):
             self.assertEqual(status["role_profile"]["scope"], "role")
             self.assertEqual(status["role_profile"]["layers"], ["installation", "role"])
             self.assertEqual(status["role_profile"]["fields"]["world"]["maximum_chars"], 4200)
-            self.assertEqual(set(status["role_profile"]["settings"]), set(FIELD_LIMITS))
+            self.assertEqual(set(status["role_profile"]["settings"]), set(FIELD_LIMITS) | {"enabled"})
+            self.assertTrue(status["role_profile"]["settings"]["enabled"])
             self.assertEqual(status["relationship_profile"]["scope"], "relationship")
             self.assertEqual(status["relationship_profile"]["layers"],
                              ["installation", "role", "relationship"])
@@ -463,16 +464,18 @@ class ConfigurationWebAPITests(MultiFixture, unittest.IsolatedAsyncioTestCase):
             response = await call(handlers[first + "/configure"], {
                 "section": "role_profile", "operation_key": "profile-first",
                 "edit_token": profile["edit_token"],
-                "changes": {"identity": "住在旧城边的电台编辑", "world": "信件总会晚一个雨季才抵达。"},
+                "changes": {"enabled": False, "identity": "住在旧城边的电台编辑", "world": "信件总会晚一个雨季才抵达。"},
             })
             self.assertEqual(response["status"], "ok", response)
             first_saved = (await call(handlers[first], query={"sections": "role_profile"}))[
                 "data"]["sections"]["role_profile"]["settings"]
             self.assertEqual(first_saved["identity"], "住在旧城边的电台编辑")
             self.assertEqual(first_saved["world"], "信件总会晚一个雨季才抵达。")
+            self.assertFalse(first_saved["enabled"])
             other = (await call(handlers[second]))["data"]["sections"]["role_profile"]["settings"]
             self.assertEqual(other["identity"], "")
             self.assertEqual(other["world"], "")
+            self.assertTrue(other["enabled"])
         finally:
             self.controller.unregister_routes()
 

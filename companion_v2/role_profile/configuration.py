@@ -61,20 +61,25 @@ FIELD_LIMITS = {
     "avatar_data_url": MAX_AVATAR_DATA_URL_CHARS,
 }
 FIELD_DEFAULTS = {
+    "enabled": True,
     "expression_private_source_mode": "owner",
     "expression_private_source_subject_ids": "[]",
     "expression_private_application_mode": "all",
     "expression_private_application_subject_ids": "[]",
     "avatar_data_url": "",
 }
-CONTROL_FIELDS = frozenset({"main_companion_subject", "expression_private_source_mode",
+CONTROL_FIELDS = frozenset({"enabled", "main_companion_subject", "expression_private_source_mode",
     "expression_private_source_subject_ids", "expression_private_application_mode",
     "expression_private_application_subject_ids", "avatar_data_url"})
 TOTAL_CHAR_LIMIT = 30000
 
 
 def configuration_fields():
-    return tuple(
+    return (FieldDefinition(
+        f"{GROUP}.enabled", GROUP, GROUP, ValueKind.BOOLEAN, True,
+        layers=(ConfigLayer.ROLE,), apply_mode=ApplyMode.IMMEDIATE,
+        owner_id=OWNER, core_only=True,
+    ),) + tuple(
         FieldDefinition(
             f"{GROUP}.{name}", GROUP, GROUP, ValueKind.TEXT, FIELD_DEFAULTS.get(name, ""),
             layers=(ConfigLayer.ROLE,), apply_mode=ApplyMode.IMMEDIATE,
@@ -94,8 +99,11 @@ def target_for(context):
 
 
 def validate_values(values):
-    if type(values) is not dict or set(values) != set(FIELD_LIMITS):
+    # Sealed profiles created before the switch contain only the text fields.
+    if (type(values) is not dict or set(values) - {"enabled"} != set(FIELD_LIMITS)):
         raise ConfigurationError("role_profile_configuration_invalid", "role profile fields are incomplete")
+    if type(values.get("enabled", True)) is not bool:
+        raise ConfigurationError("role_profile_configuration_invalid", "enabled must be boolean")
     total = 0
     for name, limit in FIELD_LIMITS.items():
         value = values[name]

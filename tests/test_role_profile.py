@@ -91,6 +91,40 @@ class RoleProfileConversationTests(MessageFixture, unittest.IsolatedAsyncioTestC
         self.assertIn("姓名：沈知夏", text)
         self.assertIn("说话方式：句子简短，先听完再回答。", text)
 
+    def test_disabled_profile_preserves_canon_and_controls_but_stops_all_profile_prompt_reads(self):
+        from companion_v2.role_profile.task_reference import TaskRoleReference
+        self.save_profile("name", "沈知夏")
+        self.save_profile("birthday", "9 月 18 日")
+        self.save_profile("main_companion_subject", "original-person")
+        owner = self.messages.role_profile_context
+        sealed = owner.capture(self.context, NOW)
+        self.assertIsNotNone(sealed)
+        self.save_profile("enabled", False)
+
+        self.assertIsNone(owner.capture(self.context, NOW))
+        self.assertEqual(owner.instruction(sealed, self.context), "")
+        self.assertEqual(TaskRoleReference(self.runtime).instruction(self.context, NOW), "")
+        stored = self.profile_owner.read(target_for(self.context), self.profile_fields)
+        self.assertEqual(stored.fields[f"{GROUP}.name"].value, "沈知夏")
+        self.assertEqual(stored.fields[f"{GROUP}.birthday"].value, "9 月 18 日")
+        self.assertEqual(stored.fields[f"{GROUP}.main_companion_subject"].value, "original-person")
+
+        self.save_profile("enabled", True)
+        self.assertEqual(owner.capture(self.context, NOW)["fields"]["name"], "沈知夏")
+        self.assertIn("姓名：沈知夏", TaskRoleReference(self.runtime).instruction(self.context, NOW))
+
+    def test_profile_switch_defaults_to_enabled_and_rejects_non_boolean_values(self):
+        target = target_for(self.context)
+        initial = self.profile_owner.read(target, self.profile_fields)
+        self.assertIs(initial.fields[f"{GROUP}.enabled"].value, True)
+        with self.assertRaises(ConfigurationError):
+            self.save_profile("enabled", "false")
+        self.save_profile("enabled", False)
+        current = self.profile_owner.read(target, self.profile_fields)
+        self.profile_owner.write(target, self.profile_fields, changes={},
+            reset=(f"{GROUP}.enabled",), expected_revision=current.revision, observed_at=NOW)
+        self.assertIs(self.profile_owner.read(target, self.profile_fields).fields[f"{GROUP}.enabled"].value, True)
+
     async def test_blank_profile_does_not_add_a_prompt_block(self):
         self.save_profile("identity", " \n ")
         batch = self.accept()
