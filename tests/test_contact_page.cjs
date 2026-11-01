@@ -1628,7 +1628,7 @@ test('消息测试支持按类别、覆盖状态和内容筛选', async () => {
   assert.equal(h.page.state.data.touched.size, 0, '筛选不能修改配置');
 });
 
-test('复制主动消息测试指令只写入剪贴板，不调用模型或发送接口', async () => {
+test('复制模拟测试说明仅写入剪贴板', async () => {
   const h = harness();
   await boot(h);
   h.element.dispatch('click', {target: {closest: sel => sel === '[data-view]'
@@ -1638,204 +1638,182 @@ test('复制主动消息测试指令只写入剪贴板，不调用模型或发�
     ? {dataset: {testCopy: 'news'}} : null}});
   await h.settle();
   assert.equal(h.clipboardWrites.length, 1);
-  assert.match(h.clipboardWrites[0], /这是一条「外部资讯」主动消息类型的真实来源功能测试/);
+  assert.match(h.clipboardWrites[0], /这是一条「外部资讯」主动消息类型的真实来源模拟/);
   assert.match(h.clipboardWrites[0], /生产器来源：带标题、原链接和发布时间的当前资讯条目/);
-  assert.match(h.clipboardWrites[0], /严格遵守通用 JSON 合同，并给出 decision_confidence/);
-  assert.match(h.clipboardWrites[0], /通过条件：实际抓取、条目校验、模型生成和 QQ 回执全部完成/);
-  assert.equal(h.requests.length, requestCount, '复制不能新增任何 API 请求');
-  assert.ok(h.element.innerHTML.includes('没有调用模型或真实投递'));
+  assert.match(h.clipboardWrites[0], /遵守当前模式的输出格式/);
+  assert.match(h.clipboardWrites[0], /不向 QQ 发送/);
+  assert.doesNotMatch(h.clipboardWrites[0], /QQ 回执|decision_confidence/);
+  assert.equal(h.requests.length, requestCount);
+  assert.ok(h.element.innerHTML.includes('测试说明已复制'));
 });
 
-test('主动消息类型卡片可确认后运行真实诊断并显示结果', async () => {
+test('消息模拟仅提交禁止投递的请求，并逐条保留后台消息分段', async () => {
   const h = harness();
   await boot(h);
   h.element.dispatch('click', {target: {closest: sel => sel === '[data-view]'
     ? {dataset: {view: 'tests'}} : null}});
   const requestCount = h.requests.length;
-
   h.element.dispatch('click', {target: {closest: sel => sel === '[data-test-run]'
     ? {dataset: {testRun: 'news'}} : null}});
-  assert.ok(h.element.innerHTML.includes('运行「外部资讯」测试？'));
-  assert.ok(h.element.innerHTML.includes('真实投递到核心管理员 QQ 私聊'));
-  assert.equal(h.requests.length, requestCount, '打开确认框时不能提前调用模型或发送接口');
-
-  h.element.dispatch('click', {target: {closest: sel => sel === '[data-test-action]'
-    ? {dataset: {testAction: 'confirm'}} : null}});
   await h.settle();
   const request = h.requests.at(-1);
+  assert.equal(h.requests.length, requestCount + 1);
   assert.equal(request.method, 'POST');
   assert.equal(request.route, 'setup/proactive-diagnostic');
   assert.deepEqual(JSON.parse(JSON.stringify(request.values)), {
-    purpose: 'news', confirm_delivery: true, synthetic_event: false,
+    purpose:'news', simulation:true, confirm_delivery:false, synthetic_event:false,
   });
   assert.equal(h.page.state.data.testBusy, 'news');
+  h.element.dispatch('click', {target: {closest: sel => sel === '[data-test-run]'
+    ? {dataset: {testRun: 'care'}} : null}});
+  assert.equal(h.requests.length, requestCount + 1, '执行中重复点击不新增请求');
 
-  h.reply(request, {state: 'passed', purpose: 'news', purpose_label: '外部资讯',
-    event_mode: 'source_backed', route: {label: '真实资讯抓取'},
-    delivery_state: 'delivered', receipt_ref: 'receipt-1',
-    stage_metrics: {model: {provider_calls: 1, tokens: 42, cost_microusd: 7, avg_latency_ms: 1500,
-      unknown_calls: 0}, delivery: {expected_parts: 2, delivered_parts: 2, unresolved_parts: 0, failed_parts: 0}},
-    usage_summary: {decisions: {session: {used: 2, calls: 2, pending: 0}},
-      deliveries: {session: {used: 1, occupied: 1, limit: 3, delivered: 1, unresolved: 0}},
-      model: {session: {calls: 2, tokens: 100, cost_microusd: 30}}}, stages: [
-      {stage: 'news_fetch', state: 'passed', detail: '真实资讯抓取'},
-      {stage: 'trusted_candidate', state: 'passed'},
-      {stage: 'model_generation', state: 'passed'}, {stage: 'persona_review', state: 'passed'},
-      {stage: 'delivery', state: 'passed'}, {stage: 'receipt', state: 'passed'},
-    ]});
+  h.reply(request, {simulation:true, state:'passed', decision:'send', purpose:'news',
+    purpose_label:'外部资讯', parts:['第一句\n同一条内的第二行','<b>第二条消息</b>'],
+    route:{label:'真实资讯抓取'},
+    stage_metrics:{model:{provider_calls:1,tokens:42,cost_microusd:7,avg_latency_ms:1500}},
+    stages:[{stage:'news_fetch',state:'passed'},{stage:'model_generation',state:'passed'},
+      {stage:'output_parsing',state:'passed'},{stage:'segmentation',state:'passed'}]});
   await h.settle();
   assert.equal(h.page.state.data.testBusy, '');
-  assert.equal(h.page.state.data.testResults.news.state, 'passed');
-  assert.match(h.element.innerHTML, /测试通过 · 已投递/);
-  assert.match(h.element.innerHTML, /真实资讯抓取/);
-  assert.match(h.element.innerHTML, /本次取得的真实来源/);
-  assert.match(h.element.innerHTML, /已投递到核心管理员私聊/);
-  assert.match(h.element.innerHTML, /诊断步骤/);
-  assert.match(h.element.innerHTML, /人格复核/);
-  assert.match(h.element.innerHTML, /平台已确认投递/);
+  assert.match(h.element.innerHTML, /模拟完成/);
+  assert.equal((h.element.innerHTML.match(/data-simulation-part=/g) || []).length, 2);
+  assert.match(h.element.innerHTML, /data-simulation-part="0">第一句\n同一条内的第二行<\/li>/);
+  assert.match(h.element.innerHTML, /&lt;b&gt;第二条消息&lt;\/b&gt;/);
+  assert.doesNotMatch(h.element.innerHTML, /<b>第二条消息<\/b>/);
+  assert.match(h.element.innerHTML, /消息分段：2 条/);
+  assert.match(h.element.innerHTML, /输出格式解析/);
   assert.match(h.element.innerHTML, /本轮 Provider 模型：1 次调用/);
-  assert.match(h.element.innerHTML, /本轮投递：2 \/ 2 段已确认/);
-  assert.match(h.element.innerHTML, /主动模型决策已调用 2 次（待处理 0，仅统计）/);
-  assert.match(h.element.innerHTML, /实际联系已确认发送 1 条（每日上限占用 1\/3，待确认 0）/);
-  assert.doesNotMatch(h.element.innerHTML, /模型决策调用额度/);
-  assert.equal(h.localStore.size, 0, 'a final result clears the durable replay guard');
+  assert.doesNotMatch(h.element.innerHTML, /已投递到|平台已确认投递|ct-test-dialog/);
+  assert.equal(h.localStore.size, 0);
 });
 
-test('手机地点和带图主动消息映射到各自的扩展诊断链路', async () => {
-  for (const [id, expected, confirmationText] of [
-    ['mobile_location', {purpose:'environment', confirm_delivery:true, synthetic_event:false, variant:'mobile_location'}, /不伪造坐标/],
-    ['reaction_image', {purpose:'chat', confirm_delivery:true, synthetic_event:false, diagnostic_image:true}, /授权图库检索一张表情原图/],
+test('模型选择跳过时显示状态且不渲染空消息气泡', async () => {
+  const h = harness();
+  await boot(h);
+  h.element.dispatch('click', {target:{closest:sel => sel === '[data-view]' ? {dataset:{view:'tests'}} : null}});
+  h.element.dispatch('click', {target:{closest:sel => sel === '[data-test-run]' ? {dataset:{testRun:'chat'}} : null}});
+  await h.settle();
+  h.reply(h.requests.at(-1), {simulation:true,state:'skipped',decision:'skip',parts:[],skip_reason:'model_decision'});
+  await h.settle();
+  assert.match(h.element.innerHTML, /模型选择不发送/);
+  assert.doesNotMatch(h.element.innerHTML, /data-simulation-part=/);
+  assert.equal(h.page.state.data.testBusy, '');
+});
+
+test('手机地点和图片测试保留入口参数并始终禁止投递', async () => {
+  for (const [id, expected] of [
+    ['mobile_location',{purpose:'environment',simulation:true,confirm_delivery:false,synthetic_event:false,variant:'mobile_location'}],
+    ['reaction_image',{purpose:'chat',simulation:true,confirm_delivery:false,synthetic_event:false,diagnostic_image:true}],
   ]) {
     const h = harness();
     await boot(h);
-    h.element.dispatch('click', {target: {closest: sel => sel === '[data-view]'
-      ? {dataset: {view: 'tests'}} : null}});
-    h.element.dispatch('click', {target: {closest: sel => sel === '[data-test-run]'
-      ? {dataset: {testRun: id}} : null}});
-    assert.match(h.element.innerHTML, confirmationText);
-    h.element.dispatch('click', {target: {closest: sel => sel === '[data-test-action]'
-      ? {dataset: {testAction: 'confirm'}} : null}});
+    h.element.dispatch('click', {target:{closest:sel => sel === '[data-view]' ? {dataset:{view:'tests'}} : null}});
+    h.element.dispatch('click', {target:{closest:sel => sel === '[data-test-run]' ? {dataset:{testRun:id}} : null}});
     await h.settle();
     const request = h.requests.at(-1);
     assert.equal(request.route, 'setup/proactive-diagnostic');
     assert.deepEqual(JSON.parse(JSON.stringify(request.values)), expected);
-    h.reply(request, {state: 'failed', purpose: expected.purpose, stages: []});
+    h.reply(request, {simulation:true,state:'failed',purpose:expected.purpose,parts:[],stages:[]});
     await h.settle();
     h.page.unmount();
   }
 });
 
-test('失败诊断标明卡点、前序步骤、原因和下一步', async () => {
-  const h = harness();
-  await boot(h);
-  h.element.dispatch('click', {target: {closest: sel => sel === '[data-view]'
-    ? {dataset: {view: 'tests'}} : null}});
-  h.element.dispatch('click', {target: {closest: sel => sel === '[data-test-run]'
-    ? {dataset: {testRun: 'news'}} : null}});
-  h.element.dispatch('click', {target: {closest: sel => sel === '[data-test-action]'
-    ? {dataset: {testAction: 'confirm'}} : null}});
-  await h.settle();
-  const request = h.requests.at(-1);
-  h.reply(request, {state: 'failed', purpose: 'news', purpose_label: '外部资讯',
-    route: {label: '资讯生产器'}, stage: 'trusted_candidate', code: 'contact_diagnostic_source_required',
-    failure_title: '当前用途没有可核验的测试机会',
-    explanation: '没有当前来源时不会调用模型，也不会发送消息。',
-    suggestion: '配置资讯来源并读到当前条目后再测。',
-    stages: [
-      {stage: 'authorization', state: 'passed'}, {stage: 'binding', state: 'passed'},
-      {stage: 'runtime', state: 'passed'}, {stage: 'settings', state: 'passed'},
-      {stage: 'purpose', state: 'passed'}, {stage: 'trusted_candidate', state: 'failed'},
-    ]});
-  await h.settle();
-
-  assert.match(h.element.innerHTML, /测试未通过 · 卡在联系机会\/来源/);
-  assert.match(h.element.innerHTML, /失败原因/);
-  assert.match(h.element.innerHTML, /没有当前来源时不会调用模型/);
-  assert.match(h.element.innerHTML, /诊断步骤/);
-  assert.match(h.element.innerHTML, /管理员私聊绑定<\/span>\s*<strong>通过/);
-  assert.match(h.element.innerHTML, /联系机会\/来源<\/span>\s*<strong>失败/);
-  assert.match(h.element.innerHTML, /下一步/);
-  assert.match(h.element.innerHTML, /配置资讯来源并读到当前条目后再测/);
-  assert.match(h.element.innerHTML, /展开技术详情/);
-});
-
-test('天气和屏幕默认真实来源，显式合成选择才使用虚构事件', async () => {
-  for (const id of ['environment', 'screen', 'news']) {
+test('异常的空分段响应不会显示空气泡或完成状态', async () => {
+  for (const parts of [[],[''],['  ']]) {
     const h = harness();
     await boot(h);
-    h.element.dispatch('click', {target: {closest: sel => sel === '[data-view]' ? {dataset: {view: 'tests'}} : null}});
-    if (id === 'news') {
-      const mode = {value: 'synthetic', dataset: {testMode: id}, closest: sel => sel === '[data-test-mode]' ? mode : null};
-      h.element.dispatch('change', {target: mode});
-    }
-    h.element.dispatch('click', {target: {closest: sel => sel === '[data-test-run]' ? {dataset: {testRun: id}} : null}});
-    if (id === 'screen') assert.match(h.element.innerHTML, /取得一张新截图/);
-    h.element.dispatch('click', {target: {closest: sel => sel === '[data-test-action]' ? {dataset: {testAction: 'confirm'}} : null}});
+    h.element.dispatch('click', {target:{closest:sel => sel === '[data-view]' ? {dataset:{view:'tests'}} : null}});
+    h.element.dispatch('click', {target:{closest:sel => sel === '[data-test-run]' ? {dataset:{testRun:'chat'}} : null}});
     await h.settle();
-    assert.equal(h.requests.at(-1).values.synthetic_event, id === 'news');
-    if (id === 'environment') assert.equal(h.requests.at(-1).values.variant, 'weather');
-    h.reply(h.requests.at(-1), {state: 'failed', purpose: id, stages: []});
+    h.reply(h.requests.at(-1), {simulation:true,state:'passed',decision:'send',parts});
+    await h.settle();
+    assert.equal(h.page.state.data.testResults.chat.state, 'unknown');
+    assert.doesNotMatch(h.element.innerHTML, /data-simulation-part=/);
+    h.page.unmount();
+  }
+});
+
+test('模拟失败显示具体阶段和原因', async () => {
+  const h = harness();
+  await boot(h);
+  h.element.dispatch('click', {target:{closest:sel => sel === '[data-view]' ? {dataset:{view:'tests'}} : null}});
+  h.element.dispatch('click', {target:{closest:sel => sel === '[data-test-run]' ? {dataset:{testRun:'news'}} : null}});
+  await h.settle();
+  h.reply(h.requests.at(-1), {simulation:true,state:'failed',purpose:'news',parts:[],
+    route:{label:'资讯生产器'},stage:'trusted_candidate',code:'contact_diagnostic_source_required',
+    failure_title:'当前用途没有可用的测试机会',explanation:'没有当前来源时不会调用模型。',
+    suggestion:'配置资讯来源并读到当前条目后再测。',
+    stages:[{stage:'authorization',state:'passed'},{stage:'binding',state:'passed'},
+      {stage:'trusted_candidate',state:'failed'}]});
+  await h.settle();
+  assert.match(h.element.innerHTML, /模拟未完成 · 卡在联系机会\/来源/);
+  assert.match(h.element.innerHTML, /失败原因/);
+  assert.match(h.element.innerHTML, /没有当前来源时不会调用模型/);
+  assert.match(h.element.innerHTML, /管理员私聊绑定<\/span>\s*<strong>通过/);
+  assert.match(h.element.innerHTML, /联系机会\/来源<\/span>\s*<strong>失败/);
+  assert.match(h.element.innerHTML, /配置资讯来源并读到当前条目后再测/);
+  assert.match(h.element.innerHTML, /展开技术详情/);
+  assert.doesNotMatch(h.element.innerHTML, /data-simulation-part=/);
+});
+
+test('天气和屏幕默认使用真实来源，合成事件选择独立于模拟开关', async () => {
+  for (const id of ['environment','screen','news']) {
+    const h = harness();
+    await boot(h);
+    h.element.dispatch('click', {target:{closest:sel => sel === '[data-view]' ? {dataset:{view:'tests'}} : null}});
+    if (id === 'news') {
+      const mode = {value:'synthetic',dataset:{testMode:id},closest:sel => sel === '[data-test-mode]' ? mode : null};
+      h.element.dispatch('change', {target:mode});
+    }
+    h.element.dispatch('click', {target:{closest:sel => sel === '[data-test-run]' ? {dataset:{testRun:id}} : null}});
+    await h.settle();
+    const request = h.requests.at(-1);
+    assert.equal(request.values.synthetic_event, id === 'news');
+    assert.equal(request.values.simulation, true);
+    assert.equal(request.values.confirm_delivery, false);
+    if (id === 'environment') assert.equal(request.values.variant, 'weather');
+    h.reply(request, {simulation:true,state:'failed',purpose:id,stages:[]});
     await h.settle();
     h.page.unmount();
   }
 });
 
-test('主动测试结果未知时跨页面刷新保留锁，并要求核实后再解除', async () => {
-  const localStorageStore = new Map();
-  const h = harness({localStorageStore});
+test('模拟响应断开后保留失败状态并允许再次模拟', async () => {
+  const h = harness();
   await boot(h);
-  h.element.dispatch('click', {target: {closest: sel => sel === '[data-view]'
-    ? {dataset: {view: 'tests'}} : null}});
-  h.element.dispatch('click', {target: {closest: sel => sel === '[data-test-run]'
-    ? {dataset: {testRun: 'care'}} : null}});
-  h.element.dispatch('click', {target: {closest: sel => sel === '[data-test-action]'
-    ? {dataset: {testAction: 'confirm'}} : null}});
+  h.element.dispatch('click', {target:{closest:sel => sel === '[data-view]' ? {dataset:{view:'tests'}} : null}});
+  h.element.dispatch('click', {target:{closest:sel => sel === '[data-test-run]' ? {dataset:{testRun:'care'}} : null}});
   await h.settle();
-  const request = h.requests.at(-1);
-  h.reply(request, {state: 'unknown', purpose: 'care', error: 'delivery_result_unknown',
-    suggestion: '核对管理员私聊，不要重试。'});
+  h.requests.at(-1).reject(new Error('network failed'));
   await h.settle();
-
-  assert.equal(h.page.state.data.testUncertain, true);
-  assert.match(h.element.innerHTML, /结果未知 · 请勿重试/);
-  assert.match(h.element.innerHTML, /请先核对核心管理员私聊/);
-  assert.ok([...localStorageStore.keys()].some(key => key.includes('test-guard:')));
-
-  h.page.unmount();
-  const restored = harness({localStorageStore});
-  await boot(restored);
-  assert.equal(restored.page.state.data.testUncertain, true);
-  restored.element.dispatch('click', {target: {closest: sel => sel === '[data-view]'
-    ? {dataset: {view: 'tests'}} : null}});
-  assert.match(restored.element.innerHTML, /核实后解除测试锁/);
-  const count = restored.requests.length;
-  restored.element.dispatch('click', {target: {closest: sel => sel === '[data-test-run]'
-    ? {dataset: {testRun: 'news'}} : null}});
-  assert.equal(restored.requests.length, count, 'a reload must not allow another diagnostic request');
-
-  restored.element.dispatch('click', {target: {closest: sel => sel === '[data-test-action]'
-    ? {dataset: {testAction: 'unlock'}} : null}});
-  assert.match(restored.element.innerHTML, /解除主动测试锁？/);
-  assert.match(restored.element.innerHTML, /仍可能产生另一条真实消息/);
-  restored.element.dispatch('click', {target: {closest: sel => sel === '[data-test-action]'
-    ? {dataset: {testAction: 'confirm-unlock'}} : null}});
-  assert.equal(restored.page.state.data.testUncertain, false);
-  assert.equal(localStorageStore.size, 0);
+  assert.equal(h.page.state.data.testResults.care.state, 'unknown');
+  assert.match(h.element.innerHTML, /模拟结果未收到/);
+  assert.doesNotMatch(h.element.innerHTML, /核对.*QQ|解除测试锁/);
+  assert.equal(h.localStore.size, 0);
+  const count = h.requests.length;
+  h.element.dispatch('click', {target:{closest:sel => sel === '[data-test-run]' ? {dataset:{testRun:'care'}} : null}});
+  await h.settle();
+  assert.equal(h.requests.length, count + 1);
+  assert.equal(h.requests.at(-1).values.confirm_delivery, false);
+  h.reply(h.requests.at(-1), {simulation:true,state:'skipped',decision:'skip',parts:[]});
+  await h.settle();
 });
 
-test('无法持久化防重状态时不启动主动消息测试', async () => {
-  const h = harness({sessionStorageBlocked: true, localStorageBlocked: true, historyBlocked: true});
+test('模拟不依赖浏览器持久化，旧投递响应不能显示为模拟完成', async () => {
+  const h = harness({sessionStorageBlocked:true,localStorageBlocked:true,historyBlocked:true});
   await boot(h);
-  h.element.dispatch('click', {target: {closest: sel => sel === '[data-view]'
-    ? {dataset: {view: 'tests'}} : null}});
+  h.element.dispatch('click', {target:{closest:sel => sel === '[data-view]' ? {dataset:{view:'tests'}} : null}});
   const count = h.requests.length;
-  h.element.dispatch('click', {target: {closest: sel => sel === '[data-test-run]'
-    ? {dataset: {testRun: 'news'}} : null}});
-  h.element.dispatch('click', {target: {closest: sel => sel === '[data-test-action]'
-    ? {dataset: {testAction: 'confirm'}} : null}});
+  h.element.dispatch('click', {target:{closest:sel => sel === '[data-test-run]' ? {dataset:{testRun:'news'}} : null}});
   await h.settle();
-  assert.equal(h.requests.length, count, 'the delivery endpoint must not run without a durable replay guard');
-  assert.match(h.page.state.data.notice, /没有启动测试/);
+  assert.equal(h.requests.length, count + 1);
+  assert.equal(h.requests.at(-1).values.confirm_delivery, false);
+  h.reply(h.requests.at(-1), {state:'passed',delivery_state:'delivered',parts:['不应显示']});
+  await h.settle();
+  assert.equal(h.page.state.data.testResults.news.state, 'unknown');
+  assert.doesNotMatch(h.element.innerHTML, /data-simulation-part=/);
 });
 
 test('消息测试入口在窄屏保留直达性，列表具备响应式和键盘焦点样式', () => {
@@ -1846,7 +1824,7 @@ test('消息测试入口在窄屏保留直达性，列表具备响应式和键�
   assert.match(style, /\.ct-test-card\[hidden\]\{display:none!important\}/);
   assert.match(style, /\.ct-test-copy:focus-visible,[\s\S]*?outline:2px solid var\(--t-focus\)/);
   assert.match(style, /\.ct-test-run\{[^}]*justify-content:center/);
-  assert.match(style, /\.ct-test-dialog::backdrop\{[^}]*background/);
+  assert.match(style, /\.ct-simulation-message\{[^}]*white-space:pre-wrap[^}]*overflow-wrap:anywhere/);
   assert.match(style, /\.ct-test-result\.is-unknown/);
   assert.match(style, /\.ct-test-diagnosis li\[data-state="failed"\]/);
   assert.match(style, /\.ct-test-technical summary/);

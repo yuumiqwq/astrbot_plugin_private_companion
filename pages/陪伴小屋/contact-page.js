@@ -34,8 +34,6 @@ window.CompanionContactPage = (() => {
   const HISTORY_PENDING = "__companion_contact_pending_v1";
   const HISTORY_PREVIOUS = "__companion_contact_previous_state_v1";
   const pendingWrites = new Map();
-  const proactiveTestGuards = new Map();
-  const TEST_GUARD_RESET = "__reset_proactive_test_guard__";
   const AUTO_RECOVERY_INITIAL_DELAY = 400;
   const AUTO_RECOVERY_MAX_DELAY = 30000;
   const AUTO_RECOVERY_MAX_EXPONENT = 8;
@@ -124,7 +122,7 @@ window.CompanionContactPage = (() => {
       source:"带标题、原链接和发布时间的当前资讯条目",
       setup:"即时抓取当前配置的真实资讯源（默认 AI 早报），使用有效条目生成消息。",
       instruction:"只根据给定条目判断是否与关系语境相关；保留原发布时间，不声称亲历、看完全文或独立核实。",
-      expect:"实际抓取、条目校验、模型生成和 QQ 回执全部完成；出处留存供追问。"},
+      expect:"完成实际抓取、条目校验及模型生成，显示解析后的消息分段。"},
     {id:"environment", label:"环境与状态变化", bucket:"分享", coverage:"ready",
       source:"当前天气、天气变化、官方预警或 Bot 服务余额来源",
       setup:"分测当前观测、两次观测的变化、官方预警覆盖范围和服务余额；再测过期或范围不明素材。",
@@ -134,17 +132,17 @@ window.CompanionContactPage = (() => {
       source:"本次已授权设备的新截图及对应视觉模型分析回执",
       setup:"实际调用窥屏设备，保存截图原件并调用视觉模型，再用这次分析生成主动消息。",
       instruction:"只提及分析明确支持且适合分享的一点观察；不暴露无关屏幕内容，不推断用户意图或身份。",
-      expect:"新截图、该截图的视觉分析、消息生成与 QQ 回执全部完成；撤权或来源变化后失效。"},
+      expect:"使用新截图及对应视觉分析生成消息，显示解析后的消息分段。"},
     {id:"mobile_location", label:"手机地点主动消息", bucket:"拓展", coverage:"ready",
       source:"手机陪伴终端本次上报的授权地点快照与当前私聊角色",
-      setup:"读取终端当前未过期地点，经过现实触及授权和变化校验，再进入环境主动联系与 QQ 投递链。测试不伪造坐标，也不改生产去重标记。",
+      setup:"读取终端当前未过期地点，经过现实触及授权和变化校验，再模拟环境主动消息。",
       instruction:"只把手机上报的地点标签作为可选聊天素材；不能据此推断用户正在做什么、心情如何或是否安全。",
-      expect:"终端地点读取、来源发布、主动消息生成与 QQ 回执全部完成；没有有效地点或授权时明确失败。"},
+      expect:"使用有效地点生成消息并显示分段；缺少地点或授权时显示具体原因。"},
     {id:"reaction_image", label:"带图主动消息", bucket:"拓展", coverage:"ready",
-      source:"当前私聊已授权的表情图库、原图校验与图片投递回执",
-      setup:"按一次性测试意图从授权图库检索素材，执行原图校验、封存和真实 QQ 图片投递；不修改生产图片频率。",
+      source:"当前私聊的图片配置与模型返回的图片意图",
+      setup:"按当前图片配置模拟消息与图片意图。",
       instruction:"正文保持自然完整；只附一张适合日常友好互动的原图，不适合时或本人停用表情时不得发送。",
-      expect:"授权素材检索、图片原件、文本与图片同一投递载荷及平台回执全部匹配；不会以纯文本冒充通过。"},
+      expect:"显示消息分段及图片意图。"},
   ];
   const TEST_COVERAGE = {ready:"生产器已接通", partial:"只有资格检查", missing:"尚无独立生产器"};
   const TEST_BUCKET_IDS = {关系:"bond", 日程:"daily", 分享:"share", 拓展:"extension"};
@@ -334,8 +332,7 @@ window.CompanionContactPage = (() => {
       ...data, settings:hasGlobalSettings ? {...data.settings} : null, editToken:"", configToken:"",
       configurationLoaded:!!hasGlobalSettings, busy:false, loading:false, contractLoading:false,
       ready:false, effective:null, effectiveSettings:null, purposes:{},
-      confirmTest:"", testBusy:"", testUncertain:data.testUncertain || !!data.testBusy,
-      testGuard:data.testGuard || (data.testBusy ? {purpose:data.testBusy, state:"pending"} : null),
+      testBusy:"",
       contractError:"", contractErrorCode:"", materialsLoading:false, touched:[...data.touched],
       draft:{...data.draft}, pulse:new Set(), pulseNow:[], flip:null, flipNow:null, viewShift:null, viewShiftNow:null,
     });
@@ -344,12 +341,6 @@ window.CompanionContactPage = (() => {
     const identity = window.CompanionProduct?.identity?.() || {};
     return STORE + "pending:" + JSON.stringify([
       identity.installation_id || "", identity.operator_id || "", contactScope, data?.configPath || "",
-    ]);
-  }
-  function proactiveTestGuardKey() {
-    const identity = window.CompanionProduct?.identity?.() || {};
-    return STORE + "test-guard:" + JSON.stringify([
-      identity.installation_id || "", identity.operator_id || "", contactScope,
     ]);
   }
   function writeHistoryPending(key, value) {
@@ -374,37 +365,6 @@ window.CompanionContactPage = (() => {
       const stored = window.history.state?.[HISTORY_PENDING]?.[key];
       return typeof stored === "string" ? JSON.parse(stored) : null;
     } catch { return null; }
-  }
-  function storeProactiveTestGuard(value) {
-    const key = proactiveTestGuardKey();
-    if (value) proactiveTestGuards.set(key, JSON.stringify(value));
-    else proactiveTestGuards.delete(key);
-    if (value) {
-      for (const storage of [() => localStorage, () => sessionStorage]) {
-        try { storage().setItem(key, JSON.stringify(value)); return true; } catch {}
-      }
-      return writeHistoryPending(key, value);
-    }
-    let removed = false;
-    for (const storage of [() => localStorage, () => sessionStorage]) {
-      try { storage().removeItem(key); removed = true; } catch {}
-    }
-    return writeHistoryPending(key, null) || removed;
-  }
-  function restoreProactiveTestGuard() {
-    const key = proactiveTestGuardKey();
-    for (const read of [
-      () => proactiveTestGuards.get(key),
-      () => localStorage.getItem(key),
-      () => sessionStorage.getItem(key),
-      () => readHistoryPending(key),
-    ]) try {
-      const stored = read();
-      const value = typeof stored === "string" ? JSON.parse(stored) : stored;
-      if (value && PURPOSE_META[value.purpose]
-          && ["pending", "unknown"].includes(value.state)) return value;
-    } catch {}
-    return null;
   }
   function storePendingWrite() {
     const key = pendingWriteKey();
@@ -506,7 +466,7 @@ window.CompanionContactPage = (() => {
       /* 草稿：只放用户真的改过的字段。提交时只发这些，未动的字段一个都不发——
          避免把「没看过的字段」当成「要保持的值」写回去。 */
       draft:{}, touched:new Set(), tierDraft:null, pendingWrite:null,
-      confirmTest:"", testBusy:"", testUncertain:false, testGuard:null, testResults:{}, testModes:{}, testVariants:{},
+      testBusy:"", testResults:{}, testModes:{}, testVariants:{},
       /* pulse 是「下一次渲染要闪哪几片盘面」，pulseNow 是这一帧真正在闪的。
          两者分开是因为 render() 每次都会重写 DOM，类必须由渲染时的状态决定，
          当场往节点上加类会被紧接着的重写丢掉（切档位那次动画就是这么消失的）。 */
@@ -1230,17 +1190,17 @@ window.CompanionContactPage = (() => {
   function testInstructionText(item) {
     const synthetic = testUsesSynthetic(item.id);
     return [
-      `这是一条「${item.label}」主动消息类型的${synthetic ? "合成测试" : "真实来源功能测试"}。`,
+      `这是一条「${item.label}」主动消息类型的${synthetic ? "合成素材模拟" : "真实来源模拟"}。`,
       synthetic ? "使用管理员已知的一次性合成情境，只在本轮演练中将给定场景作为表达前提；不扩写经历、承诺或声称取得真实采集来源。"
         : "即时获取当前配置的真实来源；屏幕须实际截图并分析。只使用本次取得的来源，失败时报告具体阶段。",
       `生产器来源：${item.source}`,
       `生产器验收场景：${item.setup}`,
       synthetic ? "按角色身处该情境时会主动发出的消息生成正文；除边界或安全要求不适合外，选择 send。"
-        : "根据本次真实来源生成自然、符合角色的消息；内容受实际来源支持，报告 QQ 真实投递回执。",
+        : "根据本次真实来源生成自然、符合角色的消息；内容受实际来源支持。",
       `类型要求：${item.instruction}`,
-      ...(item.id === "reaction_image" ? ["本次确认的是一次性带图测试，按生产图库检索与 QQ 图片投递链验证；不改变日常图片概率或频率配置。"] : []),
-      "测试状态与合成标识只在管理端呈现；QQ 正文按正式效果表达，不加入测试、模拟、演练或链路说明。",
-      "保持当前角色口吻和称呼，由角色先带来内容；可以自然提问或发出具体邀请，不催促回复。严格遵守通用 JSON 合同，并给出 decision_confidence。",
+      ...(item.id === "reaction_image" ? ["按当前图片配置表达图片意图，仅在页面展示模拟结果。"] : []),
+      "消息正文按正式效果表达，测试状态只在管理端呈现。",
+      "保持当前角色口吻和称呼，遵守当前模式的输出格式。结果经实际发送规则解析后在页面展示，不向 QQ 发送。",
       `通过条件：${item.expect}`,
     ].join("\n");
   }
@@ -1256,11 +1216,11 @@ window.CompanionContactPage = (() => {
     if (!SYNTHETIC_SOURCE_TESTS.has(id)) return "";
     const synthetic = testUsesSynthetic(id);
     return `<label class="ct-test-material"><span>测试素材</span><select data-test-mode="${e(id)}" aria-label="测试素材"
-      ${data.testBusy || data.testUncertain ? " disabled" : ""}>
-      <option value="real"${!synthetic ? " selected" : ""}>真实来源 · 完整功能测试</option>
-      <option value="synthetic"${synthetic ? " selected" : ""}>合成事件 · 生成与投递演练</option>
+      ${data.testBusy ? " disabled" : ""}>
+      <option value="real"${!synthetic ? " selected" : ""}>真实来源</option>
+      <option value="synthetic"${synthetic ? " selected" : ""}>合成事件</option>
     </select></label>${id === "environment" ? `<label class="ct-test-material"><span>环境来源</span>
-      <select data-test-variant="environment" aria-label="环境来源"${data.testBusy || data.testUncertain ? " disabled" : ""}>
+      <select data-test-variant="environment" aria-label="环境来源"${data.testBusy ? " disabled" : ""}>
       ${Object.entries(TEST_ENVIRONMENT_SOURCES).map(([key, label]) => `<option value="${key}"${(data.testVariants?.environment || "weather") === key ? " selected" : ""}>${e(label)}</option>`).join("")}
       </select></label>` : ""}`;
   }
@@ -1286,10 +1246,9 @@ window.CompanionContactPage = (() => {
       <footer class="ct-test-actions">
         <button type="button" class="ct-btn" data-test-prompt-select="${e(item.id)}">编辑提示词</button>
         <button type="button" class="ct-btn is-primary ct-test-run" data-test-run="${e(item.id)}"
-          ${data.testBusy || data.testUncertain || item.coverage !== "ready" ? " disabled" : ""}>
-          ${data.testBusy === item.id ? '<span class="ct-spinner" aria-hidden="true"></span><span>测试中…</span>'
-            : data.testUncertain ? `${ICON.alert}<span>先核对投递结果</span>`
-            : `${ICON.test}<span>运行测试</span>`}
+          ${data.testBusy || item.coverage !== "ready" ? " disabled" : ""}>
+          ${data.testBusy === item.id ? '<span class="ct-spinner" aria-hidden="true"></span><span>模拟中…</span>'
+            : `${ICON.test}<span>运行模拟</span>`}
         </button>
         <button type="button" class="ct-btn ct-test-copy" data-test-copy="${e(item.id)}">${ICON.copy}<span>复制测试说明</span></button>
       </footer>
@@ -1297,19 +1256,13 @@ window.CompanionContactPage = (() => {
     return `<div class="ct-tests">
       <div data-contact-prompts></div>
       <div class="ct-test-overview">
-        <p>主动联系目的与拓展发送链路分别验收，来源、素材和投递回执各自可核对。</p>
         <div class="ct-test-coverage-summary" aria-label="生产器覆盖情况">
           <span><i class="is-ready"></i>生产器已接通 <strong>${counts.ready}</strong></span>
           <span><i class="is-partial"></i>只有资格检查 <strong>${counts.partial}</strong></span>
           <span><i class="is-missing"></i>尚无独立生产器 <strong>${counts.missing}</strong></span>
         </div>
-        <p class="ct-test-boundary">资讯、天气、屏幕和手机地点读取真实来源；屏幕会实际截图并调用视觉模型，手机地点读取终端授权快照。带图测试使用授权图库素材。测试调用角色模型并真实投递到核心管理员私聊。</p>
       </div>
-      ${data.testUncertain ? `<div class="ct-test-lock" role="alert">
-        <span>${data.testGuard?.state === "pending" ? "上次测试没有收到最终回执。" : "上次测试结果未确认。"}请先核对核心管理员私聊；确认前不能再次启动测试，以免重复投递。</span>
-        <button type="button" class="ct-btn" data-test-action="unlock">核实后解除测试锁</button>
-      </div>` : ""}
-      ${data.testBusy ? `<p class="ct-test-running" role="status"><span class="ct-spinner" aria-hidden="true"></span>正在运行 ${e(PURPOSE_META[data.testBusy]?.label || "主动消息")} 测试；可能需要等待模型与平台回执。</p>` : ""}
+      ${data.testBusy ? `<p class="ct-test-running" role="status"><span class="ct-spinner" aria-hidden="true"></span>正在调用模型生成模拟结果…</p>` : ""}
       <div class="ct-test-tools">
         <label class="ct-test-search"><span>查找类型</span>
           <input type="search" data-test-search aria-label="搜索主动消息类型和测试指令"
@@ -1332,18 +1285,17 @@ window.CompanionContactPage = (() => {
       </div>
       <div class="ct-tests-grid">${cards}</div>
       <p class="ct-test-empty" hidden>没有匹配的消息类型</p>
-      ${testConfirmationMarkup()}
     </div>`;
   }
   const TEST_STAGE_LABELS = {
     request:"诊断请求", authorization:"管理员身份", binding:"管理员私聊绑定", runtime:"运行环境",
     settings:"主动联系设置", purpose:"联系目的", trusted_candidate:"联系机会/来源", contact_admission:"主动联系准入",
     news_fetch:"真实资讯抓取", weather_fetch:"真实天气获取", screen_capture:"本次真实截图", screen_interpretation:"本次视觉分析",
-    mobile_location_fetch:"手机地点读取", image_attachment:"主动图片素材与投递",
+    mobile_location_fetch:"手机地点读取", image_attachment:"主动图片素材",
     attempt_budget:"主动模型调用次数上限",
     delivery_budget:"本窗口今日实际联系额度",
     model_route:"主动联系模型路由", model_generation:"模型生成", persona_review:"人格复核",
-    delivery:"平台投递", receipt:"投递回执", execution:"端到端执行",
+    output_parsing:"输出格式解析", segmentation:"消息分段", simulation:"模拟结果", execution:"模拟执行",
   };
   const TEST_STAGE_STATES = {
     passed:"通过", failed:"失败", pending:"待检查", skipped:"未执行", not_required:"无需复核",
@@ -1361,16 +1313,6 @@ window.CompanionContactPage = (() => {
     purpose_mismatch:"材料与测试目的不匹配", repetitive:"内容可能重复",
     respect_user_boundary:"为尊重对方边界而保持沉默", other:"模型选择暂不发送",
   };
-  const TEST_DELIVERY_STATES = {
-    delivered:"平台已确认投递", failed:"平台明确返回失败", unknown:"平台投递结果未知",
-    accepted:"平台已接收请求，但尚无最终投递回执", pending:"等待平台投递回执",
-    dispatched:"已提交平台，等待投递回执",
-  };
-  const TEST_MEDIA_STATES = {
-    reaction: {attached:"已附表情图", pending_review:"待人格复核后附表情图", not_selected:"未选表情图"},
-    voice: {sealed:"已封装语音", not_selected:"未选语音"},
-    poke: {sealed:"已封装戳一戳", not_selected:"未选戳一戳"},
-  };
   function testStageMarkup(result) {
     const stages = Array.isArray(result.stages) ? result.stages.filter(item =>
       item && typeof item.stage === "string" && typeof item.state === "string") : [];
@@ -1383,108 +1325,41 @@ window.CompanionContactPage = (() => {
     </section>`;
   }
   function testMetricsMarkup(result) {
-    const metrics = result.stage_metrics;
-    const model = metrics?.model;
-    const delivery = metrics?.delivery;
-    const fmtCost = (value) => value == null ? "费用未返回" : `成本 $${(Number(value) / 1000000).toFixed(6)}`;
-    const stageLines = [];
+    const model = result.stage_metrics?.model;
+    const lines = [];
     if (model && Number.isFinite(Number(model.provider_calls))) {
+      const cost = model.cost_microusd == null ? "费用未返回" : `成本 $${(Number(model.cost_microusd) / 1000000).toFixed(6)}`;
       const latency = Number.isFinite(Number(model.avg_latency_ms)) ? ` · 平均 ${Number(model.avg_latency_ms)} ms` : "";
-      const unknown = Number(model.unknown_calls) > 0 ? ` · 未知 ${Number(model.unknown_calls)} 次` : "";
-      stageLines.push(`本轮 Provider 模型：${Number(model.provider_calls)} 次调用 · ${Number(model.tokens || 0)} Tokens · ${fmtCost(model.cost_microusd)}${latency}${unknown}`);
+      lines.push(`本轮 Provider 模型：${Number(model.provider_calls)} 次调用 · ${Number(model.tokens || 0)} Tokens · ${cost}${latency}`);
     }
-    if (delivery && Number.isFinite(Number(delivery.expected_parts))) {
-      stageLines.push(`本轮投递：${Number(delivery.delivered_parts || 0)} / ${Number(delivery.expected_parts)} 段已确认 · ${Number(delivery.unresolved_parts || 0)} 段待确认 · ${Number(delivery.failed_parts || 0)} 段失败`);
-    }
-    const media = metrics?.media;
-    if (media && typeof media === "object") {
-      const mediaText = Object.entries(TEST_MEDIA_STATES).map(([key, labels]) =>
-        labels[media[key]] ? `${labels[media[key]]}` : "").filter(Boolean);
-      if (mediaText.length) stageLines.push(`本轮表达：${mediaText.join(" · ")}`);
-    }
-    const summary = result.usage_summary;
-    const sessionDecision = summary?.decisions?.session;
-    const sessionDelivery = summary?.deliveries?.session;
-    const sessionModel = summary?.model?.session;
-    const quotaLine = (label, decision, contact, usage) => {
-      if (!decision || !contact || !usage) return "";
-      const cost = usage.cost_microusd == null ? "费用未返回" : `$${(Number(usage.cost_microusd) / 1000000).toFixed(6)}`;
-      return `${label}：主动模型决策已调用 ${Number(decision.calls ?? decision.used ?? 0)} 次（待处理 ${Number(decision.pending || 0)}，仅统计）；实际联系已确认发送 ${Number(contact.delivered)} 条（每日上限占用 ${Number(contact.occupied ?? contact.used)}/${Number(contact.limit)}，待确认 ${Number(contact.unresolved)}）；主动生成/复核 Provider 调用 ${Number(usage.calls)} 次、${Number(usage.tokens)} Tokens、${cost}`;
-    };
-    const quotaDay = sessionDecision?.date || sessionDelivery?.date || sessionModel?.date || summary?.date;
-    const quotaTimezone = sessionDecision?.timezone || sessionDelivery?.timezone || sessionModel?.timezone || summary?.timezone;
-    const quotaLabel = quotaDay ? `当前窗口 ${quotaDay}${quotaTimezone ? `（${quotaTimezone}）` : ""} 每日额度` : "当前窗口每日额度";
-    const usageLines = [quotaLine(quotaLabel, sessionDecision, sessionDelivery, sessionModel)].filter(Boolean);
-    if (!stageLines.length && !usageLines.length) return "";
-    return `<section class="ct-test-diagnosis" aria-label="运行统计"><h4>运行统计</h4>
-      ${stageLines.concat(usageLines).map(line => `<p>${e(line)}</p>`).join("")}
-    </section>`;
+    if (Array.isArray(result.parts)) lines.push(`消息分段：${result.parts.length} 条`);
+    return lines.length ? `<section class="ct-test-diagnosis" aria-label="运行统计"><h4>运行统计</h4>${lines.map(line => `<p>${e(line)}</p>`).join("")}</section>` : "";
   }
   function testResultMarkup(id) {
     const result = data.testResults[id];
     if (!result) return "";
-    const state = ["passed", "skipped", "failed", "unknown", "pending"].includes(result.state)
-      ? result.state : "unknown";
-    const title = state === "passed" ? "测试通过 · 已投递"
-      : state === "skipped" ? "测试完成 · 本次未发送"
-      : state === "failed" ? "测试未通过"
-      : state === "pending" ? "测试仍在处理中 · 请勿重试" : "结果未知 · 请勿重试";
+    const state = ["passed", "skipped", "failed", "unknown"].includes(result.state) ? result.state : "unknown";
+    const title = state === "passed" ? "模拟完成" : state === "skipped" ? "模型选择不发送"
+      : state === "failed" ? "模拟未完成" : "模拟结果未收到";
     const stage = result.stage ? TEST_STAGE_LABELS[result.stage] || result.stage : "";
-    const skipReason = TEST_SKIP_REASONS[result.skip_reason] || result.skip_reason || "";
+    const skipReason = TEST_SKIP_REASONS[result.skip_reason] || TEST_MODEL_SKIP_REASONS[result.skip_reason] || result.skip_reason || "";
     const modelSkipReason = TEST_MODEL_SKIP_REASONS[result.model_skip_reason] || result.model_skip_reason || "";
+    const parts = result.simulation === true && state === "passed" && result.decision === "send"
+      && Array.isArray(result.parts) ? result.parts.filter(part => typeof part === "string") : [];
     const technical = result.code || result.error ? `<details class="ct-test-technical"><summary>展开技术详情</summary>
       ${result.code ? `<code>${e(result.code)}</code>` : ""}${result.error ? `<pre>${e(result.error)}</pre>` : ""}</details>` : "";
-    const delivery = TEST_DELIVERY_STATES[result.delivery_state] || "";
     return `<section class="ct-test-result is-${state}" role="status" aria-live="polite">
       <strong>${e(title)}${state === "failed" && stage ? ` · 卡在${e(stage)}` : ""}</strong>
+      ${parts.length ? `<ol class="ct-simulation-messages" aria-label="模拟消息">${parts.map((part,index) => `<li class="ct-simulation-message" data-simulation-part="${index}">${e(part)}</li>`).join("")}</ol>` : ""}
+      ${typeof result.reaction_intent === "string" && result.reaction_intent ? `<p><b>图片意图</b> ${e(result.reaction_intent)}</p>` : ""}
       ${result.failure_title ? `<p class="ct-test-cause"><b>失败原因</b>${e(result.failure_title)}</p>` : ""}
       ${result.explanation ? `<p class="ct-test-explanation">${e(result.explanation)}</p>` : ""}
       ${result.route?.label || result.variant?.label ? `<p>来源：${e(result.route?.label || result.variant.label)}</p>` : ""}
-      ${result.purpose_label ? `<p>测试用途：${e(result.purpose_label)} · 收件人：核心管理员</p>` : ""}
-      ${result.event_mode === "synthetic_event" ? `<p>输入：一次性合成事件（未写入普通聊天记录）</p>` : ""}
-      ${result.event_mode === "source_backed" ? `<p>输入：本次取得的真实来源</p>` : ""}
-      ${delivery ? `<p>投递状态：${e(delivery)}</p>` : ""}
+      ${result.purpose_label ? `<p>测试用途：${e(result.purpose_label)}</p>` : ""}
       ${skipReason ? `<p class="ct-test-cause"><b>未发送原因</b>${e(skipReason)}${modelSkipReason ? `：${e(modelSkipReason)}` : ""}</p>` : ""}
-      ${testMetricsMarkup(result)}
-      ${testStageMarkup(result)}
-      ${result.suggestion ? `<p class="ct-test-next"><b>下一步</b>${e(result.suggestion)}</p>` : ""}
-      ${technical}
+      ${testMetricsMarkup(result)}${testStageMarkup(result)}
+      ${result.suggestion ? `<p class="ct-test-next"><b>下一步</b>${e(result.suggestion)}</p>` : ""}${technical}
     </section>`;
-  }
-  function testConfirmationMarkup() {
-    if (!data.confirmTest) return "";
-    if (data.confirmTest === TEST_GUARD_RESET) return `<dialog class="ct-test-dialog" data-test-confirm-dialog aria-labelledby="ct-test-confirm-title">
-      <div class="ct-test-dialog-body">
-        <p class="ct-test-dialog-kicker">上一轮结果未确认</p>
-        <h2 id="ct-test-confirm-title">解除主动测试锁？</h2>
-        <p>请先核对核心管理员私聊，并确认上一轮测试已经结束。解除后可以重新发起测试，仍可能产生另一条真实消息。</p>
-        <div class="ct-test-dialog-actions">
-          <button type="button" class="ct-btn" data-test-action="cancel">继续等待</button>
-          <button type="button" class="ct-btn is-primary" data-test-action="confirm-unlock">我已核实，解除锁定</button>
-        </div>
-      </div>
-    </dialog>`;
-    const item = TEST_INSTRUCTIONS.find(candidate => candidate.id === data.confirmTest);
-    if (!item) return "";
-    const synthetic = testUsesSynthetic(item.id);
-    const realAction = item.id === "mobile_location" ? "读取手机陪伴终端当前经授权且未过期的真实地点快照；不伪造坐标，也不改变生产去重标记"
-      : item.id === "reaction_image" ? "从当前私聊授权图库检索一张表情原图，执行素材校验并真实投递图片；不修改生产图片频率"
-      : item.id === "screen" ? "调用当前已授权的窥屏设备取得一张新截图，并调用视觉模型分析该截图"
-      : item.id === "news" || data.testVariants?.environment === "external_news" ? "即时抓取当前配置的真实资讯源，使用带日期和原链接的有效条目"
-      : item.id === "environment" && (data.testVariants?.environment || "weather") === "weather" ? "即时获取已配置角色所在地的真实天气观测"
-      : "读取所选环境来源的当前真实事件";
-    return `<dialog class="ct-test-dialog" data-test-confirm-dialog aria-labelledby="ct-test-confirm-title">
-      <div class="ct-test-dialog-body">
-        <p class="ct-test-dialog-kicker">${synthetic ? "合成事件" : "真实来源"} · 真实投递</p>
-        <h2 id="ct-test-confirm-title">运行「${e(item.label)}」测试？</h2>
-        <p>${synthetic ? `将为「${e(item.label)}」构造一次性合成事件；合成事件不会写入聊天记录。` : `将${realAction}。来源获取失败会显示失败阶段。`}之后调用角色配置的消息模型，按配置执行人格复核，并真实投递到核心管理员 QQ 私聊。QQ 正文按正式效果呈现，测试标识只保留在本页。</p>
-        <p class="ct-test-dialog-warning">测试不占日常联系额度。带图测试可能记录素材实际已投递；若结果未知，请先核对管理员私聊，不要重新运行。</p>
-        <div class="ct-test-dialog-actions">
-          <button type="button" class="ct-btn" data-test-action="cancel">取消</button>
-          <button type="button" class="ct-btn is-primary" data-test-action="confirm">确认并运行</button>
-        </div>
-      </div>
-    </dialog>`;
   }
   function testMatches(id) {
     const item = TEST_INSTRUCTIONS.find(candidate => candidate.id === id);
@@ -2068,8 +1943,6 @@ window.CompanionContactPage = (() => {
     const screenObservationHost = root.querySelector?.("[data-screen-observation]");
     if (screenObservationHost) window.CompanionScreenObservation?.mount(screenObservationHost);
     else window.CompanionScreenObservation?.unmount();
-    const testDialog = root.querySelector?.("[data-test-confirm-dialog]");
-    if (testDialog && typeof testDialog.showModal === "function" && !testDialog.open) testDialog.showModal();
     if (data.scanning && data.ready) {
       data.scanning = false;
       const dial = root.querySelector(".ct-dial");
@@ -2113,25 +1986,10 @@ window.CompanionContactPage = (() => {
       data.materialKind = materialKind;
       render(); return;
     }
-    const testAction = event.target.closest("[data-test-action]")?.dataset.testAction;
-    if (testAction === "cancel") { data.confirmTest = ""; render(); return; }
-    if (testAction === "confirm") { void runProactiveTest(data.confirmTest); return; }
-    if (testAction === "unlock") {
-      if (data.testUncertain) { data.confirmTest = TEST_GUARD_RESET; render(); }
-      return;
-    }
-    if (testAction === "confirm-unlock") {
-      storeProactiveTestGuard(null);
-      data.confirmTest = ""; data.testGuard = null; data.testUncertain = false;
-      data.testResults = {};
-      notice("已解除测试锁。下一轮测试仍可能真实投递到核心管理员私聊。");
-      render(); return;
-    }
     const testRun = event.target.closest("[data-test-run]")?.dataset.testRun;
     if (testRun) {
-      if (data.testBusy || data.testUncertain) return;
-      data.confirmTest = testRun;
-      render(); return;
+      if (data.testBusy) return;
+      void runProactiveTest(testRun); return;
     }
     const testCopy = event.target.closest("[data-test-copy]")?.dataset.testCopy;
     if (testCopy) { copyTestInstruction(testCopy); return; }
@@ -2270,7 +2128,7 @@ window.CompanionContactPage = (() => {
       const clipboard = window.navigator?.clipboard;
       if (typeof clipboard?.writeText !== "function") throw new Error("clipboard unavailable");
       await clipboard.writeText(testInstructionText(item));
-      notice(item.id + " 测试指令已复制；当前只复制文本，没有调用模型或真实投递。");
+      notice("测试说明已复制。");
     } catch {
       notice("剪贴板权限不可用，请选中当前类型卡片中的指令手动复制。", true);
     }
@@ -2278,56 +2136,32 @@ window.CompanionContactPage = (() => {
   }
   async function runProactiveTest(id) {
     const item = TEST_INSTRUCTIONS.find(candidate => candidate.id === id);
-    if (!item || data.testBusy || data.testUncertain) return;
+    if (!item || data.testBusy) return;
     const ticket = version;
-    const guard = {purpose:id, state:"pending", started_at:Date.now()};
-    if (!storeProactiveTestGuard(guard)) {
-      data.confirmTest = "";
-      data.testResults[id] = {state:"failed", failure_title:"测试没有启动",
-        error:"浏览器未能保存防重复测试状态。", suggestion:"请允许此页面使用浏览器存储后再运行。"};
-      notice("未能保存防重复测试状态，因此没有启动测试。", true);
-      render(); return;
-    }
-    data.confirmTest = "";
     data.testBusy = id;
-    data.testGuard = guard;
     data.testResults[id] = null;
     const synthetic = testUsesSynthetic(id);
-    notice(synthetic ? "正在生成合成事件并等待模型与 QQ 投递回执…" : "正在获取真实来源、运行分析与消息模型，并等待 QQ 投递回执…");
+    notice("正在调用模型并生成消息分段…");
     render();
     try {
       const purpose = id === "mobile_location" ? "environment" : id === "reaction_image" ? "chat" : id;
       const result = await api("POST", "setup/proactive-diagnostic",
-        {purpose, confirm_delivery: true, synthetic_event: synthetic,
+        {purpose, simulation:true, confirm_delivery:false, synthetic_event:synthetic,
           ...(id === "environment" ? {variant:data.testVariants?.environment || "weather"} : {}),
           ...(id === "mobile_location" ? {variant:"mobile_location"} : {}),
           ...(id === "reaction_image" ? {diagnostic_image:true} : {})}, id === "screen" && !synthetic ? 300000 : 180000);
       if (!live(ticket)) return;
-      if (!["passed", "skipped", "failed", "unknown", "pending"].includes(result.state)) {
-        throw problem("invalid_response");
-      }
+      if (result.simulation !== true || !["passed", "skipped", "failed"].includes(result.state)
+          || (result.state === "passed" && (result.decision !== "send" || !Array.isArray(result.parts)
+              || !result.parts.length || result.parts.some(part => typeof part !== "string" || !part.trim())))) throw problem("invalid_response");
       data.testResults[id] = result;
-      const uncertain = ["unknown", "pending"].includes(result.state);
-      data.testUncertain = uncertain;
-      data.testGuard = uncertain ? {...guard, state:result.state} : null;
-      storeProactiveTestGuard(data.testGuard);
-      notice(uncertain ? "测试结果未确认。请先核对核心管理员私聊；不要重试。"
-        : result.state === "passed" ? "测试通过，消息已投递到核心管理员私聊。"
-        : result.state === "skipped" ? "测试完成，模型按当前素材判断本次不发送。"
-        : "测试未通过，查看卡片中的阶段和建议。", result.state === "failed");
+      notice(result.state === "passed" ? "模拟完成。" : result.state === "skipped"
+        ? "模拟完成，模型选择不发送。" : "模拟未完成，查看具体阶段。", result.state === "failed");
     } catch (error) {
       if (!live(ticket)) return;
-      const uncertain = error?.confirmed !== true;
-      data.testUncertain = uncertain;
-      data.testGuard = uncertain ? {...guard, state:"unknown"} : null;
-      storeProactiveTestGuard(data.testGuard);
-      data.testResults[id] = {
-        state: uncertain ? "unknown" : "failed",
-        error: uncertain ? "请求未收到可核验的最终结果。" : reason(error.code),
-        suggestion: uncertain ? "请核对核心管理员私聊；确认是否收到前，不要再次启动测试。" : "修正提示的问题后可重新运行测试。",
-      };
-      notice(uncertain ? "测试请求结果未知。请先核对核心管理员私聊，不要重试。"
-        : "测试请求被拒绝，未启动测试。", true);
+      data.testResults[id] = {simulation:true,state:error?.confirmed ? "failed" : "unknown",
+        code:error?.code || "",error:error?.confirmed ? reason(error.code) : "尚未收到模拟结果。"};
+      notice(error?.confirmed ? "模拟未完成，查看具体原因。" : "模拟结果未确认，请稍后重试。",true);
     } finally {
       if (live(ticket)) { data.testBusy = ""; render(); }
     }
@@ -2422,15 +2256,7 @@ window.CompanionContactPage = (() => {
     unmount();
     root = host; contactScope = currentContactScope();
     const cached = contactCache.get(contactScope);
-    data = cached ? {...blank(), ...cached, confirmTest:"", testBusy:"", touched:new Set(cached.touched || []), draft:{...(cached.draft || {})}, pulse:new Set(), pulseNow:[], flip:null, flipNow:null, viewShift:null, viewShiftNow:null} : blank();
-    const testGuard = restoreProactiveTestGuard();
-    if (testGuard) {
-      data.testGuard = testGuard;
-      data.testUncertain = true;
-      data.testResults[testGuard.purpose] = {state:"unknown",
-        error:"页面没有收到上一轮测试的最终回执。",
-        suggestion:"请核对核心管理员私聊；确认上一轮结束后再解除测试锁。"};
-    }
+    data = cached ? {...blank(), ...cached, testBusy:"", touched:new Set(cached.touched || []), draft:{...(cached.draft || {})}, pulse:new Set(), pulseNow:[], flip:null, flipNow:null, viewShift:null, viewShiftNow:null} : blank();
     /* 页面切换只缓存草稿和筛选，不把旧的网络错误带回新的读取周期。 */
     if (data.error) { data.notice = ""; data.error = false; }
     const ticket = ++version;

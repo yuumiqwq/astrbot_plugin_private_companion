@@ -2,6 +2,13 @@
 .ct-prompt-header{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:var(--sp-2)}
 .ct-prompt-header h3{margin:0;color:var(--t-text-strong);font-size:var(--fs-lead)}
 .ct-prompt-draft-count{color:var(--t-text-faint);font-size:var(--fs-tiny)}
+.ct-prompt-modes{display:flex;gap:var(--sp-1);align-self:flex-start;max-width:100%;padding:3px;border:1px solid var(--t-line);border-radius:var(--r-sm);background:var(--t-surface-soft)}
+.ct-prompt-modes button{min-width:100px;padding:var(--sp-2) var(--sp-3);border:0;border-radius:var(--r-xs);background:transparent;color:var(--t-text-soft);font:inherit;cursor:pointer}
+.ct-prompt-modes button[aria-pressed="true"]{background:var(--t-accent-quiet);color:var(--t-accent-ink);font-weight:650}
+.ct-prompt-modes button:focus-visible{outline:2px solid var(--t-focus);outline-offset:1px}
+.ct-prompt-modes button:disabled{cursor:default;opacity:.65}
+.ct-prompt-mode-error{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2)}
+.ct-prompt-simple [data-prompt-text="simple"]{min-height:360px}
 .ct-prompt-controls{display:grid;grid-template-columns:minmax(180px,1fr) minmax(130px,200px) auto;gap:var(--sp-3);align-items:end}
 .ct-prompt-controls label,.ct-prompt-section-selector{display:flex;flex-direction:column;gap:var(--sp-1);min-width:0;font-size:var(--fs-tiny);color:var(--t-text-soft)}
 .ct-prompt-controls select,.ct-prompt-section-selector select{min-width:0;width:100%;padding:var(--sp-2);border:1px solid var(--t-line-firm);border-radius:var(--r-xs);background:var(--t-surface-raised);color:var(--t-text);font:inherit;font-size:var(--fs-body)}

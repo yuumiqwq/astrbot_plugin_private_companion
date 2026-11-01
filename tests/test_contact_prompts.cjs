@@ -19,8 +19,9 @@ function task() {
   return {kind:'proactive.compose',edit_token:'b'.repeat(64),default_prompt:'默认任务提示',
     fields:{prompt:{value:'任务原文',inherited_value:'上级任务提示',explicit:false,source:'role'}},
     prompt_sections:[...purposes.map(id => section('purpose.'+id)),
-      ...['business','expression','history','output','terminal','length','diagnostic_image','diagnostic_source','origin.reality_location_event','voice'].map(id => section(id))],
-    prompt_assembly:{purpose_sections:Object.fromEntries(purposes.map(id => [id,'purpose.'+id])),
+      ...['business','expression','history','output','terminal','length','diagnostic_image','diagnostic_source','origin.reality_location_event','voice','simple','simple_output','simple_terminal'].map(id => section(id))],
+    prompt_assembly:{current_mode:'companion',mode:{value:'companion',edit_token:'m'.repeat(64),configuration_layer:'window'},
+      purpose_sections:Object.fromEntries(purposes.map(id => [id,'purpose.'+id])),
       common_sections:['business','expression','history','output','terminal'],
       conditional_sections:['length','diagnostic_image','origin.reality_location_event','voice'],
       diagnostic_variants:{mobile_location:{purpose:'environment',sections:['origin.reality_location_event','diagnostic_source']},
@@ -28,6 +29,11 @@ function task() {
       order:[{key:'role_instruction',label:'当前人格与预设',sections:[]},
         {key:'request_instruction',label:'业务提示',sections:['business','purpose.chat']},
         {key:'task_prompt',label:'模型任务提示',sections:[]},
+        {key:'materials',label:'会话历史与本轮资料',sections:[]}],
+      simple_order:[{key:'role_instruction',label:'当前人格与预设',sections:[]},
+        {key:'request_instruction',label:'简洁主动提示',sections:['simple']},
+        {key:'output_contract',label:'简洁输出格式',sections:['simple_output']},
+        {key:'terminal_prompt_guard',label:'简洁末尾约束',sections:['simple_terminal']},
         {key:'materials',label:'会话历史与本轮资料',sections:[]}]}};
 }
 function harness() {
@@ -161,4 +167,39 @@ test('共享表达设置的实际继承文本和来源保持可见',async()=>{
   const h=harness();await h.boot(value);assert.match(h.root.innerHTML,/当前表达页的实际文本/);
   assert.match(h.root.innerHTML,/data-prompt-state>表达设置<\/span>/);
   h.action('inherit','length');assert.equal(h.page.state.drafts.get('length').text,'当前表达页的实际文本');
+});
+
+test('模式切换保存真实mode字段，简洁与陪伴插件提示草稿分别保留',async()=>{
+  const h=harness();await h.boot();h.edit('purpose.chat','陪伴模式草稿');
+  h.event('click','[data-prompt-mode]',{dataset:{promptMode:'simple'}});await settle();
+  const request=h.requests.at(-1);
+  assert.equal(request.body.section,'mode');assert.equal(request.body.edit_token,'m'.repeat(64));
+  assert.deepEqual(JSON.parse(JSON.stringify(request.body.changes)),{mode:'simple'});
+  assert.equal(h.page.state.task.prompt_assembly.current_mode,'companion');
+  const simple=task();simple.prompt_assembly.current_mode='simple';simple.prompt_assembly.mode.value='simple';
+  simple.prompt_sections.find(s=>s.key==='simple').variables=['current_time','unanswered_count'];
+  h.reply(request,{task:simple});await settle();
+  for(const key of ['simple','simple_output','simple_terminal'])assert.match(h.root.innerHTML,new RegExp('data-prompt-text="'+key+'"'));
+  assert.doesNotMatch(h.root.innerHTML,/data-prompt-text="purpose.chat"|data-prompt-group="common"|data-prompt-group="conditional"/);
+  assert.match(h.root.innerHTML,/<code>\{\{current_time\}\}<\/code>/);
+  assert.match(h.root.innerHTML,/<strong>简洁输出格式<\/strong>/);
+  h.edit('simple','简洁模式草稿');
+  h.event('click','[data-prompt-mode]',{dataset:{promptMode:'companion'}});await settle();h.reply(h.requests.at(-1),{task:task()});await settle();
+  assert.match(h.root.innerHTML,/陪伴模式草稿/);assert.doesNotMatch(h.root.innerHTML,/data-prompt-text="simple"/);
+  assert.equal(h.page.state.drafts.get('simple').text,'简洁模式草稿');
+  assert.equal(h.requests.filter(r=>r.method==='POST').length,2);
+});
+
+test('模式切换明确失败不改当前模式，网络未知时仅核对原操作',async()=>{
+  const h=harness();await h.boot();h.edit('purpose.chat','已有草稿');
+  h.event('click','[data-prompt-mode]',{dataset:{promptMode:'simple'}});await settle();
+  h.requests.at(-1).reject(new Error('model_configuration_invalid'));await settle();
+  assert.equal(h.page.state.task.prompt_assembly.current_mode,'companion');assert.match(h.root.innerHTML,/已有草稿/);
+  h.event('click','[data-prompt-mode]',{dataset:{promptMode:'simple'}});await settle();
+  const pending=h.requests.at(-1);pending.reject(new Error('NetworkError'));await settle();
+  assert.match(h.root.innerHTML,/模式切换结果尚未确认/);
+  h.action('retry-mode');await settle();assert.equal(h.requests.at(-1).body,pending.body);
+  const simple=task();simple.prompt_assembly.current_mode='simple';simple.prompt_assembly.mode.value='simple';
+  h.reply(h.requests.at(-1),{task:simple});await settle();assert.equal(h.page.state.modePending,null);
+  assert.equal(h.page.state.task.prompt_assembly.current_mode,'simple');
 });

@@ -91,7 +91,7 @@ window.CompanionContactPrompts = (() => {
   }
   async function save(key) {
     const s = state, section = sectionOf(s,key);
-    if (!section?.editable || s.busy || s.loading) return;
+    if (!section?.editable || s.busy || s.loading || s.modePending) return;
     const draft = draftOf(s,section);
     if (!draft.pending && (!draft.dirty || draft.conflict)) return;
     const payload = draft.pending || {kind:KIND,...(key === TASK ? {} : {section:key}),layer:s.layer,
@@ -117,6 +117,32 @@ window.CompanionContactPrompts = (() => {
       } else draft.error = "保存结果尚未确认，请核对原保存。";
     } finally { s.busy = ""; if (current(ticket,s)) render(); }
   }
+  function promptMode(s = state) {
+    return s?.task?.prompt_assembly?.current_mode === "simple" ? "simple" : "companion";
+  }
+  async function changeMode(mode) {
+    const s = state, field = s?.task?.prompt_assembly?.mode;
+    if (!s || s.busy || s.loading || !field?.edit_token || !["companion","simple"].includes(mode)) return;
+    if (!s.modePending && mode === promptMode(s)) return;
+    const payload = s.modePending || {kind:KIND,section:"mode",layer:s.layer,
+      operation_key:operationKey(),edit_token:field.edit_token,changes:{mode},reset:[]};
+    const ticket = version;
+    s.busy = "@mode"; s.modePending = payload; s.modeError = "";
+    render();
+    try {
+      const result = await api("POST",s.path + "/configure",payload);
+      if (!result.task || !["companion","simple"].includes(result.task.prompt_assembly?.current_mode)) throw new Error("invalid_response");
+      s.modePending = null;
+      acceptTask(s,result.task);
+    } catch (error) {
+      const code = error.code || error.message;
+      if (error.confirmed) {
+        s.modePending = null;
+        s.modeError = messages[code] || "模式切换失败，提示词草稿已保留。";
+        if (code === "configuration_revision_conflict") await load(s);
+      } else s.modeError = "模式切换结果尚未确认，请核对原操作。";
+    } finally { s.busy = ""; if (current(ticket,s)) render(); }
+  }
   function selectedPurpose() {
     const variant = state.task?.prompt_assembly?.diagnostic_variants?.[state.selected];
     if (variant?.purpose) return variant.purpose;
@@ -136,13 +162,13 @@ window.CompanionContactPrompts = (() => {
     const section = sectionOf(state,key);
     if (!section) return "";
     const draft = draftOf(state,section);
-    const locked = !!state.busy || !!draft.pending || state.loading || !section.editable;
+    const locked = !!state.busy || !!state.modePending || !!draft.pending || state.loading || !section.editable;
     const source = section.field?.source;
     return `<section class="ct-prompt-field${draft.dirty ? " is-dirty" : ""}" data-prompt-editor="${e(key)}">
       <header><label for="ct-prompt-${e(key)}">${e(section.label)}</label><span data-prompt-state>${draft.pending ? "待核对保存" : draft.conflict ? "版本冲突" : draft.dirty ? "未保存" : draft.saved ? "已保存" : sourceLabel(source)}</span></header>
       ${section.condition ? `<p class="ct-prompt-condition">${e(section.condition)}</p>` : ""}
       <textarea id="ct-prompt-${e(key)}" data-prompt-text="${e(key)}" rows="${key.startsWith("purpose.") ? 7 : 5}" maxlength="8000" spellcheck="false"${locked ? " disabled" : ""}>${e(draft.text)}</textarea>
-      ${section.variables?.length ? `<div class="ct-prompt-variables">格式变量 ${section.variables.map(name => `<code>{${e(name)}}</code>`).join(" ")}</div>` : ""}
+      ${section.variables?.length ? `<div class="ct-prompt-variables">格式变量 ${section.variables.map(name => `<code>${e(key === "simple" ? "{{" + name + "}}" : "{" + name + "}")}</code>`).join(" ")}</div>` : ""}
       ${draft.error ? `<p class="ct-prompt-error" role="alert">${e(draft.error)}</p>` : ""}
       ${draft.conflict ? `<details class="ct-prompt-current"><summary>当前保存内容</summary><pre>${e(section.prompt)}</pre></details>` : ""}
       <footer>
@@ -150,7 +176,7 @@ window.CompanionContactPrompts = (() => {
         <button type="button" class="ct-btn" data-prompt-action="inherit" data-prompt-key="${e(key)}"${locked ? " disabled" : ""}>跟随上级</button>
         <button type="button" class="ct-btn" data-prompt-action="discard" data-prompt-key="${e(key)}"${locked || !draft.dirty ? " disabled" : ""}>放弃修改</button>
         ${draft.conflict ? `<button type="button" class="ct-btn" data-prompt-action="rebase" data-prompt-key="${e(key)}"${locked ? " disabled" : ""}>保留草稿继续编辑</button>` : ""}
-        <button type="button" class="ct-btn is-primary" data-prompt-action="save" data-prompt-key="${e(key)}"${state.busy || state.loading || !section.editable || (!draft.pending && (!draft.dirty || draft.conflict)) ? " disabled" : ""}>${state.busy === key ? "保存中…" : draft.pending ? "核对保存" : "保存"}</button>
+        <button type="button" class="ct-btn is-primary" data-prompt-action="save" data-prompt-key="${e(key)}"${state.busy || state.modePending || state.loading || !section.editable || (!draft.pending && (!draft.dirty || draft.conflict)) ? " disabled" : ""}>${state.busy === key ? "保存中…" : draft.pending ? "核对保存" : "保存"}</button>
       </footer>
     </section>`;
   }
@@ -166,23 +192,27 @@ window.CompanionContactPrompts = (() => {
   function render() {
     if (!root || !state) return;
     const assembly = state.task?.prompt_assembly;
+    const mode = promptMode();
     const primary = primaryKeys();
     const common = [...(assembly?.common_sections || ["business","expression","history","output","terminal"]),TASK];
     const excluded = new Set([...primary,...common]);
     const conditional = (assembly?.conditional_sections || state.task?.prompt_sections?.map(item => item.key) || [])
-      .filter(key => !excluded.has(key) && !key.startsWith("purpose."));
+      .filter(key => !excluded.has(key) && !key.startsWith("purpose.") && !["simple","simple_output","simple_terminal"].includes(key));
+    const order = mode === "simple" ? (assembly?.simple_order || []) : (assembly?.order || []);
     root.innerHTML = `<section class="ct-prompt-panel" aria-label="主动消息提示词">
       <header class="ct-prompt-header"><h3>主动消息提示词</h3><span class="ct-prompt-draft-count">${[...state.drafts.values()].filter(d => d.dirty).length} 项未保存</span></header>
+      <div class="ct-prompt-modes" role="group" aria-label="主动提示模式">${[["companion","陪伴插件"],["simple","简洁"]].map(([key,label]) => `<button type="button" data-prompt-mode="${key}" aria-pressed="${mode === key}"${state.busy || state.modePending || state.loading || !assembly?.mode?.edit_token ? " disabled" : ""}>${label}</button>`).join("")}</div>
+      ${state.modeError ? `<div class="ct-prompt-mode-error" role="alert"><p class="ct-prompt-error">${e(state.modeError)}</p>${state.modePending ? '<button type="button" class="ct-btn" data-prompt-action="retry-mode">核对切换</button>' : ""}</div>` : ""}
       <div class="ct-prompt-controls">
         <label>测试入口<select data-prompt-entry aria-label="选择提示词入口">${(options.items || []).map(item => `<option value="${e(item.id)}"${state.selected === item.id ? " selected" : ""}>${e(item.label)}</option>`).join("")}</select></label>
         <label>生效范围<select data-prompt-layer aria-label="提示词生效范围"${state.busy ? " disabled" : ""}><option value="window"${state.layer === "window" ? " selected" : ""}>当前窗口</option><option value="role"${state.layer === "role" ? " selected" : ""}>角色默认</option></select></label>
         <button type="button" class="ct-btn" data-prompt-action="refresh"${state.loading || state.busy ? " disabled" : ""}>${state.loading ? "读取中…" : "重新读取"}</button>
       </div>
       ${state.error ? `<p class="ct-prompt-error" role="alert">${e(state.error)}</p>` : ""}
-      ${state.task ? `<div class="ct-prompt-primary">${primary.map(editor).join("")}</div>
-        ${group("common","共用提示",common)}${group("conditional","条件提示",conditional)}
+      ${state.task ? `${mode === "simple" ? `<div class="ct-prompt-primary ct-prompt-simple">${["simple","simple_output","simple_terminal"].map(editor).join("")}</div>` : `<div class="ct-prompt-primary">${primary.map(editor).join("")}</div>
+        ${group("common","共用提示",common)}${group("conditional","条件提示",conditional)}`}
         <details class="ct-prompt-group" data-prompt-group="assembly"${state.open.has("assembly") ? " open" : ""}><summary>组装顺序</summary>
-          <ol class="ct-prompt-order">${(assembly?.order || []).map(item => `<li><strong>${e(item.label)}</strong>${item.sections?.length ? `<span>${item.sections.filter(key => !key.startsWith("purpose.") || key === primary[0]).map(key => e(sectionOf(state,key)?.label || key)).join(" · ")}</span>` : ""}</li>`).join("")}</ol>
+          <ol class="ct-prompt-order">${order.map(item => `<li><strong>${e(item.label)}</strong>${item.sections?.length ? `<span>${item.sections.filter(key => !key.startsWith("purpose.") || key === primary[0]).map(key => e(sectionOf(state,key)?.label || key)).join(" · ")}</span>` : ""}</li>`).join("")}</ol>
         </details>` : ""}
     </section>`;
   }
@@ -194,7 +224,7 @@ window.CompanionContactPrompts = (() => {
     if (badge) badge.textContent = draft.conflict ? "版本冲突" : draft.dirty ? "未保存" : "已保存";
     for (const action of ["save","discard"]) {
       const button = container?.querySelector(`[data-prompt-action="${action}"]`);
-      if (button) button.disabled = !!state.busy || state.loading || !draft.dirty || (action === "save" && draft.conflict);
+      if (button) button.disabled = !!state.busy || !!state.modePending || state.loading || !draft.dirty || (action === "save" && draft.conflict);
     }
     const count = root.querySelector(".ct-prompt-draft-count");
     if (count) count.textContent = [...state.drafts.values()].filter(d => d.dirty).length + " 项未保存";
@@ -203,7 +233,7 @@ window.CompanionContactPrompts = (() => {
     const field = event.target.closest("[data-prompt-text]");
     if (!field || !state) return;
     const section = sectionOf(state,field.dataset.promptText);
-    if (!section?.editable || state.busy) return;
+    if (!section?.editable || state.busy || state.modePending) return;
     const draft = draftOf(state,section);
     if (draft.pending) return;
     draft.text = field.value; draft.reset = false; draft.dirty = draft.text !== section.prompt;
@@ -230,15 +260,18 @@ window.CompanionContactPrompts = (() => {
     }
   }
   function clicked(event) {
+    const mode = event.target.closest("[data-prompt-mode]");
+    if (mode) { void changeMode(mode.dataset.promptMode); return; }
     const button = event.target.closest("[data-prompt-action]");
     if (!button || !state) return;
     const action = button.dataset.promptAction;
+    if (action === "retry-mode") { void changeMode(state.modePending?.changes?.mode); return; }
     if (action === "refresh") { void load(); return; }
     const key = button.dataset.promptKey, section = sectionOf(state,key);
     if (!section) return;
     const draft = draftOf(state,section);
     if (action === "save") { void save(key); return; }
-    if (state.busy || draft.pending) return;
+    if (state.busy || state.modePending || draft.pending) return;
     if (action === "discard") state.drafts.delete(key);
     if (action === "default") { draft.text = section.default_prompt ?? ""; draft.reset = false; draft.dirty = true; draft.saved = false; }
     if (action === "inherit") { draft.text = section.field?.inherited_value ?? section.default_prompt ?? ""; draft.reset = true; draft.dirty = true; draft.saved = false; }
@@ -253,7 +286,7 @@ window.CompanionContactPrompts = (() => {
   function scopeState(scope,path,layer) {
     const key = JSON.stringify([scope,path,layer]);
     if (!scopes.has(key)) scopes.set(key,{scope,path,layer,task:null,drafts:new Map(),open:new Set(),
-      selected:"chat",conditionKey:"",loading:false,busy:"",error:""});
+      selected:"chat",conditionKey:"",modePending:null,modeError:"",loading:false,busy:"",error:""});
     return scopes.get(key);
   }
   function unmount() {
