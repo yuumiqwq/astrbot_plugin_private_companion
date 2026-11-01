@@ -9,6 +9,7 @@ from astrbot_host.shared_materials import OWNER, common_materials, merge_common_
 from companion_v2.conversation.foreground import ContextContribution, ContributionState, PromptMaterial
 from companion_v2.execution.models import TaskError
 from tests.test_model_gateway import ModelFixture
+from tests.multi_host_support import MultiFixture
 
 
 class SharedRoleMaterialTests(ModelFixture, unittest.IsolatedAsyncioTestCase):
@@ -135,3 +136,30 @@ class SharedRoleMaterialTests(ModelFixture, unittest.IsolatedAsyncioTestCase):
         intent = next(item for item in merged if item.purpose == "contact_intent")
         self.assertEqual(json.loads(intent.payload), {"thought": "Contact opportunity"})
         self.assertEqual(merge_common_materials(merged, common), merged)
+
+
+class MultiHostRoleMaterialTests(MultiFixture, unittest.IsolatedAsyncioTestCase):
+    async def test_running_multi_host_collects_the_current_application_materials(self):
+        from tests.test_astrbot_shared_context import Request
+        from companion_v2.conversation.foreground import SealedForegroundContext
+        from companion_v2.foundation.refs import ScopeKind
+
+        app = await self.start_host()
+        adapter = app.gateway.request_context
+        scope = NS(kind=ScopeKind.PRIVATE, platform="qq-main", native_scope_id="200")
+        context = NS(scope=scope, role_binding=object())
+        request = Request(NS(scope=scope), context.role_binding, SealedForegroundContext((), (), ()))
+        self.native.conversation_manager.shared_history = NS(settings=lambda _: {})
+        self.native.conversation_manager.get_conversation = AsyncMock(return_value=NS(history="[]"))
+        self.native.get_current_chat_provider_id = AsyncMock(return_value="test-chat")
+        self.native.get_provider_by_id = Mock(return_value=object())
+        self.native.prepare_session_request = AsyncMock()
+        marker = PromptMaterial(OWNER, "role_state", "Current role calendar and state")
+        with patch.object(adapter.bridge, "verified_persona", AsyncMock(return_value={"prompt": "OvO"})), \
+                patch("astrbot_host.shared_materials.common_materials", return_value=(marker,)) as collect:
+            result = await adapter.for_task(request, context)
+        collect.assert_called_once_with(app, context, request, [])
+        self.assertIn(marker, result.context.materials)
+        self.assertIn(marker.payload, self.native.prepare_session_request.await_args.args[2].prompt)
+        self.assertIs(app.proactive.request_context, adapter)
+        self.assertIs(app.calendar_planning.request_context, adapter)

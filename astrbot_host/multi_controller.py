@@ -726,7 +726,8 @@ class AstrBotMultiController:
         self.session.application.attach_laya_decision(laya_for_context)
         from .shared_context import AstrBotSharedContext
         self.session.application.proactive.request_context = AstrBotSharedContext(
-            self.context, self.session.bridge, self.settings.common.provider_id)
+            self.context, self.session.bridge, self.settings.common.provider_id,
+            application=self.session.application)
         self.session.application.proactive.output_segments = self.session.application.proactive.request_context.split_reply
         self.session.application.calendar_planning.request_context = self.session.application.proactive.request_context
         self.session.application.gateway.request_context = self.session.application.proactive.request_context
