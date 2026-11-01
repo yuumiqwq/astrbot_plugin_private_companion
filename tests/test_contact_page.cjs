@@ -1748,6 +1748,25 @@ test('每日整理保留关闭状态且显示失败阶段，不把旧投递响�
   assert.doesNotMatch(h.element.innerHTML, /data-daily-part=/);
 });
 
+test('两种模拟失败保留可展开的实际模型原文并转义内容', async () => {
+  for (const daily of [false, true]) {
+    const h = harness();
+    await boot(h);
+    h.element.dispatch('click', {target:{closest:sel => sel === '[data-view]' ? {dataset:{view:'tests'}} : null}});
+    h.element.dispatch('click', {target:{closest:sel => daily
+      ? sel === '[data-daily-test-run]' ? {} : null
+      : sel === '[data-test-run]' ? {dataset:{testRun:'chat'}} : null}});
+    await h.settle();
+    h.reply(h.requests.at(-1), {simulation:true,state:'failed',code:'output_invalid',
+      error:'格式不匹配',raw_response:'<script>untrusted()</script>\n原始返回'});
+    await h.settle();
+    assert.match(h.element.innerHTML, /data-test-raw><summary>模型原文<\/summary>/);
+    assert.match(h.element.innerHTML, /&lt;script&gt;untrusted\(\)&lt;\/script&gt;\n原始返回/);
+    assert.doesNotMatch(h.element.innerHTML, /<script>untrusted\(\)<\/script>/);
+    assert.match(h.element.innerHTML, /格式不匹配/);
+  }
+});
+
 test('模型选择跳过时显示状态且不渲染空消息气泡', async () => {
   const h = harness();
   await boot(h);

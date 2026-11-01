@@ -1365,8 +1365,13 @@ window.CompanionContactPage = (() => {
       ${result.purpose_label ? `<p>测试用途：${e(result.purpose_label)}</p>` : ""}
       ${skipReason ? `<p class="ct-test-cause"><b>未发送原因</b>${e(skipReason)}${modelSkipReason ? `：${e(modelSkipReason)}` : ""}</p>` : ""}
       ${testMetricsMarkup(result)}${testStageMarkup(result)}
-      ${result.suggestion ? `<p class="ct-test-next"><b>下一步</b>${e(result.suggestion)}</p>` : ""}${technical}
+      ${result.suggestion ? `<p class="ct-test-next"><b>下一步</b>${e(result.suggestion)}</p>` : ""}${technical}${rawModelOutputMarkup(result)}
     </section>`;
+  }
+  function rawModelOutputMarkup(result) {
+    return typeof result.raw_response === "string" && result.raw_response
+      ? `<details class="ct-test-technical" data-test-raw><summary>模型原文</summary><pre>${e(result.raw_response)}</pre></details>`
+      : "";
   }
   function dailyResultMarkup() {
     const result = data.testResults.daily_review;
@@ -1397,7 +1402,7 @@ window.CompanionContactPage = (() => {
       ${result.local_date ? `<p>${e(result.local_date)}${result.timezone ? ` · ${e(result.timezone)}` : ""}</p>` : ""}${content}
       ${testMetricsMarkup(result)}${testStageMarkup(result)}
       ${result.error || result.code ? `<details class="ct-test-technical"><summary>展开技术详情</summary>
-        ${result.code ? `<code>${e(result.code)}</code>` : ""}${result.error ? `<pre>${e(result.error)}</pre>` : ""}</details>` : ""}
+        ${result.code ? `<code>${e(result.code)}</code>` : ""}${result.error ? `<pre>${e(result.error)}</pre>` : ""}</details>` : ""}${rawModelOutputMarkup(result)}
     </section>`;
   }
   function testMatches(id) {
