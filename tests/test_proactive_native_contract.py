@@ -85,7 +85,10 @@ class ProactiveNativeContractTests(NativeFixture, unittest.IsolatedAsyncioTestCa
                               '{"decision":"skip","text":"","skip_reason":"no_natural_opening"}')
                 request = replace(envelope.original, output_format="proactive_contact", proactive_mode=mode,
                     response_format="json_object", response_schema_json=json.dumps(schema),
+                    prompt_overrides=(("output_contract", "Companion output sentinel"),
+                                      ("terminal_prompt_guard", "Companion terminal sentinel")),
                     context=replace(envelope.original.context, materials=(
+                        PromptMaterial("role.state", "state", "Companion material sentinel"),
                         PromptMaterial("astrbot.conversation", "recent_private_dialogue", json.dumps(history)),)))
                 with patch.object(FakeProvider, "_query", ProviderOpenAIOfficial._query), \
                      patch.object(FakeProvider, "_apply_provider_specific_request_overrides",
@@ -97,11 +100,16 @@ class ProactiveNativeContractTests(NativeFixture, unittest.IsolatedAsyncioTestCa
                 sent = state.calls[-1]
                 self.assertEqual(sent["response_format"], {"type": "json_object"})
                 self.assertNotIn("response_format", sent["extra_body"])
-                self.assertEqual(sent["messages"][-4:-2], history)
-                self.assertIn("materials", json.loads(sent["messages"][-2]["content"]))
-                task = sent["messages"][-1]
-                self.assertEqual(task, {"role": "user", "content": final_task_prompt(mode, schema)})
-                self.assertIn(state.text, task["content"])
+                if mode == "simple":
+                    self.assertEqual(sent["messages"], [
+                        {"role": "system", "content": request.role_instruction}, *history,
+                        {"role": "user", "content": request.instruction}])
+                else:
+                    self.assertEqual(sent["messages"][-4:-2], history)
+                    self.assertIn("materials", json.loads(sent["messages"][-2]["content"]))
+                    task = sent["messages"][-1]
+                    self.assertEqual(task, {"role": "user", "content": final_task_prompt(mode, schema)})
+                    self.assertIn(state.text, task["content"])
 
     async def test_blank_provider_output_stays_rejected_and_reaches_diagnostic_sink(self):
         envelope = await self.envelope()

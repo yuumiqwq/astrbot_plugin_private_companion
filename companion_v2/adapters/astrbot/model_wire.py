@@ -116,6 +116,32 @@ class ModelWire:
                 + 16384 * self.image_count + 256 * ((self.audio_duration_ms + 999) // 1000))
 
 
+def _shared_dialogue(payload):
+    history = strict_json(payload)
+    if not isinstance(history, list) or any(
+            not isinstance(item, dict) or item.get("role") not in {"user", "assistant", "system"}
+            or set(item) != {"role", "content"} for item in history):
+        raise ValueError("shared host history requires native role/content messages")
+    return history
+
+
+def _simple_contact_wire(envelope):
+    request = envelope.original
+    if request.images or request.audios or request.videos:
+        raise ValueError("simple proactive contact uses the shared native dialogue")
+    history = []
+    for material in request.context.materials:
+        if material.owner == "astrbot.conversation" and material.purpose == "recent_private_dialogue":
+            history.extend(_shared_dialogue(material.payload))
+    messages = ([{"role": "system", "content": request.role_instruction}] if request.role_instruction else [])
+    messages.extend(history)
+    messages.append({"role": "user", "content": request.instruction})
+    wire = ModelWire(messages, (), MappingProxyType({}), MappingProxyType({}), request.output_format)
+    if envelope.record_prompt_snapshot is not None:
+        envelope.record_prompt_snapshot(wire.messages)
+    return wire
+
+
 def build_wire(envelope, *, model_name=""):
     request = envelope.original
     reply_actions = request.reply_actions
@@ -123,6 +149,8 @@ def build_wire(envelope, *, model_name=""):
         reply_actions += ("image",)
     if request.output_format != "conversation" and (envelope.tools or envelope.tool_history):
         raise ValueError("private writing does not offer tools")
+    if request.output_format == "proactive_contact" and request.proactive_mode == "simple":
+        return _simple_contact_wire(envelope)
     aliases, tools, evidence, materials, host_history = {}, [], {}, [], []
     for tool in envelope.tools:
         alias = tool_alias(tool.action)
@@ -137,12 +165,7 @@ def build_wire(envelope, *, model_name=""):
         raise ValueError("tool catalog is unbounded")
     for material in request.context.materials:
         if material.owner == "astrbot.conversation" and material.purpose == "recent_private_dialogue":
-            history = strict_json(material.payload)
-            if not isinstance(history, list) or any(
-                    not isinstance(item, dict) or item.get("role") not in {"user", "assistant", "system"}
-                    or set(item) != {"role", "content"} for item in history):
-                raise ValueError("shared host history requires native role/content messages")
-            host_history.extend(history)
+            host_history.extend(_shared_dialogue(material.payload))
             continue
         if (request.native_video_input and material.owner == "conversation.image"
                 and material.purpose.startswith("video_frame:")):

@@ -2,7 +2,7 @@ from dataclasses import dataclass, replace
 import json
 from types import SimpleNamespace as NS
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from astrbot_host.shared_context import AstrBotSharedContext, native_newline_reply_instruction
 from companion_v2.conversation.foreground import PromptMaterial, SealedForegroundContext
@@ -148,15 +148,39 @@ class SharedHistoryTests(unittest.IsolatedAsyncioTestCase):
         request = replace(self.request, output_format="proactive_contact", proactive_mode="simple",
                           instruction="Short contact task.")
         result = await self.loader(request)
-        self.assertIn("message 字符串", result.instruction)
-        self.assertIn("send 为 false", result.instruction)
-        self.assertNotIn("decision 为 skip", result.instruction)
-        self.assertNotIn("text 字符串", result.instruction)
+        self.assertEqual(result.instruction, request.instruction)
+        self.assertEqual(result.role_instruction, "current persona and examples")
+        self.assertEqual(len(result.context.materials), 1)
+        prepared = self.native.prepare_session_request.await_args
+        self.assertEqual(prepared.args[2].prompt, request.instruction)
+        self.assertEqual(prepared.kwargs["response_instruction"], "")
         history = next(item for item in result.context.materials if item.owner == "astrbot.conversation")
         self.assertEqual(json.loads(history.payload), self.history)
         data, body, _ = parse_contact_output('{"send":true,"message":"First\\n\\nSecond"}', mode="simple")
         self.assertEqual(self.loader.split_reply(request.event, body), ("First", "Second"))
         self.assertEqual(data["decision"], "send")
+
+    async def test_simple_does_not_collect_companion_materials_and_budgets_native_presets(self):
+        examples = [{"role": "user", "content": "Preset question", "_no_save": True},
+                    {"role": "assistant", "content": "Preset answer", "_no_save": True}]
+        self.bridge.verified_persona.return_value = {
+            "prompt": "persona with examples", "system_prompt": "exact persona",
+            "begin_dialogs": examples}
+        self.loader.application = object()
+        request = replace(self.request, output_format="proactive_contact", proactive_mode="simple",
+                          instruction="Saved prompt unchanged.")
+        with patch("astrbot_host.shared_materials.common_materials") as collect:
+            result = await self.loader.for_task(request, object())
+        collect.assert_not_called()
+        prepared = self.native.prepare_session_request.await_args
+        self.assertEqual(prepared.args[2].system_prompt, "exact persona")
+        self.assertEqual(prepared.args[2].contexts, examples + self.history)
+        self.assertEqual(prepared.args[2].prompt, request.instruction)
+        self.assertEqual(prepared.kwargs["response_instruction"], "")
+        self.assertEqual(result.instruction, request.instruction)
+        self.assertEqual(len(result.context.materials), 1)
+        expected = [{"role": item["role"], "content": item["content"]} for item in examples]
+        self.assertEqual(json.loads(result.context.materials[0].payload), expected + self.history)
 
     async def test_host_history_has_no_plugin_round_or_character_cap(self):
         result = await self.loader(self.request)

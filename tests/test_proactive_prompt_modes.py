@@ -76,7 +76,7 @@ class ProactivePromptModeTests(ContactFixture, unittest.IsolatedAsyncioTestCase)
         payload = "\n".join(item.payload for item in request.context.materials)
         self.assertNotIn(NUDGE_INSTRUCTION, payload)
         self.assertNotIn("合成情境演练", request.instruction + payload)
-        self.assertIn("Verified source fact", payload)
+        self.assertEqual(payload, "")
         self.assertEqual(presentation_instructions(self.preferences(self.app),
             SegmentationPolicy(llm_controlled=True), ReplyTextPolicy(enable_humanized_expression=True), news=True), "")
 
@@ -95,14 +95,12 @@ class ProactivePromptModeTests(ContactFixture, unittest.IsolatedAsyncioTestCase)
         wire = build_wire(self.called[-1])
         self.assertEqual(self.called[-1].original.response_format, "json_object")
         system = wire.messages[0]["content"]
-        self.assertIn("这是原角色人格，保持自然。", system)
-        self.assertIn("Our short prompt", system)
-        self.assertNotIn("Companion-only rules", system)
-        self.assertNotIn(self.called[-1].task_prompt, system)
-        self.assertNotIn("decision", system)
-        self.assertEqual(wire.messages[-1], {"role": "user", "content": final_task_prompt("simple", contact_schema("simple"))})
-        self.assertIn('"message":"第一条消息\\n第二条消息"', wire.messages[-1]["content"])
-        self.assertIn("materials", json.loads(wire.messages[-2]["content"]))
+        self.assertEqual(system, "这是原角色人格，保持自然。")
+        self.assertEqual(wire.messages, [
+            {"role": "system", "content": self.called[-1].original.role_instruction},
+            {"role": "user", "content": self.called[-1].original.instruction}])
+        self.assertIn("Our short prompt", wire.messages[-1]["content"])
+        self.assertEqual(json.loads(self.called[-1].original.response_schema_json), contact_schema("simple"))
         self.assertEqual([item.text for item in self.sent], ["Simple message"])
 
     async def test_companion_request_also_uses_provider_json_mode(self):

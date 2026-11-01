@@ -125,19 +125,21 @@ class AstrBotSharedContext:
         provider = self.context.get_provider_by_id(provider_id)
         if provider is None:
             raise ValueError("The shared AstrBot provider is unavailable")
+        simple = (getattr(request, "output_format", None) == "proactive_contact"
+                  and getattr(request, "proactive_mode", "companion") == "simple")
 
         from astrbot.api.provider import ProviderRequest
 
         # Retain delivery candidates for deduplication, while ordinary dialogue
         # comes exclusively from the same history used by AstrBot replies.
-        materials = tuple(
+        materials = () if simple else tuple(
             item
             for item in request.context.materials
             if item.owner not in {"conversation.private_history", "astrbot.conversation"}
             and item.purpose
             not in {"confirmed_background_message", "confirmed_reply_context"}
         )
-        if self.application is not None and task_context is not None:
+        if not simple and self.application is not None and task_context is not None:
             from .shared_materials import common_materials, merge_common_materials
             common = common_materials(self.application, task_context, request, dialogue)
             materials = merge_common_materials(materials, common)
@@ -149,7 +151,7 @@ class AstrBotSharedContext:
             ensure_ascii=False,
         )
         native_request = ProviderRequest(
-            prompt=task,
+            prompt=request.instruction if simple else task,
             system_prompt=persona.get("system_prompt", persona["prompt"]),
             contexts=[
                 *persona.get("begin_dialogs", ()),
@@ -157,7 +159,7 @@ class AstrBotSharedContext:
             ],
         )
         instruction = request.instruction
-        if getattr(request, "output_format", None) == "proactive_contact":
+        if not simple and getattr(request, "output_format", None) == "proactive_contact":
             newline_instruction = native_newline_reply_instruction(self.context, umo, structured=True,
                 proactive_mode=getattr(request, "proactive_mode", "companion"))
             if newline_instruction:
@@ -166,7 +168,7 @@ class AstrBotSharedContext:
             umo,
             provider,
             native_request,
-            response_instruction=instruction
+            response_instruction="" if simple else instruction
             + "\n"
             + "\n".join(text for _, text in getattr(request, "prompt_overrides", ()))
             + "\n"
