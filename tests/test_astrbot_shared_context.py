@@ -88,6 +88,25 @@ class SharedHistoryTests(unittest.IsolatedAsyncioTestCase):
             ("First.\n\nSecond.",),
         )
 
+    def test_host_newline_rule_separates_single_and_blank_lines(self):
+        self.native.get_config = Mock(
+            return_value={
+                "platform_settings": {
+                    "segmented_reply": {
+                        "enable": True,
+                        "split_mode": "regex",
+                        "regex": r"[^\r\n]+",
+                    }
+                }
+            }
+        )
+        self.assertEqual(
+            self.loader.split_reply(
+                self.request.event, "First. Second.\nThird.\r\n\n  \nFourth."
+            ),
+            ("First. Second.", "Third.", "Fourth."),
+        )
+
     async def test_host_history_has_no_plugin_round_or_character_cap(self):
         result = await self.loader(self.request)
         history = next(
@@ -192,11 +211,16 @@ class ProactiveSharedContextTests(ContactFixture, unittest.IsolatedAsyncioTestCa
         self.assertTrue(observation["skipped"])
         self.assertEqual(observation["stage_metrics"]["delivery"]["expected_parts"], 0)
 
-    async def test_administrator_diagnostic_does_not_import_private_history(self):
+    async def test_administrator_diagnostic_uses_the_configured_host_context(self):
         app = await self.enabled()
         app.proactive.request_context = AsyncMock(
-            side_effect=AssertionError("unexpected history access")
+            side_effect=lambda request: replace(
+                request, role_instruction="verified host persona"
+            )
         )
         result = await self.contact(app, administrator_test=True)
         self.assertIsNone(result.failure)
-        app.proactive.request_context.assert_not_awaited()
+        app.proactive.request_context.assert_awaited_once()
+        self.assertEqual(
+            self.called[-1].original.role_instruction, "verified host persona"
+        )

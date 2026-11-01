@@ -886,7 +886,7 @@ class ProactiveContacts:
                  or source_origin is not None and "news_event" in source_origin else "") if text)
             if extra_instruction:
                 request = replace(request, instruction=request.instruction + "\n" + extra_instruction)
-            if self.request_context is not None and not job.administrator_test:
+            if self.request_context is not None:
                 request = await self.request_context(request)
             if not self._contact_request_fits(run, request):
                 # Optional memory and history are the first things a smaller
