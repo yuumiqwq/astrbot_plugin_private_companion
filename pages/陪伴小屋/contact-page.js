@@ -1602,7 +1602,7 @@ window.CompanionContactPage = (() => {
       {id:"automatic", title:"后台自动联系默认", ok:value("automatic_enabled") === true,
        note:"关闭时仍可由你主动触发联系。"},
       {id:"quiet", title:"免打扰时段", ok:!inQuiet(minute, settings), code:"proactive_quiet_hours",
-       note:quietSpanText(settings)},
+       note:settings.quiet_enabled === true ? quietSpanText(settings) : "未启用"},
       {id:"curve", title:"小时活动曲线", ok:(() => { const w = currentWeight(minute, settings); return w === null || w >= 0.3; })(),
        code:"", note:value("proactive_hour_activity_enabled") ? "当前小时权重决定这一格是否保留。" : "未启用，不做小时过滤。"},
       {id:"pause", title:"临时暂停", ok:!(Date.parse(pauseUntil) > Date.now()), code:"proactive_paused",
@@ -1616,7 +1616,7 @@ window.CompanionContactPage = (() => {
         <span class="ct-gate-mark">${g.ok ? ICON.check : ICON.alert}</span>
         <div class="ct-gate-body"><strong>${e(g.title)}</strong>
           ${g.ok ? `<small>${e(g.note)}</small>` : `<small>${e(g.note)}</small>`}</div>
-        <span class="ct-gate-state">${g.ok ? "开" : "关"}</span></article>`).join("")}
+        <span class="ct-gate-state">${g.ok ? "通过" : "拦截"}</span></article>`).join("")}
       <section class="ct-gate-settings-brief" aria-label="回复与补看设置">
         <div class="ct-gate-settings-copy">
           <span class="ct-gate-settings-eyebrow">回复与补看</span>

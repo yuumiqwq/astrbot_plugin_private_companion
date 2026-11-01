@@ -236,6 +236,26 @@ test('重新读取全局设置不会请求或受当前私聊会话影响', async
   assert.equal(h.requests.length, start + 1);
 });
 
+test('关闭免打扰的闸门显示未启用和通过，不显示全天开启', async () => {
+  const h = harness();
+  await boot(h, {...baseSettings(), quiet_enabled: false, quiet_start: '00:00', quiet_end: '00:00'});
+  h.page.openGateSettingsView();
+  const quietGate = h.element.innerHTML.split('<strong>免打扰时段</strong>')[1].split('</article>')[0];
+  assert.match(quietGate, /<small>未启用<\/small>/);
+  assert.match(quietGate, /ct-gate-state">通过<\/span>/);
+  assert.doesNotMatch(quietGate, /全天|ct-gate-state">开<\/span>/);
+});
+
+test('全天免打扰的闸门明确显示拦截', async () => {
+  const h = harness();
+  await boot(h, {...baseSettings(), quiet_enabled: true, quiet_start: '00:00', quiet_end: '00:00'});
+  h.page.openGateSettingsView();
+  const quietGate = h.element.innerHTML.split('<strong>免打扰时段</strong>')[1].split('</article>')[0];
+  assert.match(quietGate, /00:00 至 00:00 不打扰/);
+  assert.match(quietGate, /ct-gate-state">拦截<\/span>/);
+  assert.doesNotMatch(quietGate, /未启用|ct-gate-state">关<\/span>/);
+});
+
 test('全局配置刷新失败保留上次确认值并停止保存', async () => {
   const h = harness();
   await boot(h);
