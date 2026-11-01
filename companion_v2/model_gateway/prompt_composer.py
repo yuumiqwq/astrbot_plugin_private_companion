@@ -31,9 +31,9 @@ class PromptComposition:
 
 
 def compose_prompt(*, role_instruction, request_instruction, task_prompt, output_contract,
-                   capability_instruction="", terminal_output_instruction=""):
+                   capability_instruction="", terminal_output_instruction="", terminal_prompt_guard=None):
     """Keep stable instructions as the request prefix and return one terminal reminder."""
-    final_guard = FINAL_PROMPT_GUARD
+    final_guard = FINAL_PROMPT_GUARD if terminal_prompt_guard is None else terminal_prompt_guard
     if terminal_output_instruction:
         final_guard += "\n" + terminal_output_instruction
     contents = (role_instruction, request_instruction, task_prompt, output_contract, capability_instruction,

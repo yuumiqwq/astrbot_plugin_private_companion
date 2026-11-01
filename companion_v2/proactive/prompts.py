@@ -10,7 +10,6 @@ from companion_v2.conversation.foreground import (BackgroundPromptTrigger, Contr
                                                    PromptRequest, SealedForegroundContext)
 from companion_v2.delivery.history import CONTEXT_INSTRUCTION
 from companion_v2.conversation.private_history import INSTRUCTION as DIALOGUE_INSTRUCTION
-from companion_v2.conversation.segment_control import LLM_SEGMENT_MARKER
 from companion_v2.conversation.style_context import EXPRESSION_STYLE_INSTRUCTION
 from companion_v2.model_gateway.models import PromptSection
 
@@ -27,7 +26,9 @@ from .official_alert_events import SOURCE_OWNER as OFFICIAL_ALERT_SOURCE_OWNER
 from .balance_events import SOURCE_OWNER as BALANCE_SOURCE_OWNER
 from .news_events import SOURCE_OWNER as NEWS_SOURCE_OWNER
 from .prompt_templates import (EXPRESSION_INSTRUCTION, LENGTH_INSTRUCTION, NEWS_LENGTH_INSTRUCTION,
-                               NEWS_SHARING_INSTRUCTION, effective_template)
+                               NEWS_SHARING_INSTRUCTION, NEWLINE_INSTRUCTION, OUTPUT_INSTRUCTION,
+                               TERMINAL_INSTRUCTION, effective_template)
+from .prompt_catalog import effective_prompt, rendered_prompt
 
 
 def history_round_groups(items):
@@ -164,6 +165,7 @@ decision 为 send 或 skip；decision_confidence 为 0 到 1，表示对该选�
 """
 SKIP_REASONS = frozenset({"insufficient_context", "no_natural_opening", "purpose_mismatch",
                           "repetitive", "respect_user_boundary", "other"})
+INSTRUCTION += "\n" + NEWLINE_INSTRUCTION
 RHYTHM_INSTRUCTION = (
     "contact_intent.rhythm 是本窗口真实送达节奏的摘要，不含未发送草稿；它只是判断是否值得打扰的软线索，不是新的限额或固定间隔。"
     "每日上限是保护边界，不是要完成的目标，也不必平均摊满；有自然内容时可以在合适的窗口开口。"
@@ -195,6 +197,7 @@ PURPOSE_INSTRUCTIONS = {
     "screen": "只提及授权分析明确支持、与当前切口直接相关的一点观察；不暴露无关应用、窗口、文字或隐私细节，不推断用户意图、身份、情绪或正在执行的任务。",
 }
 ORIGIN_INSTRUCTIONS = {
+    "reality_location_event": "",
     "relationship_event": "这是主动表达方向，不代表用户说过特定关键词或当前有同等意愿。关系修复须有可核验分歧，否则改为自然表达或 skip。",
     "activity_event": "只分享回执明确确认的角色活动、阅读或作品片段与时间范围；计划、准备和设想不是完成回执，缺少结果不补过程或感受。",
     "growth_event": "只分享已确认记录的角色技能练习手感、阶段进展或刚达成的长期目标；保持日常聊天的真实摸索感或小确幸，不编造考级、分数或未记录的成果。",
@@ -210,6 +213,7 @@ ORIGIN_INSTRUCTIONS = {
     "screen_event": "屏幕内容仅以本次授权分析明确支持的观察为准，只提一项相关细节；不暴露无关隐私或断言用户意图、身份和行为。",
 }
 SOURCE_ORIGINS = {
+    "reality.location": "reality_location_event",
     SOURCE_OWNER: "activity_event",
     GROWTH_SOURCE_OWNER: "growth_event",
     JOURNAL_SOURCE_OWNER: "journal_event",
@@ -254,13 +258,14 @@ VOICE_INSTRUCTION = (
 )
 
 
-def voice_instruction(policy, maximum):
+def voice_instruction(policy, maximum, values=None):
     language = {"zh": "中文", "ja": "日语", "en": "英语"}.get(
         getattr(policy, "language", "zh"), "中文")
-    instruction = (VOICE_INSTRUCTION + f"本轮 voice_text 使用自然{language}，建议约 {maximum} 字，优先保证语意完整。"
-                   "text 按正常聊天语言完整表达；外语台词只放在 voice_text，不混进正文。程序不会按字数截断台词。")
+    values = values or {}
+    instruction = (effective_prompt(values, "voice") +
+                   rendered_prompt(values, "voice_parameters", language=language, chars=maximum))
     extra = getattr(policy, "extra_prompt", "").strip()
-    return instruction + ("\n语音表达偏好：" + extra if extra else "")
+    return instruction + (rendered_prompt(values, "voice_preference", extra=extra) if extra else "")
 
 
 POKE_INSTRUCTION = (
@@ -279,30 +284,20 @@ send 时额外输出 "coverage":"covered" 和 "coverage_quote":"预警标题或�
 """
 
 
-def news_presentation_instruction(policy):
-    """Keep the sharing prompt aligned with the contact's sealed bubble settings."""
-    if not policy.enabled or policy.max_segments == 1:
-        return ("本轮新闻分享作为一条消息发送；正文保持紧凑，需要分行时使用单个换行，不插入空行；"
-                "不要输出消息分段标记。")
-    if policy.llm_controlled:
-        return ("本轮新闻分享可按自然停顿分成简短气泡：亮点与有内容的感想可以各发一条，"
-                "不必等到长文才分段。每条正文不留首尾空行，消息边界前后也不要填充空白行。"
-                "每个气泡边界在 text 内用 " + LLM_SEGMENT_MARKER +
-                " 单独占一行，普通空格和换行不能代替它。即使正文偏好少标点，仍用该标记保留消息边界；"
-                "不要把称呼、事实、数值或紧密相连的解释拆开，也不强制凑够固定段数。")
-    boundary_instruction = ("只在亮点与感想的自然转折处用一个空行作为分段边界；"
-        "程序会裁掉各条消息首尾的空行，不添加其他空白行。"
-        if policy.rule_mode == "paragraphs" else
-        "在自然停顿处保留正常标点和换行，不用空格代替标点，也不额外添加空白行。")
-    return ("本轮新闻分享由程序按已配置规则分段。" + boundary_instruction +
-            "不要输出模型分段标记，不改写数字、引文或来源来凑分段。")
+def news_presentation_instruction(policy, values=None):
+    """Keep the text contract aligned with AstrBot's per-line delivery."""
+    if values is not None:
+        key = ("news_single" if not policy.enabled or policy.max_segments == 1 else
+               "news_bubbles" if policy.llm_controlled else
+               "news_paragraphs" if policy.rule_mode == "paragraphs" else "news_rules")
+        return effective_prompt(values, key)
+    return NEWLINE_INSTRUCTION
 
 
-def prompt_sections():
+def _base_prompt_sections():
     """Publish the same templates used by generation, without conversation material."""
-    from companion_v2.conversation.segmentation import DEFAULT_PROMPT, SegmentationPolicy
+    from companion_v2.conversation.segmentation import SegmentationPolicy
     from companion_v2.conversation.humanized_expression import DEFAULT_PROMPT as HUMANIZED_PROMPT
-    from companion_v2.model_gateway.prompt_composer import FINAL_PROMPT_GUARD
 
     sections = [
         PromptSection("expression", "主动表达", EXPRESSION_INSTRUCTION, "每次主动联系", GROUP, "expression_prompt"),
@@ -331,12 +326,12 @@ def prompt_sections():
         ("official_alert", "官方天气预警", OFFICIAL_ALERT_INSTRUCTION, "官方预警来源"),
         ("history", "已发送背景", CONTEXT_INSTRUCTION, "每次主动联系"),
         ("dedup", "话题去重", DEDUP_INSTRUCTION, "当前用途启用去重；窗口、锚点及比例随后按配置追加"),
-        ("segmentation", "模型分段默认模板", DEFAULT_PROMPT,
-         "开启模型分段且分段提示留空；自定义分段在表达设置生效"),
+        ("segmentation", "消息换行格式", NEWLINE_INSTRUCTION,
+         "需要分开发送时使用 JSON 转义换行"),
         ("humanized", "日常表达默认模板", HUMANIZED_PROMPT,
          "开启日常表达且使用默认提示；开关与覆盖文本在表达设置生效"),
-        ("output", "JSON 输出格式", "仅输出任务要求的 JSON 对象，不添加 Markdown 围栏。", "每次主动联系"),
-        ("terminal", "请求末尾约束", FINAL_PROMPT_GUARD, "每次模型请求的最后一个 system 消息"),
+        ("output", "JSON 输出格式", OUTPUT_INSTRUCTION, "每次主动联系"),
+        ("terminal", "请求末尾约束", TERMINAL_INSTRUCTION, "主动模型请求的系统指令末尾"),
     ))
     for key, label, policy in (
         ("news_single", "新闻排版 · 单条消息", SegmentationPolicy(enabled=False)),
@@ -346,6 +341,20 @@ def prompt_sections():
         sections.append(PromptSection(key, label, news_presentation_instruction(policy),
                                       "本轮新闻按对应分段模式发送"))
     return tuple(sections)
+
+
+def prompt_sections():
+    from .prompt_catalog import sections
+    return sections()
+
+
+DIAGNOSTIC_SYNTHETIC_INSTRUCTION = '\n这是管理员已确认且知情的合成情境演练。contact_intent.thought 给出这一次的情境前提，不是用户刚发来的消息；按角色身处该情境时会主动发出的消息来写。场景明确给出的活动、旧话题或约定只在这一次已知演练中作为表达前提，不代表真实用户输入、日历、活动或采集来源，不新增情节、来源、授权或承诺，也不声称程序取得了真实资讯、天气或屏幕。不要因未读真实聊天、记忆或外部来源而跳过，除非角色边界或安全要求确实不适合发送。'
+
+DIAGNOSTIC_SOURCE_INSTRUCTION = '\n这是管理员确认的真实投递链路测试，但本轮素材仍来自所选目的的真实生产器。只使用本次提供的已核验来源，保持该来源的事实边界和目的表达约束；不要因为这是测试就改写成想念、空泛问候或无来源的关系话术。没有自然且值得发送的内容时仍可选择 skip，不能为了通过测试补造事实。'
+
+DIAGNOSTIC_PLAIN_INSTRUCTION = '\n这是管理员确认的真实投递链路测试，不是在判定生产场景是否适合主动联系。测试不读取聊天历史、记忆或真实事件；不要把缺少这些材料判为重复、缺少开场或上下文不足。只围绕所选目的，由角色自己带来想法、话题或具体邀请，可以自然提问；不依赖共同经历、不补造事实、不催促回复。目的只限定表达氛围，不要求引用真实事件。除程序负责的授权和安全检查外，请选择 send。'
+
+DIAGNOSTIC_IMAGE_INSTRUCTION = '\n管理员已确认这是一次主动图片发送验收。请写一段简短、自然、完整且适合 QQ 的主动正文，不必等待真实事件或近期话题，也不要声称刚发生了某件事；除角色边界或安全要求不适合外，选择 send。不要提测试或图片链路；程序会按管理员指定的沟通意图从当前授权图库检索原图并附在正文之后。图片仍须符合角色和当前语气，检索不到合适素材时系统会如实报告失败，不会改成纯文本通过。'
 
 
 def request_for(job, records, preferences, history=(), *, last_reply=None, reply_for_dedup=True,
@@ -417,10 +426,10 @@ def request_for(job, records, preferences, history=(), *, last_reply=None, reply
     greeting_event = job.automatic_origin and job.automatic_origin.get("greeting_event")
     greeting_instruction = ""
     if job.intent.purpose == "greeting" or greeting_event:
-        greeting_instruction = GREETING_INSTRUCTION
+        greeting_instruction = effective_prompt(preferences.values, "greeting")
     if isinstance(greeting_event, dict) and greeting_event.get("kind") == "insomnia_night":
-        greeting_instruction += "\n" + INSOMNIA_GREETING_INSTRUCTION
-    purpose_instruction = PURPOSE_INSTRUCTIONS[job.intent.purpose]
+        greeting_instruction += "\n" + effective_prompt(preferences.values, "insomnia")
+    purpose_instruction = effective_prompt(preferences.values, "purpose." + job.intent.purpose)
     origin = job.automatic_origin or getattr(job, "diagnostic_origin", None) or {}
     relationship = origin.get("relationship_event") if isinstance(origin, dict) else None
     if isinstance(relationship, dict):
@@ -432,70 +441,55 @@ def request_for(job, records, preferences, history=(), *, last_reply=None, reply
             origin = {key: value for key, value in origin.items() if key != "relationship_event"}
     # Source-backed manual contacts need the same guidance as automatic events.
     source_origins = {SOURCE_ORIGINS.get(record.reference.owner) for record in records}
-    origin_instructions = tuple(ORIGIN_INSTRUCTIONS[key] for key in ORIGIN_INSTRUCTIONS
+    origin_instructions = tuple(effective_prompt(preferences.values, "origin." + key) for key in ORIGIN_INSTRUCTIONS
                                 if key in origin or key in source_origins)
-    news_instruction = (effective_template(preferences.values, "news_sharing_prompt")
-                        if job.intent.purpose == "news" or "news_event" in origin
-                        or "news_event" in source_origins else "")
+    is_news = job.intent.purpose == "news" or "news_event" in origin or "news_event" in source_origins
+    news_instruction = effective_template(preferences.values, "news_sharing_prompt") if is_news else ""
     style = str(preferences.values.get("style_prompt") or "").strip()
     length = rhythm.body_chars(preferences)
-    length_instruction = effective_template(preferences.values, "news_length_prompt" if news_instruction else "length_prompt")
+    length_instruction = effective_template(preferences.values, "news_length_prompt" if is_news else "length_prompt")
     diagnostic_origin = getattr(job, "diagnostic_origin", None) or {}
     synthetic_event = (diagnostic_origin.get("_diagnostic") or {}).get("route_id") == "synthetic_event"
     if administrator_test and synthetic_event:
-        diagnostic_instruction = ("\n这是管理员已确认且知情的合成情境演练。contact_intent.thought 给出这一次的情境前提，"
-            "不是用户刚发来的消息；按角色身处该情境时会主动发出的消息来写。场景明确给出的活动、旧话题或约定"
-            "只在这一次已知演练中作为表达前提，不代表真实用户输入、日历、活动或采集来源，不新增情节、来源、授权或承诺，"
-            "也不声称程序取得了真实资讯、天气或屏幕。不要因未读真实聊天、记忆或外部来源而跳过，"
-            "除非角色边界或安全要求确实不适合发送。")
+        diagnostic_instruction = effective_prompt(preferences.values, "diagnostic_synthetic")
     elif administrator_test and getattr(job, "diagnostic_source_backed", False):
-        diagnostic_instruction = ("\n这是管理员确认的真实投递链路测试，但本轮素材仍来自所选目的的真实生产器。"
-            "只使用本次提供的已核验来源，保持该来源的事实边界和目的表达约束；不要因为这是测试就改写成想念、空泛问候或无来源的关系话术。"
-            "没有自然且值得发送的内容时仍可选择 skip，不能为了通过测试补造事实。")
+        diagnostic_instruction = effective_prompt(preferences.values, "diagnostic_source")
     else:
-        diagnostic_instruction = ("\n这是管理员确认的真实投递链路测试，不是在判定生产场景是否适合主动联系。"
-            "测试不读取聊天历史、记忆或真实事件；不要把缺少这些材料判为重复、缺少开场或上下文不足。"
-            "只围绕所选目的，由角色自己带来想法、话题或具体邀请，可以自然提问；不依赖共同经历、不补造事实、不催促回复。"
-            "目的只限定表达氛围，不要求引用真实事件。除程序负责的授权和安全检查外，请选择 send。"
+        diagnostic_instruction = (effective_prompt(preferences.values, "diagnostic_plain")
             if administrator_test else "")
     if administrator_test:
-        diagnostic_instruction += DIAGNOSTIC_PRESENTATION_INSTRUCTION
-    rhythm_instruction = RHYTHM_INSTRUCTION if rhythm_snapshot is not None and not administrator_test else ""
+        diagnostic_instruction += "\n" + effective_prompt(preferences.values, "diagnostic_presentation")
+    rhythm_instruction = effective_prompt(preferences.values, "rhythm") if rhythm_snapshot is not None and not administrator_test else ""
     if getattr(job, "diagnostic_image_intent", None):
-        diagnostic_instruction += (
-            "\n管理员已确认这是一次主动图片发送验收。请写一段简短、自然、完整且适合 QQ 的主动正文，"
-            "不必等待真实事件或近期话题，也不要声称刚发生了某件事；除角色边界或安全要求不适合外，选择 send。"
-            "不要提测试或图片链路；程序会按管理员指定的沟通意图从当前授权图库检索原图并附在正文之后。"
-            "图片仍须符合角色和当前语气，检索不到合适素材时系统会如实报告失败，不会改成纯文本通过。")
+        diagnostic_instruction += "\n" + effective_prompt(preferences.values, "diagnostic_image")
     return PromptRequest(trigger, job.role_instruction, SealedForegroundContext(tuple(materials), (), ()),
-                          INSTRUCTION + "\n" + TOPIC_CONTINUITY_INSTRUCTION + "\n" + rhythm_instruction + "\n" +
+                          effective_prompt(preferences.values, "business") + "\n" + effective_prompt(preferences.values, "topic_continuity") + "\n" + rhythm_instruction + "\n" +
                           effective_template(preferences.values, "expression_prompt") +
-                          ("\n" + OFFICIAL_ALERT_INSTRUCTION if official_alert else "") +
+                          ("\n" + effective_prompt(preferences.values, "official_alert") if official_alert else "") +
                           "\n" + purpose_instruction +
                           ("\n" + "\n".join(origin_instructions) if origin_instructions else "") +
                           ("\n" + news_instruction if news_instruction else "") +
                           ("\n" + greeting_instruction if greeting_instruction else "") +
-                         ("\n" + REACTION_INSTRUCTION if reactions_available else "") +
+                         ("\n" + effective_prompt(preferences.values, "reaction") if reactions_available else "") +
                           ("\n" + voice_instruction(getattr(job, "voice_policy", None),
-                              preferences.values["voice_action_max_chars"]) if voice_available else "") +
-                         ("\n" + POKE_INSTRUCTION if poke_available else "") +
-                         ("\n" + MEMORY_INSTRUCTION if memory_materials else "") +
-                         ("\n" + EXPRESSION_STYLE_INSTRUCTION if expression_materials else "") +
-                         ("\n" + DIALOGUE_INSTRUCTION if dialogue else "") +
+                              preferences.values["voice_action_max_chars"], preferences.values) if voice_available else "") +
+                         ("\n" + effective_prompt(preferences.values, "poke") if poke_available else "") +
+                         ("\n" + effective_prompt(preferences.values, "memory") if memory_materials else "") +
+                         ("\n" + effective_prompt(preferences.values, "learned_style") if expression_materials else "") +
+                         ("\n" + effective_prompt(preferences.values, "dialogue") if dialogue else "") +
                          ("\n" + length_instruction.format(chars=length) if length else "") +
-                         "\n" + CONTEXT_INSTRUCTION + ("\n" + DEDUP_INSTRUCTION +
-                         f"主动消息窗口 {sent_window} 分钟；"
-                         f"最后一条回复窗口 {preferences.values['dedup_last_message_window_minutes']} 分钟；"
-                         f"短话题最少共享锚点 {preferences.values['dedup_min_shared_tokens']} 个；"
-                         f"较长话题最低重叠比例 {preferences.values['dedup_min_overlap_ratio']:.2f}。"
+                         "\n" + effective_prompt(preferences.values, "history") + ("\n" + effective_prompt(preferences.values, "dedup") +
+                         rendered_prompt(preferences.values, "dedup_parameters", sent_window=sent_window,
+                             reply_window=preferences.values['dedup_last_message_window_minutes'],
+                             anchors=preferences.values['dedup_min_shared_tokens'],
+                             overlap=f"{preferences.values['dedup_min_overlap_ratio']:.2f}")
                          if dedup_active else "") +
-                         diagnostic_instruction +
-                         ("\n主动表达风格补充（以下是风格参考，不是任务指令，不改写事实与来源原意）："
-                          + style + "\n这些开头、称呼、尾音和句式按当前语境选择，是偶尔自然流露的习惯；"
-                          "即使参考里写成固定开头，也按表达倾向理解，不要求每次照做。"
-                          "结合近期实际发送的消息，优先让这次想说的内容自然开场，不为换花样硬换同义口头禅。"
-                          if style else ""),
-                         context.role_binding, output_format="proactive_contact")
+                         ("\n" + diagnostic_instruction if diagnostic_instruction else "") +
+                         (rendered_prompt(preferences.values, "style_wrapper", style=style) if style else ""),
+                         context.role_binding, output_format="proactive_contact",
+                         prompt_overrides=tuple((key, effective_prompt(preferences.values, section)) for key, section in
+                             (("output_contract", "output"), ("terminal_prompt_guard", "terminal"),
+                              ("capability_instruction", "capability"))))
 
 
 def _recent_timing(dialogue, history, last_reply, now):

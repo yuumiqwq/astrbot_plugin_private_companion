@@ -52,6 +52,7 @@ from .planner import ProactivePlanner
 from .preferences import ProactivePreferences
 from .prompts import (contact_output, history_round_groups, news_presentation_instruction,
                       prompt_sections, request_for)
+from .prompt_catalog import presentation_instruction, segmentation_instruction
 from .official_alert_events import SOURCE_OWNER as OFFICIAL_ALERT_SOURCE_OWNER, attribution_suffix
 
 
@@ -881,8 +882,8 @@ class ProactiveContacts:
                 memory=memory_materials, expression=expression_materials,
                 rhythm_snapshot=rhythm_snapshot, role_state=role_state, recent_life=recent_life)
             extra_instruction = "\n".join(text for text in
-                (segmentation.instruction, presentation.instruction,
-                 news_presentation_instruction(segmentation) if job.intent.purpose == "news"
+                (segmentation_instruction(preferences, segmentation), presentation_instruction(preferences, presentation),
+                 news_presentation_instruction(segmentation, preferences.values) if job.intent.purpose == "news"
                  or source_origin is not None and "news_event" in source_origin else "") if text)
             if extra_instruction:
                 request = replace(request, instruction=request.instruction + "\n" + extra_instruction)

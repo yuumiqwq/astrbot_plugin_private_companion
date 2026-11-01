@@ -176,10 +176,13 @@ def build_wire(envelope, *, model_name=""):
             "不附文字或图片，事实声明仍须在 claims 中逐字标注；poke 仅执行一次对当前原始说话对象的戳一戳，"
             "要求空 text、空 claims、无 images；silent 不发送任何内容，也要求空 text、空 claims、无 images。"
             "只有自然适合时才使用非文字动作；沉默不可用于回避明确问题、请求或需要回应的情绪。")
-    perception = capability_instruction(envelope, model_name=model_name)
+    overrides = dict(request.prompt_overrides) if request.output_format == "proactive_contact" else {}
+    contract = overrides.get("output_contract", contract)
+    perception = overrides.get("capability_instruction", capability_instruction(envelope, model_name=model_name))
     composition = compose_prompt(role_instruction=request.role_instruction,
         request_instruction=request.instruction, task_prompt=envelope.task_prompt,
         output_contract=contract, capability_instruction=perception,
+        terminal_prompt_guard=overrides.get("terminal_prompt_guard"),
         terminal_output_instruction=(
             "最终面向用户只输出一个 JSON 对象，必须含 action、text、claims；action 只能取本轮声明的能力之一："
             + ",".join(reply_actions) + "。通常 action=text 且 text 与 claims 非空。"

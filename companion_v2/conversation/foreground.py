@@ -308,6 +308,7 @@ class PromptRequest:
     # The captured host persona survives a task-role reference substitution so
     # the native role guard still compares the host window, not the self page.
     role_guard_instruction: str | None = None
+    prompt_overrides: tuple[tuple[str, str], ...] = ()
     user_input_image_sources: tuple[SourceRef, ...] = ()
 
     @property
@@ -315,6 +316,13 @@ class PromptRequest:
         return self.role_guard_instruction if self.role_guard_instruction is not None else self.role_instruction
 
     def __post_init__(self) -> None:
+        if (type(self.prompt_overrides) is not tuple
+                or self.prompt_overrides and self.output_format != "proactive_contact"
+                or any(type(item) is not tuple or len(item) != 2
+                       or item[0] not in {"output_contract", "terminal_prompt_guard", "capability_instruction"}
+                       or type(item[1]) is not str or len(item[1]) > 8000 for item in self.prompt_overrides)
+                or len({item[0] for item in self.prompt_overrides}) != len(self.prompt_overrides)):
+            raise ReferenceValidationError("prompt overrides belong to the proactive request")
         if self.streaming_mode not in ("buffered", "incremental"):
             raise ReferenceValidationError("stream delivery requires a declared mode")
         if self.role_guard_instruction is not None and (

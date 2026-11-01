@@ -13,7 +13,8 @@ from companion_v2.configuration.registry import FieldDefinition, FieldRegistry, 
 from companion_v2.foundation.refs import ScopeKind, normalize_utc
 
 from .news_sources import NewsSource, SOURCE_KINDS, news_uid, news_url
-from .prompt_templates import PROMPT_DEFAULTS, checked_template
+from .prompt_templates import checked_template
+from .prompt_catalog import defaults as prompt_defaults
 from .rhythm_configuration import (
     SHARED_RHYTHM_NAMES, global_contact_snapshot, personal_contact_snapshot,
     private_contact_operations,
@@ -215,7 +216,7 @@ class ContactField(FieldDefinition):
                 if len(value) > 512 or any(ord(character) < 32 and character not in "\t\n\r" for character in value):
                     raise ValueError("web exploration interests are too long or contain control characters")
             prompt_field = self.field_id.removeprefix(GROUP + ".")
-            if prompt_field in PROMPT_DEFAULTS:
+            if prompt_field in prompt_defaults():
                 value = checked_template(prompt_field, value)
             if self.kind is ValueKind.TEXT and len(value) > 8192:
                 raise ValueError("contact preference text is too long")
@@ -278,7 +279,7 @@ def configuration_fields():
                 # Appointment execution (T39) and the post-draft persona judge (T41).
                 "enable_llm_proactive_persona_judge": False,
                 "proactive_persona_judge_exempt_purposes": ""}
-    defaults.update(PROMPT_DEFAULTS)
+    defaults.update(prompt_defaults())
     for purpose in PURPOSES:
         defaults.update({purpose + ".enabled": True, purpose + ".weight": 1.0, purpose + ".pause_until": ""})
     fields = tuple(ContactField(GROUP + "." + name, GROUP, GROUP,

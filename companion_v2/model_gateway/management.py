@@ -346,7 +346,7 @@ class ModelManagement:
         definitions = self.app.configuration.registry.group(section.config_group)
         if layer not in (ConfigLayer.ROLE, ConfigLayer.WINDOW) or layer not in definitions[0].layers:
             raise TaskError("model_configuration_invalid", "the prompt section does not support this configuration scope")
-        if (ConfigLayer.RELATIONSHIP in definitions[0].layers
+        if (layer is ConfigLayer.WINDOW and ConfigLayer.RELATIONSHIP in definitions[0].layers
                 and self.context.scope.kind is ScopeKind.PRIVATE):
             scope = self.context.scope
             target = ConfigTarget(scope.installation_id, ConfigLayer.WINDOW,
@@ -367,6 +367,7 @@ class ModelManagement:
 
     def _prompt_sections(self, operator, profile, layer=ConfigLayer.ROLE):
         snapshots, result = {}, []
+        presentation_defaults = None
         for section in profile.prompt_sections:
             item = {"key": section.key, "label": section.label, "condition": section.condition,
                     "default_prompt": section.default_prompt, "editable": section.editable,
@@ -386,6 +387,20 @@ class ModelManagement:
                 current, inherited = snapshots[snapshot_key]
                 field_id = section.config_group + "." + section.field
                 field = _field(current.fields[field_id], inherited.fields[field_id])
+                if profile.kind == "proactive.compose" and section.key in {"segmentation", "humanized"}:
+                    if presentation_defaults is None:
+                        from companion_v2.conversation.humanized_expression import DEFAULT_PROMPT as HUMANIZED_PROMPT
+                        from companion_v2.proactive.prompt_templates import NEWLINE_INSTRUCTION
+                        presentation = require(self.app.configuration.read(operator, target=_target(self.context, layer),
+                            group_id="conversation.presentation", observed_at=self.app.now())).values
+                        presentation_defaults = {
+                            "segmentation": presentation.get("conversation.presentation.prompt") or NEWLINE_INSTRUCTION,
+                            "humanized": presentation.get("conversation.presentation.humanized_expression_prompt") or HUMANIZED_PROMPT}
+                    fallback = presentation_defaults[section.key]
+                    if field["source"] == "default":
+                        field.update(value=fallback, source="presentation")
+                    if field["inherited_source"] == "default":
+                        field.update(inherited_value=fallback, inherited_source="presentation")
                 item.update(field=field, edit_token=current.edit_token, config_field=field_id,
                             configuration_layer=current.target.layer.value,
                             prompt=field["value"], inheritance_label="上级继承值")
@@ -412,12 +427,20 @@ class ModelManagement:
         layers = [dict(layer) for layer in PROMPT_LAYERS]
         if any(section["editable"] for section in sections):
             layers[1].update(editable=True, description="完整业务模板在下方按场景查看；表达模板可编辑，事实与协议规则固定保留。")
-        return {"kind": profile.kind, "configuration_layer": layer.value,
+        result = {"kind": profile.kind, "configuration_layer": layer.value,
                 "lane": profile.lane.value, "capabilities": list(profile.capabilities),
                 "default_prompt": profile.default_prompt, "prompt_version": profile.version,
                 "prompt_layers": layers, "prompt_sections": sections,
                 "fields": fields, "edit_token": current.edit_token, "application_state": application.state,
                 "apply_mode": current.apply_mode.value, "revision": current.revision}
+        if profile.kind == "proactive.compose":
+            from companion_v2.proactive.prompt_catalog import assembly
+            result["prompt_assembly"] = assembly()
+            for item in result["prompt_layers"]:
+                if item["key"] in {"request_instruction", "output_contract", "capability_instruction", "terminal_prompt_guard"}:
+                    item["editable"] = True
+            result["prompt_layers"][1]["description"] = "按本轮目的和条件选取主动联系专用模板。"
+        return result
 
     def _runtime_diagnostics(self):
         runtime = self.app.runtime
