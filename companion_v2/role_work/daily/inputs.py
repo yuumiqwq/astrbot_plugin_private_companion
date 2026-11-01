@@ -6,7 +6,6 @@ from zoneinfo import ZoneInfo
 
 from companion_v2.agenda.planning_config import AUTOMATIC_SCHEDULE_MODES, planning_values
 from companion_v2.agenda.planning_inputs import capture as capture_plan
-from companion_v2.agenda.planning_output import INSTRUCTION as PLAN_INSTRUCTION
 from companion_v2.conversation.foreground import PromptMaterial
 from companion_v2.conversation.models import InboundConversationEvent
 from companion_v2.execution.models import TaskContext, TaskError, digest, encode, require
@@ -16,11 +15,11 @@ from companion_v2.role_work.journal import codec
 from companion_v2.role_work.journal.collection import JournalDayMaterials
 from companion_v2.role_work.journal.materials import JournalMaterial, MaterialKind, material_document
 from companion_v2.role_work.journal.models import JournalKind, JournalState
-from companion_v2.role_work.journal.prompts import COMMON, DIARY, entry_document
+from companion_v2.role_work.journal.prompts import entry_document
 from companion_v2.role_work.journal.writing import _CollectedJob
-from companion_v2.memory.prompts import REFLECTION_INSTRUCTION
 from companion_v2.memory.reflection_output import REFLECTION_SCHEMA
 from companion_v2.sources.models import SourceRecord
+from . import prompts
 
 
 def configuration(app, context):
@@ -47,6 +46,7 @@ def event_for(app, context, run_id, at):
 async def capture(service, context, instruction, local_date, zone_name, run_id, *, preview=False):
     app, at = service.app, service.tasks.now()
     settings = configuration(app, context)
+    prompt_values = prompts.read(app, context)
     if settings["timezone"] != zone_name:
         raise TaskError("daily_settings_changed", "daily timezone changed before preparation")
     selected = dict(settings["parts"])
@@ -60,7 +60,8 @@ async def capture(service, context, instruction, local_date, zone_name, run_id, 
         raise TaskError("daily_date_invalid", "daily preparation uses the current local date")
     inputs = {"settings": settings, "instruction": instruction, "parts": selected,
               "local_date": local_date, "timezone": zone_name, "at": at,
-              "diary": None, "plan": None, "memory_batch": None, "preview": preview}
+              "diary": None, "plan": None, "memory_batch": None, "preview": preview,
+              "prompts": prompt_values}
     if selected["diary"]:
         target = app.journal_triggers.target(context, JournalKind.DIARY, local_date, zone_name)
         head = app.role_journal.head(target.key)
@@ -78,9 +79,7 @@ async def capture(service, context, instruction, local_date, zone_name, run_id, 
             for reference in recent:
                 entry = app.role_journal.get(reference.key, observed_at=at)
                 materials.append(PromptMaterial("role.journal", "recent_journal", encode(entry_document(entry))))
-            instructions.append("日记部分：\n" + COMMON + DIARY.split("仅输出", 1)[0]
-                + "diary 对象包含 body、form、recall:null、afterglow:\"\" 和 material_ids。"
-                  "material_ids 只选择本轮 writing_materials 中实际使用的原编号，最多 64 个，可为空。"
+            instructions.append("日记部分：\n" + prompt_values["diary"]
                 + ("\n表达偏好：" + settings["diary_style"] if settings["diary_style"] else ""))
     if selected["day_plan"]:
         tomorrow = day + timedelta(days=1)
@@ -88,10 +87,7 @@ async def capture(service, context, instruction, local_date, zone_name, run_id, 
             "daily:" + zone_name + ":" + tomorrow.isoformat(), planning_date=tomorrow, manual=preview)
         inputs["plan"] = plan
         materials.append(PromptMaterial("calendar.planning", "planning_material", encode(plan["material"])))
-        instructions.append("次日日程部分：\n" + PLAN_INSTRUCTION.split("daily/horizon 输出", 1)[0]
-            + "本轮规划 start 至 end 指定的明天，不规划今天剩余时间。day_plan 输出 {\"items\":["
-              "{\"title\":\"计划标题\",\"start\":\"含时区ISO时间\",\"minutes\":30,\"detail\":\"准备怎样做\","
-              "\"goal_id\":null,\"parent_id\":null}]}；通常安排一两件事，无新安排用空数组。")
+        instructions.append("次日日程部分：\n" + prompt_values["day_plan"])
     if selected["memory"]:
         reflection = app.memory_reflection
         start = datetime.combine(day, time(), zone)
@@ -126,8 +122,7 @@ async def capture(service, context, instruction, local_date, zone_name, run_id, 
         request = reflection._request(context, row, json.loads(row["manifest_json"]))
         inputs["memory_snapshot"] = dict(reflection._row(context, batch_id))
         materials.extend(request.context.materials)
-        instructions.append("记忆整理部分：\n" + REFLECTION_INSTRUCTION
-            + "\n上述记忆结果放入外层 memory 字段，使用本轮原始 evidence_handles；无可保存事项时保留空候选数组。")
+        instructions.append("记忆整理部分：\n" + prompt_values["memory"])
     inputs["materials"] = tuple(materials)
     inputs["instructions"] = tuple(instructions)
     return inputs

@@ -446,6 +446,9 @@ class ModelManagement:
                 if item["key"] in {"request_instruction", "output_contract", "capability_instruction", "terminal_prompt_guard"}:
                     item["editable"] = True
             result["prompt_layers"][1]["description"] = "按本轮目的和条件选取主动联系专用模板。"
+        elif profile.kind == "role.daily_review":
+            from companion_v2.role_work.daily.prompts import assembly
+            result["prompt_assembly"] = assembly()
         return result
 
     def _runtime_diagnostics(self):

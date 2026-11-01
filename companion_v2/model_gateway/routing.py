@@ -43,6 +43,13 @@ def configuration_fields(profiles: tuple[ModelTaskProfile, ...]) -> tuple[FieldD
                 boundaries = {"maximum_chars": 8}
             fields.append(FieldDefinition(profile.group + "." + suffix, profile.group, CONSUMER,
                                           kind, default, **boundaries))
+        registered = {field.field_id for field in fields}
+        for section in profile.prompt_sections:
+            field_id = section.config_group + "." + section.field
+            if section.config_group == profile.group and field_id not in registered:
+                fields.append(FieldDefinition(field_id, profile.group, CONSUMER,
+                    ValueKind.TEXT, section.default_prompt, maximum_chars=8000))
+                registered.add(field_id)
     return tuple(fields)
 
 

@@ -14,6 +14,7 @@ from companion_v2.execution.service import outcome
 from companion_v2.model_gateway.models import ModelTaskProfile
 from . import inputs as daily_inputs
 from . import output
+from . import prompts
 
 logger = logging.getLogger(__name__)
 KIND = "role.daily_review"
@@ -23,7 +24,7 @@ OWNER = "role.daily"
 def daily_profile(provider, *, max_output_tokens=2048):
     return ModelTaskProfile(KIND, Lane.BACKGROUND, provider,
         "沿用当前人格和对话，完成本次每日整理；只返回约定的三个结果。",
-        max_output_tokens=max_output_tokens)
+        max_output_tokens=max_output_tokens, prompt_sections=prompts.sections())
 
 
 class RoleDailyReview:
@@ -173,13 +174,9 @@ class RoleDailyReview:
 
     def request_for(self, context, inputs, run_id):
         event = BackgroundPromptTrigger(run_id, context.actor.principal, context.scope, self.tasks.now())
-        task = ("每日整理：用同一人格、预设对话与会话历史，总结 local_date 当天的日记和记忆，安排次日活动。"
-            "本轮只调用一次模型。启用的各部分遵守下述资料与格式，关闭或已存在的部分严格输出 null。"
-            "只返回 JSON 对象 {\"diary\":对象或null,\"day_plan\":对象或null,\"memory\":对象或null}。"
-            "在总输出预算内简明完整地写完三个字段。日记通常简短，记忆只保留值得长期记住的少量变化。\n"
+        task = (inputs.get("prompts", prompts.DEFAULTS)["global"].rstrip() + "\n"
             + "\n\n".join(inputs["instructions"])
-            + "\n本轮完整输出结构如下；保留字段名称、对象层级和数据类型，关闭项为 null：\n"
-            + encode(daily_inputs.DAILY_SCHEMA))
+            + "\n" + prompts.output_contract())
         materials = (PromptMaterial(OWNER, "daily_parts", encode({"local_date": inputs["local_date"],
             "timezone": inputs["timezone"], "enabled": inputs["parts"]})), *inputs["materials"])
         return PromptRequest(event, inputs["instruction"], SealedForegroundContext(tuple(materials), (), ()),
