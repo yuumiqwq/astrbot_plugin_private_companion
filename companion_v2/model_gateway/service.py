@@ -445,6 +445,23 @@ class ModelSession:
                        self.run.task.task_id, self.round_no + 1, ",".join(fields))
         raise TaskError("model_context_mismatch", "continuation must preserve its original authorized context")
 
+    def _completed_blank_proactive(self, error, envelope, on_reply_prefix):
+        output = error.output
+        if (envelope.original.output_format != "proactive_contact" or output is None
+                or output.finish_reason != "stop" or output.text.strip()
+                or len(self.plan.providers) != 1 or self.independent_plans
+                or envelope.tools or envelope.tool_history or on_reply_prefix is not None):
+            return False
+        row = self.gateway.runtime.read_one("""SELECT c.actual_tokens, d.summary_json
+            FROM model_calls c JOIN model_call_diagnostics d USING(call_id)
+            WHERE c.call_id=? AND c.task_id=?""", (error.call_id, self.run.task.task_id))
+        if row is None or row["actual_tokens"] is None:
+            return False
+        diagnostics = checked_response_diagnostics(row["summary_json"])
+        return bool(diagnostics and diagnostics["completion_present"]
+                    and diagnostics["finish_reason"] == "stop"
+                    and diagnostics["failure_code"] == ModelFailure.WIRE_DECODE.value)
+
     async def generate(self, request, *, history=(), owner_refresh=None, media_refresh=None, on_reply_prefix=None,
                        reply_prefix_ready=None):
         if self.closed or self.busy or self.round_no > 8:
@@ -499,14 +516,30 @@ class ModelSession:
         try:
             envelope = replace(self.plan.envelope, original=request, tools=self.tools if self.round_no < 8 else (),
                                tool_history=history)
-            with self.gateway.runtime.transaction() as connection:
-                self.run.validate()
-                self.gateway.router.validate_plan(self.plan)
-                connection.execute("""INSERT INTO model_rounds
-                    (task_id, round_no, attempt_id, request_hash, state) VALUES (?, ?, ?, ?, 'started')""",
-                    (self.run.task.task_id, self.round_no, self.run.claim.attempt_id, digest(envelope)))
-            completion = await self.gateway._generate(self.run, self.plan, envelope, self.round_no,
-                                                      on_reply_prefix, reply_prefix_ready)
+            for blank_attempt in range(2):
+                with self.gateway.runtime.transaction() as connection:
+                    self.run.validate()
+                    self.gateway.router.validate_plan(self.plan)
+                    connection.execute("""INSERT INTO model_rounds
+                        (task_id, round_no, attempt_id, request_hash, state) VALUES (?, ?, ?, ?, 'started')""",
+                        (self.run.task.task_id, self.round_no, self.run.claim.attempt_id, digest(envelope)))
+                try:
+                    completion = await self.gateway._generate(self.run, self.plan, envelope, self.round_no,
+                                                              on_reply_prefix, reply_prefix_ready)
+                except ModelOutputError as error:
+                    if not self._completed_blank_proactive(error, envelope, on_reply_prefix):
+                        raise
+                    with self.gateway.runtime.transaction() as connection:
+                        connection.execute("""UPDATE model_rounds SET state='final', call_id=?
+                            WHERE task_id=? AND round_no=?""",
+                            (error.call_id, self.run.task.task_id, self.round_no))
+                    if blank_attempt or self.round_no >= 8:
+                        raise
+                    self.round_no += 1
+                    logger.warning("[CompanionV2] 主动消息已确认返回空白，保持原请求重试一次 task=%s call=%s",
+                                   self.run.task.task_id, error.call_id)
+                    continue
+                break
             self.history = history
             self.pending = completion.tool_calls
             self.round_no += 1
