@@ -18,6 +18,20 @@ REPORTED_USAGE = Amount(40, 90, input_tokens=30, cached_input_tokens=10, output_
 
 
 class NativeModelTests(NativeFixture, unittest.IsolatedAsyncioTestCase):
+    async def test_shared_native_capacity_includes_tool_definitions(self):
+        self.native.provider.provider_config["max_context_tokens"] = 10000
+        self.native_model = self.make_model()
+        envelope = await self.envelope()
+        material = PromptMaterial("astrbot.conversation", "recent_private_dialogue", "[]")
+        original = replace(envelope.original,
+                           context=replace(envelope.original.context, materials=(material,)))
+        shared = replace(envelope, original=original, tools=())
+        self.native_model.reserve(shared)
+        large_tool = ToolSpec("fixture.large_tool", "Tool instructions " * 10000, '{"type":"object"}')
+        with self.assertRaisesRegex(TaskError, "native model context window"):
+            self.native_model.reserve(replace(shared, tools=(large_tool,)))
+        self.assertEqual(self.native.provider.client.state.calls, [])
+
     async def test_shared_native_history_uses_the_host_token_limit_and_keeps_cost_reservation(self):
         self.native.provider.provider_config["max_context_tokens"] = 1048576
         self.native_model = self.make_model()

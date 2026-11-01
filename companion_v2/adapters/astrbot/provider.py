@@ -553,6 +553,8 @@ class AstrBotTextProvider:
                 # Reuse the host's counting policy on the final wire, including
                 # the complete task material, output contract and output budget.
                 messages = [Message.model_validate(item) for item in wire.messages]
+                if wire.tools:
+                    messages.append(Message(role="system", content=encode(wire.tools)))
                 if structured is not None:
                     messages.append(Message(role="system", content=encode(structured)))
                 tokens = EstimateTokenCounter().count_tokens(messages) + envelope.max_output_tokens
