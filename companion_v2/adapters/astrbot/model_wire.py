@@ -122,7 +122,7 @@ def build_wire(envelope, *, model_name=""):
         reply_actions += ("image",)
     if request.output_format != "conversation" and (envelope.tools or envelope.tool_history):
         raise ValueError("private writing does not offer tools")
-    aliases, tools, evidence, materials = {}, [], {}, []
+    aliases, tools, evidence, materials, host_history = {}, [], {}, [], []
     for tool in envelope.tools:
         alias = tool_alias(tool.action)
         if alias in aliases:
@@ -135,6 +135,14 @@ def build_wire(envelope, *, model_name=""):
     if len(tools) > MAX_TOOL_CATALOG:
         raise ValueError("tool catalog is unbounded")
     for material in request.context.materials:
+        if material.owner == "astrbot.conversation" and material.purpose == "recent_private_dialogue":
+            history = strict_json(material.payload)
+            if not isinstance(history, list) or any(
+                    not isinstance(item, dict) or item.get("role") not in {"user", "assistant", "system"}
+                    or set(item) != {"role", "content"} for item in history):
+                raise ValueError("shared host history requires native role/content messages")
+            host_history.extend(history)
+            continue
         if (request.native_video_input and material.owner == "conversation.image"
                 and material.purpose.startswith("video_frame:")):
             continue
@@ -181,7 +189,7 @@ def build_wire(envelope, *, model_name=""):
             "statement 必须是 text 的逐字连续原文，observed 使用提供的 evidence 句柄，"
             "subjective/question 的 evidence 为 null。" + stream_contract
             if request.output_format == "conversation" else BACKGROUND_OUTPUT_NOTES.get(request.output_format, "")))
-    messages = [*composition.system_messages,
+    messages = [*composition.system_messages, *host_history,
                 {"role": "user", "content": encode({"materials": materials,
                     "deferred": [{"owner": c.owner, "purpose": c.purpose} for c in request.context.deferred],
                     "unavailable": [{"owner": c.owner, "purpose": c.purpose} for c in request.context.unavailable]})}]

@@ -1,11 +1,11 @@
 """The self page is the role reference for background tasks, not conversation."""
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 import unittest
 
-from companion_v2.conversation.foreground import PromptRequest
+from companion_v2.conversation.foreground import PromptMaterial, PromptRequest, SealedForegroundContext
 from companion_v2.model_gateway.service import LocalModelGateway, TASK_ROLE_REFERENCE_KINDS
 
 
@@ -15,6 +15,7 @@ class TaskRoleReferenceTests(unittest.TestCase):
         role_instruction: str
         instruction: str = "本轮任务"
         role_guard_instruction: str | None = None
+        context: object | None = None
 
         @property
         def host_role_instruction(self):
@@ -46,6 +47,14 @@ class TaskRoleReferenceTests(unittest.TestCase):
         self.assertEqual(request.role_instruction, "AstrBot 人格原文")
         self.assertIsNone(request.role_guard_instruction)
         self.assertEqual(request.host_role_instruction, "AstrBot 人格原文")
+
+    def test_shared_host_context_preserves_the_current_native_persona(self):
+        gateway = self.gateway("A different self-page persona")
+        original = replace(self.request(), context=SealedForegroundContext(
+            (PromptMaterial("astrbot.conversation", "recent_private_dialogue", "[]"),), (), ()))
+        for kind in ("calendar.plan", "proactive.compose"):
+            with self.subTest(kind=kind):
+                self.assertIs(gateway._task_role_request(self.make_run(kind), original), original)
 
     def test_conversation_and_image_safety_keep_their_original_instruction(self):
         gateway = self.gateway("【角色稳定档案】")

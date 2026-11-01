@@ -91,6 +91,12 @@ class LocalModelGateway:
         """Use the self page as the task role, with the captured persona as fallback."""
         if run.task.spec.kind not in TASK_ROLE_REFERENCE_KINDS:
             return request
+        context = getattr(request, "context", None)
+        if context is not None and any(item.owner == "astrbot.conversation"
+                and item.purpose == "recent_private_dialogue" for item in context.materials):
+            # Shared background requests use the same current persona as native
+            # replies, which has already been verified by the host adapter.
+            return request
         reference = self.role_reference.instruction(run.task.spec.context, self.tasks.now())
         if not reference:
             return request

@@ -14,6 +14,19 @@ class AstrBotSharedContext:
         self.bridge = bridge
         self.provider_id = provider_id
 
+    def supports(self, scope):
+        """Whether the host manages this private window's shared history."""
+        if scope.kind is not ScopeKind.PRIVATE:
+            return False
+        manager = self.context.conversation_manager
+        shared = getattr(manager, "shared_history", None)
+        umo = f"{scope.platform}:FriendMessage:{scope.native_scope_id}"
+        return (
+            shared is not None
+            and callable(getattr(self.context, "prepare_session_request", None))
+            and shared.settings(umo) is not None
+        )
+
     def split_reply(self, context, text):
         """Use the host's configured paragraph boundary for shared QQ sessions."""
         scope = context.scope
@@ -49,27 +62,25 @@ class AstrBotSharedContext:
         """Read the current host history only for opted-in private sessions.
 
         Args:
-            request: Prepared contact request, before model budgeting.
+            request: Prepared background request, before model budgeting.
 
         Returns:
             Request with host-managed dialogue and the current persona.
         """
         scope = request.event.scope
-        if scope.kind is not ScopeKind.PRIVATE:
+        if not self.supports(scope):
             return request
         manager = self.context.conversation_manager
-        shared = getattr(manager, "shared_history", None)
-        prepare = getattr(self.context, "prepare_session_request", None)
+        prepare = self.context.prepare_session_request
         umo = f"{scope.platform}:FriendMessage:{scope.native_scope_id}"
-        if shared is None or not callable(prepare) or shared.settings(umo) is None:
-            return request
 
         persona = await self.bridge.verified_persona(scope, request.role_binding)
         conversation_id = await manager.get_curr_conversation_id(umo)
-        if not conversation_id:
-            return request
-        conversation = await manager.get_conversation(umo, conversation_id)
-        if conversation is None:
+        conversation = (
+            await manager.get_conversation(umo, conversation_id)
+            if conversation_id else None
+        )
+        if conversation_id and conversation is None:
             raise ValueError("The selected AstrBot conversation is unavailable")
         provider = self.context.get_provider_by_id(self.provider_id)
         if provider is None:
@@ -82,7 +93,7 @@ class AstrBotSharedContext:
         materials = tuple(
             item
             for item in request.context.materials
-            if item.owner != "conversation.private_history"
+            if item.owner not in {"conversation.private_history", "astrbot.conversation"}
             and item.purpose
             not in {"confirmed_background_message", "confirmed_reply_context"}
         )
@@ -95,8 +106,11 @@ class AstrBotSharedContext:
         )
         native_request = ProviderRequest(
             prompt=task,
-            system_prompt=persona["prompt"],
-            contexts=json.loads(conversation.history or "[]"),
+            system_prompt=persona.get("system_prompt", persona["prompt"]),
+            contexts=[
+                *persona.get("begin_dialogs", ()),
+                *(json.loads(conversation.history or "[]") if conversation else []),
+            ],
         )
         await prepare(
             umo,
@@ -118,7 +132,7 @@ class AstrBotSharedContext:
         )
         return replace(
             request,
-            role_instruction=persona["prompt"],
+            role_instruction=persona.get("system_prompt", persona["prompt"]),
             role_guard_instruction=persona["prompt"],
             context=replace(request.context, materials=(*materials, material)),
         )

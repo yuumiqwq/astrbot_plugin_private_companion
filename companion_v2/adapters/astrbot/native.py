@@ -767,12 +767,15 @@ class NativePrivateBridge:
         account = self.account(scope)
         self.client(scope)
         umo = self._verified_persona_umo(scope, binding, account)
-        cid, selected, _, projection, prompt = await self._selected_role_snapshot(account, umo)
+        cid, selected, persona, projection, prompt = await self._selected_role_snapshot(account, umo)
         projection = self._confirm_persona_projection(account, selected, projection, prompt)
         if projection.role != binding.role:
             raise TaskError("host_persona_changed", "selected host persona differs from the verified role")
         self.client(scope)
         return {"persona_id": projection.persona_id, "prompt": prompt,
+                "system_prompt": persona["prompt"] if persona else "",
+                "begin_dialogs": [{"role": item["role"], "content": item["content"], "_no_save": True}
+                                  for item in ((persona or {}).get("_begin_dialogs_processed") or ())],
                 "bot_id": scope.bot_id, "account_id": scope.account_id}
 
     async def _capture_images(self, locators):

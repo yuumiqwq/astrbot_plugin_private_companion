@@ -549,6 +549,7 @@ class AstrBotStagingController:
         self.session.application.proactive.request_context = AstrBotSharedContext(
             self.context, self.session.bridge, self.settings.provider_id)
         self.session.application.proactive.output_segments = self.session.application.proactive.request_context.split_reply
+        self.session.application.calendar_planning.request_context = self.session.application.proactive.request_context
         return self.session
 
     async def load_existing(self) -> Outcome[dict[str, Any]]:

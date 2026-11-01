@@ -155,6 +155,41 @@ class SharedHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.manager.get_conversation.assert_not_awaited()
         self.bridge.verified_persona.assert_not_awaited()
 
+    async def test_presets_use_native_roles_and_share_the_history_budget(self):
+        examples = [
+            {"role": "user", "content": "Example question", "_no_save": True},
+            {"role": "assistant", "content": "Example answer", "_no_save": True},
+        ]
+        self.bridge.verified_persona.return_value = {
+            "prompt": "persona with serialized examples",
+            "system_prompt": "exact persona",
+            "begin_dialogs": examples,
+        }
+        result = await self.loader(self.request)
+        request = self.native.prepare_session_request.await_args.args[2]
+        self.assertEqual(request.system_prompt, "exact persona")
+        self.assertEqual(request.contexts, examples + self.history)
+        self.assertEqual(result.role_instruction, "exact persona")
+        self.assertEqual(result.role_guard_instruction, "persona with serialized examples")
+        messages = json.loads(result.context.materials[-1].payload)
+        self.assertEqual(messages[:2], [{"role": item["role"], "content": item["content"]}
+                                        for item in examples])
+        self.assertEqual(messages[2:], self.history)
+
+    async def test_repreparing_replaces_the_previous_shared_history(self):
+        prepared = await self.loader(self.request)
+        refreshed = await self.loader(prepared)
+        self.assertEqual(sum(item.owner == "astrbot.conversation"
+                             for item in refreshed.context.materials), 1)
+
+    async def test_new_native_session_uses_empty_history_with_the_current_persona(self):
+        self.manager.get_curr_conversation_id.return_value = None
+        result = await self.loader(self.request)
+        self.assertEqual(result.role_instruction, "current persona and examples")
+        self.assertEqual(json.loads(result.context.materials[-1].payload), [])
+        self.manager.get_conversation.assert_not_awaited()
+        self.native.prepare_session_request.assert_awaited_once()
+
     async def test_history_failure_is_reported_without_using_stale_plugin_history(self):
         self.manager.get_conversation.side_effect = RuntimeError("history unavailable")
         with self.assertRaisesRegex(RuntimeError, "history unavailable"):

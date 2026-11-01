@@ -18,6 +18,24 @@ REPORTED_USAGE = Amount(40, 90, input_tokens=30, cached_input_tokens=10, output_
 
 
 class NativeModelTests(NativeFixture, unittest.IsolatedAsyncioTestCase):
+    async def test_shared_host_dialogue_reaches_the_provider_as_native_messages(self):
+        envelope = await self.envelope()
+        history = [{"role": "user", "content": "A complete preset question"},
+                   {"role": "assistant", "content": "A complete preset answer"},
+                   {"role": "system", "content": "Earlier conversation summary"},
+                   {"role": "user", "content": "Tomorrow I have an exam."}]
+        original = replace(envelope.original, output_format="calendar_planning", response_format="json_object",
+                           context=replace(envelope.original.context,
+                               materials=(PromptMaterial("astrbot.conversation", "recent_private_dialogue",
+                                                         encode(history)),
+                                          PromptMaterial("calendar.planning", "planning_material", '{"mode":"daily"}'))))
+        response = await self.native_model.generate(replace(envelope, original=original))
+        self.assertEqual(response.status, "generated")
+        payload, _ = self.native.provider.client.state.calls[-1]
+        self.assertEqual(payload["messages"][-5:-1], history)
+        current = json.loads(payload["messages"][-1]["content"])
+        self.assertEqual([item["purpose"] for item in current["materials"]], ["planning_material"])
+
     async def test_provider_registry_refresh_rebinds_same_configuration(self):
         envelope = await self.envelope()
         original = self.native.provider

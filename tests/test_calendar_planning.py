@@ -5,6 +5,7 @@ from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
 import json
 import unittest
+from unittest.mock import AsyncMock, Mock
 from zoneinfo import ZoneInfo
 
 from companion_v2.agenda.annual_calendar import SCHEMA
@@ -17,6 +18,7 @@ from companion_v2.configuration.models import ConfigurationError
 from companion_v2.configuration.registry import FieldRegistry
 from companion_v2.configuration.owners import SparseConfigurationOwner
 from companion_v2.conversation.models import InboundConversationEvent
+from companion_v2.conversation.foreground import PromptMaterial
 from companion_v2.conversation.state_context import ConversationStateContext
 from companion_v2.execution.models import TaskContext, TaskError, digest, encode
 from companion_v2.foundation.refs import AudienceRef, SourceRef, VersionRef, OperationRef
@@ -244,6 +246,51 @@ class CalendarPlanningTests(StateFixture, unittest.IsolatedAsyncioTestCase):
             app.calendar_planning.next_checks[context.key] = NOW + timedelta(days=1)
         self.model_behavior = lambda envelope: self.response(envelope)
         return app, context, manager
+
+    async def test_automatic_plan_uses_the_configured_shared_private_context(self):
+        app, context, _ = await self.ready()
+        app.gateway.role_reference.instruction = lambda *args: "A different self-page persona"
+        history = [{"role": "user", "content": "Tomorrow is my exam."},
+                   {"role": "assistant", "content": "I'll keep the evening free."}]
+
+        async def prepare(request):
+            return replace(request, role_instruction="The current native persona", context=replace(request.context,
+                materials=(*request.context.materials,
+                           PromptMaterial("astrbot.conversation", "recent_private_dialogue", encode(history)))))
+
+        app.calendar_planning.request_context = AsyncMock(side_effect=prepare)
+        app.calendar_planning.request_context.supports = Mock(return_value=True)
+        result = await app.calendar_planning.run(context, app.state_maintenance.bindings[context.key][1],
+            mode="daily", slot="shared-private-day", automatic=True)
+        self.assertEqual(result["state"], "succeeded", result)
+        app.calendar_planning.request_context.assert_awaited_once()
+        request = self.called[-1].original
+        self.assertEqual(request.role_instruction, "The current native persona")
+        material = json.loads(next(item.payload for item in request.context.materials
+                                   if item.purpose == "planning_material"))
+        self.assertEqual(material["planning_scope"], "conversation")
+        self.assertEqual(json.loads(request.context.materials[-1].payload), history)
+        self.assertEqual(request.output_format, "calendar_planning")
+        self.assertEqual(request.response_format, "json_object")
+
+    async def test_nonshared_automatic_plan_keeps_role_scope(self):
+        app, context, _ = await self.ready()
+        app.calendar_planning.request_context = AsyncMock(side_effect=lambda request: request)
+        app.calendar_planning.request_context.supports = Mock(return_value=False)
+        result = await app.calendar_planning.run(context, app.state_maintenance.bindings[context.key][1],
+            mode="daily", slot="nonshared-role-day", automatic=True)
+        self.assertEqual(result["state"], "succeeded", result)
+        material = json.loads(self.called[-1].original.context.materials[0].payload)
+        self.assertEqual(material["planning_scope"], "role")
+
+    async def test_shared_history_failure_prevents_planning_with_partial_context(self):
+        app, context, _ = await self.ready()
+        app.calendar_planning.request_context = AsyncMock(side_effect=RuntimeError("host history unavailable"))
+        app.calendar_planning.request_context.supports = Mock(return_value=True)
+        result = await self.plan(app, context, slot="unavailable-shared-day")
+        self.assertNotEqual(result["state"], "succeeded", result)
+        self.assertEqual(self.called, [])
+        self.assertEqual(app.calendar.inventory(context)["items"], [])
 
     async def test_new_private_input_fences_a_stale_calendar_intervention_before_dispatch(self):
         app, context, _ = await self.ready()

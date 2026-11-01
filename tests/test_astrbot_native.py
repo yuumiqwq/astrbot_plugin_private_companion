@@ -80,6 +80,18 @@ class NativeInputTests(NativeFixture, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(current["account_id"], "100")
         self.assertEqual(self.native.provider.client.state.calls, [])
 
+    async def test_verified_persona_exposes_native_presets_without_serializing_them_into_the_system_prompt(self):
+        await self.envelope()
+        self.native.persona["_begin_dialogs_processed"] = [
+            {"role": "user", "content": "Preset question", "_no_save": True},
+            {"role": "assistant", "content": "Preset answer", "_no_save": True},
+        ]
+        current = await self.bridge.verified_persona(self.native_context.scope, self.native_context.role_binding)
+        self.assertEqual(current["system_prompt"], self.native.persona["prompt"])
+        self.assertEqual(current["begin_dialogs"], self.native.persona["_begin_dialogs_processed"])
+        self.assertIn("Preset question", current["prompt"])
+        self.assertNotIn("Preset question", current["system_prompt"])
+
     async def test_single_v2_persona_mapping_does_not_claim_an_unmapped_native_selection(self):
         account = self.bridge.accounts[("qq-main", "100")]
         self.native.persona_manager.personas_v3 = [self.native.persona]

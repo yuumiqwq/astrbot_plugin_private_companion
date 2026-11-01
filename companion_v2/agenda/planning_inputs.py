@@ -11,7 +11,7 @@ from companion_v2.identity_policy.private_domain import source_ref
 from companion_v2.memory.models import AtomRef
 from companion_v2.memory.pinned import visible_fact
 from companion_v2.role_work.growth.configuration import INFLUENCE_NOTES, skill_settings, skills_enabled
-from .planning_config import (SCHEDULE_MODE_ORCHESTRATED, configured_annual_calendars,
+from .planning_config import (AUTOMATIC_SCHEDULE_MODES, configured_annual_calendars,
                               configured_weather_location, configured_weather_max_age, planning_values)
 from .weather_material import planning_weather_material
 
@@ -152,7 +152,7 @@ def capture(planner, context, instruction, mode, slot, occurrence=None, *, weath
         raise TaskError("calendar_disabled", "enable the role-wide calendar switch in schedule and planning settings")
     if not manual and not settings["planning_enabled"]:
         raise TaskError("planning_disabled", "enable automatic planning in schedule and planning settings")
-    if mode != "intervention" and settings["schedule_simulation_mode"] != SCHEDULE_MODE_ORCHESTRATED:
+    if mode != "intervention" and settings["schedule_simulation_mode"] not in AUTOMATIC_SCHEDULE_MODES:
         raise TaskError("planning_mode_inactive", "automatic planning is inactive in continuous schedule mode")
     zone = ZoneInfo(settings["planning_timezone"])
     window_days = min(31, settings["planning_horizon_days"]) if mode == "intervention" else settings["planning_horizon_days"]

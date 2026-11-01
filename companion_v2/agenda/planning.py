@@ -19,7 +19,8 @@ from companion_v2.role_work.state.ownership import role_schedule_key
 from companion_v2.storage.models import OperationState
 from companion_v2.storage.repositories import OperationRepository
 from companion_v2.storage.versioned_records import owner_key
-from .planning_config import SCHEDULE_MODE_ORCHESTRATED, configured_weather_location, planning_values
+from .planning_config import (AUTOMATIC_SCHEDULE_MODES, SCHEDULE_MODE_ORCHESTRATED,
+                              configured_weather_location, planning_values)
 from .planning_inputs import capture, validate
 from . import planning_observation
 from .planning_output import INSTRUCTION, INTERVENTION_INSTRUCTION, MODE_INSTRUCTIONS, parse_output
@@ -46,6 +47,7 @@ class CalendarPlanning:
         self.committed = set()
         self.invocations = set()
         self.closed, self.cursor = False, 0
+        self.request_context = None
         self.legacy_contexts = {}
         self.registrations = (TaskRegistration(TaskDefinition(KIND, OWNER, "calendar.write", Lane.BACKGROUND,
             side_effect=SideEffect.LOCAL, binding=ProviderBinding(OWNER, "local", "1", "planning-1"),
@@ -312,9 +314,11 @@ class CalendarPlanning:
                 if not claimed:
                     return {"state": "already_attempted", "mode": mode,
                             "task_id": prior_task_id or identifier, "replayed": True}
+            shared_window = (self.request_context is not None
+                             and self.request_context.supports(context.scope))
             job = capture(self, context, instruction, mode, slot, occurrence,
                           weather=weather, weather_location=location, manual=manual, refresh=refresh,
-                          role_global=automatic)
+                          role_global=automatic and not shared_window)
             if intervention:
                 job["intervention"] = True
                 job["input_epoch"] = (expected_input_epoch if expected_input_epoch is not None
@@ -376,6 +380,8 @@ class CalendarPlanning:
         request = PromptRequest(trigger, job["instruction"], SealedForegroundContext(
             tuple(materials), (), ()),
             prompt_instruction, context.role_binding, output_format="calendar_planning", response_format="json_object")
+        if self.request_context is not None:
+            request = await self.request_context(request)
         completion = await self.gateway.generate(run, request)
         try:
             if completion.draft is None:
@@ -434,7 +440,7 @@ class CalendarPlanning:
             raise
 
     def opportunity(self, context, settings, at):
-        if settings.get("schedule_simulation_mode", SCHEDULE_MODE_ORCHESTRATED) != SCHEDULE_MODE_ORCHESTRATED:
+        if settings.get("schedule_simulation_mode", SCHEDULE_MODE_ORCHESTRATED) not in AUTOMATIC_SCHEDULE_MODES:
             return None
         local = at.astimezone(ZoneInfo(settings["planning_timezone"]))
         settings_token = self.app.role_state.planning_settings_token(context)
@@ -494,7 +500,7 @@ class CalendarPlanning:
             self.cursor = index + 1
             try:
                 settings = planning_values(self.app.role_state.settings(context)[0])
-                if (settings["schedule_simulation_mode"] != SCHEDULE_MODE_ORCHESTRATED
+                if (settings["schedule_simulation_mode"] not in AUTOMATIC_SCHEDULE_MODES
                         or not settings["planning_enabled"] or not settings["calendar_enabled"]
                         or self.app.state_maintenance.foreground_busy(context)):
                     continue
