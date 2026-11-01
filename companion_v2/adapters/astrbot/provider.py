@@ -532,8 +532,35 @@ class AstrBotTextProvider:
         structured = response_format(envelope.original)
         if structured is not None:
             estimated += len(encode(structured).encode("utf-8"))
-        if (estimated > self.maximum_input_estimate or type(envelope.max_output_tokens) is not int
+        host_managed = any(item.owner == "astrbot.conversation" and item.purpose == "recent_private_dialogue"
+                           for item in envelope.original.context.materials)
+        if (type(envelope.max_output_tokens) is not int
                 or not 1 <= envelope.max_output_tokens <= self.maximum_output_tokens):
+            raise TaskError("host_model_limit", "request exceeds its declared input/output profile")
+        limit = None
+        if host_managed:
+            from astrbot.core.agent.context.token_counter import EstimateTokenCounter
+            from astrbot.core.agent.message import Message
+            from astrbot.core.utils.llm_metadata import LLM_METADATAS
+
+            self._current()
+            native = self.native
+            limit = native.provider_config.get("max_context_tokens", 0)
+            if not _is_concrete_limit(limit):
+                metadata = LLM_METADATAS.get(envelope.model_override or native.get_model())
+                limit = metadata["limit"]["context"] if metadata else None
+            if _is_concrete_limit(limit):
+                # Reuse the host's counting policy on the final wire, including
+                # the complete task material, output contract and output budget.
+                messages = [Message.model_validate(item) for item in wire.messages]
+                if structured is not None:
+                    messages.append(Message(role="system", content=encode(structured)))
+                tokens = EstimateTokenCounter().count_tokens(messages) + envelope.max_output_tokens
+                if tokens > limit:
+                    raise TaskError("host_model_limit", "shared request exceeds the native model context window")
+        # Byte estimates remain conservative cost reservations. They are only
+        # a context-size fallback when no native model limit is available.
+        if not _is_concrete_limit(limit) and estimated > self.maximum_input_estimate:
             raise TaskError("host_model_limit", "request exceeds its declared input/output profile")
         return estimated
 

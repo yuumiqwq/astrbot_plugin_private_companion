@@ -18,6 +18,35 @@ REPORTED_USAGE = Amount(40, 90, input_tokens=30, cached_input_tokens=10, output_
 
 
 class NativeModelTests(NativeFixture, unittest.IsolatedAsyncioTestCase):
+    async def test_shared_native_history_uses_the_host_token_limit_and_keeps_cost_reservation(self):
+        self.native.provider.provider_config["max_context_tokens"] = 1048576
+        self.native_model = self.make_model()
+        envelope = await self.envelope()
+        history = [{"role": "user" if i % 2 == 0 else "assistant", "content": "A short message " * 7}
+                   for i in range(903)]
+        material = PromptMaterial("astrbot.conversation", "recent_private_dialogue", encode(history))
+        original = replace(envelope.original, output_format="calendar_planning",
+                           context=replace(envelope.original.context, materials=(material,)))
+        shared = replace(envelope, original=original)
+        estimated = build_wire(shared).input_estimate()
+        self.assertGreater(estimated, self.native_model.maximum_input_estimate)
+        reservation = self.native_model.reserve(shared)
+        self.assertGreaterEqual(reservation.tokens, estimated)
+        self.assertEqual(self.native.provider.client.state.calls, [])
+        with self.assertRaisesRegex(TaskError, "input/output profile"):
+            self.native_model.reserve(replace(shared, max_output_tokens=101))
+        with self.assertRaisesRegex(TaskError, "input/output profile"):
+            self.native_model.reserve(replace(shared, original=replace(original,
+                context=replace(original.context, materials=(replace(material, owner="other.history"),)))))
+        self.native.provider.provider_config["max_context_tokens"] = 1000
+        self.native_model = self.make_model()
+        with self.assertRaisesRegex(TaskError, "native model context window"):
+            self.native_model.reserve(shared)
+        self.native.provider.provider_config.pop("max_context_tokens")
+        self.native_model = self.make_model()
+        with self.assertRaisesRegex(TaskError, "input/output profile"):
+            self.native_model.reserve(shared)
+
     async def test_shared_host_dialogue_reaches_the_provider_as_native_messages(self):
         envelope = await self.envelope()
         history = [{"role": "user", "content": "A complete preset question"},
