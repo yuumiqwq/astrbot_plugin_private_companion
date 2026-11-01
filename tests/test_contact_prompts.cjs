@@ -229,3 +229,34 @@ test('父页面刷新模式时沿用缓存草稿，旧缓存模式不会覆盖�
   h.reply(h.requests.at(-1),{task:task()});await settle();
   assert.match(h.root.innerHTML,/陪伴草稿保留/);
 });
+
+test('模拟前确认当前作用域的已保存模式，并保留未保存提示词草稿',async()=>{
+  const h=harness(),simple=task();simple.prompt_assembly.current_mode='simple';
+  await h.boot(simple);h.edit('simple','保留未保存的简洁草稿');
+  const confirmed=h.page.confirmMode();await settle();
+  const request=h.requests.at(-1);assert.equal(request.method,'GET');assert.equal(request.body.layer,'window');
+  h.reply(request,{tasks:[task()]});assert.equal(await confirmed,'companion');
+  assert.equal(h.page.state.currentMode,'companion');assert.equal(h.modes.at(-1),'companion');
+  assert.equal(h.page.state.drafts.get('simple').text,'保留未保存的简洁草稿');
+  assert.equal(h.requests.filter(item=>item.method==='POST').length,0);
+});
+
+test('模拟确认等待正在保存的模式完成，再读取对应模式',async()=>{
+  const h=harness();await h.boot();
+  h.event('click','[data-prompt-mode]',{dataset:{promptMode:'simple'}});await settle();
+  const save=h.requests.at(-1),count=h.requests.length;
+  const confirmed=h.page.confirmMode();await settle();assert.equal(h.requests.length,count);
+  const simple=task();simple.prompt_assembly.current_mode='simple';
+  h.reply(save,{task:simple});await settle();
+  assert.equal(h.requests.at(-1).method,'GET');h.reply(h.requests.at(-1),{tasks:[simple]});
+  assert.equal(await confirmed,'simple');assert.equal(h.requests.filter(item=>item.method==='POST').length,1);
+});
+
+test('模式保存结果未知时阻止模拟确认，保留原操作供核对',async()=>{
+  const h=harness();await h.boot();
+  h.event('click','[data-prompt-mode]',{dataset:{promptMode:'simple'}});await settle();
+  h.requests.at(-1).reject(new Error('NetworkError'));await settle();
+  const count=h.requests.length;
+  await assert.rejects(h.page.confirmMode(),error=>error.code==='contact_prompt_mode_unconfirmed');
+  assert.equal(h.requests.length,count);assert.ok(h.page.state.modePending);
+});

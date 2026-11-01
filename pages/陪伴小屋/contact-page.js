@@ -199,6 +199,7 @@ window.CompanionContactPage = (() => {
     proactive_quiet_hours:"当前处于免打扰时段。", proactive_paused:"当前已暂停主动联系。",
     proactive_disabled:"主动联系总开关已关闭。", contact_automatic_disabled:"后台自动联系未开启。",
     model_task_unregistered:"请先登记主动联系模型。", host_not_running:"当前运行实例尚未启动。",
+    contact_prompt_mode_unconfirmed:"模式切换尚未确认，请先核对切换结果。",
     contact_model_profile_exceeded:"主动联系的上下文超过当前模型输入或输出上限。请减少历史长度，或在「模型与连接」换用上下文更大的模型。",
     model_estimation_failed:"当前模型无法接受这次主动联系的上下文长度；请减少历史长度或换用上下文更大的模型。",
     host_model_limit:"当前模型输入或输出上限不足；请减少历史长度或换用上下文更大的模型。",
@@ -902,15 +903,17 @@ window.CompanionContactPage = (() => {
     if (!visibleViews().some(([id]) => id === data.view)) data.view = "tests";
     render();
   }
-  async function loadPromptMode(ticket = version) {
+  async function loadPromptMode(ticket = version, required = false) {
     const endpoint = window.CompanionProduct?.role?.()?.model_api;
     if (!endpoint) return;
     const revision = data.promptModeRevision;
     try {
       const result = await api("GET", rel(endpoint), {layer:"window"});
       const mode = result.tasks?.find(task => task.kind === "proactive.compose")?.prompt_assembly?.current_mode;
+      if (!["simple","companion"].includes(mode)) throw problem("invalid_response");
       if (live(ticket) && data.promptModeRevision === revision) acceptPromptMode(mode);
-    } catch { /* 提示词编辑区保留读取和重试入口。 */ }
+      return mode;
+    } catch (error) { if (required) throw error; /* 提示词编辑区保留读取和重试入口。 */ }
   }
   function headMarkup() {
     const v = verdict();
@@ -2220,17 +2223,28 @@ window.CompanionContactPage = (() => {
     render();
   }
   async function runProactiveTest(id) {
-    const simple = id === "simple";
-    const mode = simple ? "simple" : "companion";
+    let simple = id === "simple";
+    let mode = simple ? "simple" : "companion";
     const item = TEST_INSTRUCTIONS.find(candidate => candidate.id === id);
     if ((!simple && !item) || mode !== data.promptMode || data.testBusy) return;
     const ticket = version;
     data.testBusy = id;
-    data.testResults[id] = null;
-    const synthetic = testUsesSynthetic(id);
-    notice("正在调用模型并生成消息分段…");
+    const confirmMode = window.CompanionContactPrompts?.confirmMode?.();
+    notice("正在核对模拟模式…");
     render();
     try {
+      const confirmedMode = confirmMode ? await confirmMode : await loadPromptMode(ticket,true);
+      if (!live(ticket)) return;
+      if (confirmedMode) {
+        mode = confirmedMode; simple = mode === "simple";
+        id = simple ? "simple" : id === "simple" ? data.promptTestId || "chat" : id;
+        acceptPromptMode(mode);
+      }
+      data.testBusy = id;
+      data.testResults[id] = null;
+      const synthetic = testUsesSynthetic(id);
+      notice("正在调用模型并生成消息分段…");
+      render();
       const purpose = id === "mobile_location" ? "environment" : id === "reaction_image" ? "chat" : id;
       const payload = simple ? {mode,simulation:true,confirm_delivery:false}
         : {mode,purpose, simulation:true, confirm_delivery:false, synthetic_event:synthetic,

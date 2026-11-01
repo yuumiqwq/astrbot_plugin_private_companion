@@ -141,6 +141,41 @@ test('返回模式与请求不符时不展示成功气泡',async()=>{
   assert.doesNotMatch(h.element.innerHTML,/错误模式结果|data-simulation-part=/);
 });
 
+test('旧简洁按钮运行前确认编辑器模式，按陪伴模式和当前契机模拟',async()=>{
+  const h=harness();await boot(h);
+  const {changeMode}=openPromptTests(h);changeMode('simple');
+  h.window.CompanionContactPrompts.confirmMode=async()=>'companion';
+  h.page.state.data.promptTestId='care';
+  runMessageTest(h,'simple');await settle();
+  const request=h.requests.at(-1);
+  assert.equal(request.values.mode,'companion');assert.equal(request.values.purpose,'care');
+  assert.equal(h.page.state.data.promptMode,'companion');
+  assert.equal((h.element.innerHTML.match(/data-test-run=/g)||[]).length,17);
+  h.reply(request,{mode:'companion',simulation:true,state:'passed',decision:'send',parts:['陪伴确认结果']});await settle();
+  assert.match(h.element.innerHTML,/陪伴确认结果/);assert.doesNotMatch(h.element.innerHTML,/data-simulation-mode="simple"/);
+});
+
+test('旧陪伴按钮确认简洁模式后只发送统一模拟字段',async()=>{
+  const h=harness();await boot(h);openPromptTests(h);
+  h.window.CompanionContactPrompts.confirmMode=async()=>'simple';
+  runMessageTest(h,'news');await settle();
+  const request=h.requests.at(-1);
+  assert.deepEqual(JSON.parse(JSON.stringify(request.values)),{mode:'simple',simulation:true,confirm_delivery:false});
+  assert.equal(h.page.state.data.promptMode,'simple');
+  h.reply(request,{mode:'simple',simulation:true,state:'passed',decision:'send',parts:['简洁确认结果']});await settle();
+  assert.match(h.element.innerHTML,/简洁确认结果/);assert.doesNotMatch(h.element.innerHTML,/data-simulation-mode="companion"/);
+});
+
+test('模式尚未确认时不提交模拟请求',async()=>{
+  const h=harness();await boot(h);openPromptTests(h);
+  const count=h.requests.length;
+  h.window.CompanionContactPrompts.confirmMode=async()=>{throw Object.assign(new Error('mode pending'),
+    {code:'contact_prompt_mode_unconfirmed',confirmed:true});};
+  runMessageTest(h,'chat');await settle();
+  assert.equal(h.requests.length,count);assert.equal(h.page.state.data.testBusy,'');
+  assert.match(h.element.innerHTML,/模式切换尚未确认/);
+});
+
 const baseSettings = () => ({
   enabled: true, automatic_enabled: true, quiet_enabled: true, quiet_start: '23:00', quiet_end: '07:00',
   quiet_timezone: 'Asia/Shanghai', proactive_intensity_preset: 'balanced',

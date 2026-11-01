@@ -132,7 +132,8 @@ window.CompanionContactPrompts = (() => {
     s.busy = "@mode"; s.modePending = payload; s.modeError = "";
     render();
     try {
-      const result = await api("POST",s.path + "/configure",payload);
+      s.modeRequest = api("POST",s.path + "/configure",payload);
+      const result = await s.modeRequest;
       if (!result.task || !["companion","simple"].includes(result.task.prompt_assembly?.current_mode)) throw new Error("invalid_response");
       s.modePending = null;
       acceptTask(s,result.task);
@@ -143,7 +144,21 @@ window.CompanionContactPrompts = (() => {
         s.modeError = messages[code] || "模式切换失败，提示词草稿已保留。";
         if (code === "configuration_revision_conflict") await load(s);
       } else s.modeError = "模式切换结果尚未确认，请核对原操作。";
-    } finally { s.busy = ""; if (current(ticket,s)) render(); }
+    } finally { s.modeRequest = null; s.busy = ""; if (current(ticket,s)) render(); }
+  }
+  async function confirmMode() {
+    const s = state;
+    if (!s?.path) return null;
+    if (s.modeRequest) await s.modeRequest.catch(() => {});
+    if (s.modePending || s.busy === "@mode") throw Object.assign(new Error("contact_prompt_mode_unconfirmed"),
+      {code:"contact_prompt_mode_unconfirmed",confirmed:true});
+    const result = await api("GET",s.path,{layer:s.layer});
+    const task = result.tasks?.find(item => item.kind === KIND);
+    if (!task || !["simple","companion"].includes(task.prompt_assembly?.current_mode)) throw new Error("invalid_response");
+    if (state !== s) throw Object.assign(new Error("contact_recipient_changed"),{code:"contact_recipient_changed",confirmed:true});
+    acceptTask(s,task);
+    render();
+    return promptMode(s);
   }
   function selectedPurpose() {
     const variant = state.task?.prompt_assembly?.diagnostic_variants?.[state.selected];
@@ -201,7 +216,7 @@ window.CompanionContactPrompts = (() => {
     const conditional = (assembly?.conditional_sections || state.task?.prompt_sections?.map(item => item.key) || [])
       .filter(key => !excluded.has(key) && !key.startsWith("purpose.") && !["simple","simple_output","simple_terminal"].includes(key));
     const order = mode === "simple" ? (assembly?.simple_order || [])
-      .filter(item => !["output_contract","terminal_prompt_guard"].includes(item.key)) : (assembly?.order || []);
+      .filter(item => !["output_contract","terminal_prompt_guard"].includes(item.key)) : (assembly?.companion_order || assembly?.order || []);
     root.innerHTML = `<section class="ct-prompt-panel" aria-label="主动消息提示词">
       <header class="ct-prompt-header"><h3>主动消息提示词</h3><span class="ct-prompt-draft-count">${[...state.drafts.values()].filter(d => d.dirty).length} 项未保存</span></header>
       <div class="ct-prompt-modes" role="group" aria-label="主动提示模式">${[["companion","陪伴插件"],["simple","简洁"]].map(([key,label]) => `<button type="button" data-prompt-mode="${key}" aria-pressed="${mode === key}"${state.busy || state.modePending || state.loading || !assembly?.mode?.edit_token ? " disabled" : ""}>${label}</button>`).join("")}</div>
@@ -318,5 +333,5 @@ window.CompanionContactPrompts = (() => {
     root.addEventListener("change",changed); root.addEventListener("toggle",toggled,true);
     render(); if (!state.task && !state.loading) void load();
   }
-  return {mount,unmount,select,get state(){return state;}};
+  return {mount,unmount,select,confirmMode,get state(){return state;}};
 })();
