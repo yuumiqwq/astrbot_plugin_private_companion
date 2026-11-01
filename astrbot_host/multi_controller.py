@@ -729,6 +729,7 @@ class AstrBotMultiController:
             self.context, self.session.bridge, self.settings.common.provider_id)
         self.session.application.proactive.output_segments = self.session.application.proactive.request_context.split_reply
         self.session.application.calendar_planning.request_context = self.session.application.proactive.request_context
+        self.session.application.gateway.request_context = self.session.application.proactive.request_context
 
     def _idle(self):
         if self.session is not None and self.session.application.state not in ("new", "stopped"):

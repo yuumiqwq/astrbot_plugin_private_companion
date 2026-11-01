@@ -22,6 +22,7 @@ class Request:
     response_schema_json: str = '{"type":"object"}'
     output_format: str = ""
     proactive_mode: str = "companion"
+    host_provider_id: str | None = None
 
 
 class SharedHistoryTests(unittest.IsolatedAsyncioTestCase):
@@ -129,6 +130,16 @@ class SharedHistoryTests(unittest.IsolatedAsyncioTestCase):
         settings["regex"] = r".+"
         self.assertEqual(native_newline_reply_instruction(self.native, "qq:FriendMessage:peer"), "")
 
+    async def test_background_preparation_uses_the_current_native_chat_provider(self):
+        self.native.get_current_chat_provider_id = AsyncMock(return_value="current-chat-provider")
+        provider = object()
+        self.native.get_provider_by_id = Mock(return_value=provider)
+        result = await self.loader(self.request)
+        self.native.get_current_chat_provider_id.assert_awaited_once_with("qq:FriendMessage:peer")
+        self.native.get_provider_by_id.assert_called_once_with("current-chat-provider")
+        self.assertEqual(result.host_provider_id, "current-chat-provider")
+        self.assertIs(self.native.prepare_session_request.await_args.args[1], provider)
+
     async def test_simple_json_keeps_shared_history_and_uses_message_send_schema(self):
         from companion_v2.proactive.simple_prompts import parse_contact_output
 
@@ -161,6 +172,7 @@ class SharedHistoryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result.role_instruction, "current persona and examples")
         self.assertEqual(result.role_guard_instruction, result.role_instruction)
+        self.assertEqual(result.host_provider_id, "chat")
         self.assertFalse(
             any(
                 item.owner == "conversation.private_history"

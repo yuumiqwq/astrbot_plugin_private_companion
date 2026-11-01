@@ -310,6 +310,7 @@ class PromptRequest:
     role_guard_instruction: str | None = None
     prompt_overrides: tuple[tuple[str, str], ...] = ()
     proactive_mode: str = "companion"
+    host_provider_id: str | None = None
     user_input_image_sources: tuple[SourceRef, ...] = ()
 
     @property
@@ -317,6 +318,10 @@ class PromptRequest:
         return self.role_guard_instruction if self.role_guard_instruction is not None else self.role_instruction
 
     def __post_init__(self) -> None:
+        if self.host_provider_id is not None and (
+                type(self.host_provider_id) is not str or not self.host_provider_id.strip()
+                or len(self.host_provider_id) > 256):
+            raise ReferenceValidationError("shared host provider requires its original identifier")
         if (type(self.prompt_overrides) is not tuple
                 or self.prompt_overrides and self.output_format != "proactive_contact"
                 or any(type(item) is not tuple or len(item) != 2

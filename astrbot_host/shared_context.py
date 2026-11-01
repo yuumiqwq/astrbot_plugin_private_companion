@@ -113,7 +113,11 @@ class AstrBotSharedContext:
         )
         if conversation_id and conversation is None:
             raise ValueError("The selected AstrBot conversation is unavailable")
-        provider = self.context.get_provider_by_id(self.provider_id)
+        provider_id = self.provider_id
+        selected_provider = getattr(self.context, "get_current_chat_provider_id", None)
+        if callable(selected_provider):
+            provider_id = await selected_provider(umo)
+        provider = self.context.get_provider_by_id(provider_id)
         if provider is None:
             raise ValueError("The shared AstrBot provider is unavailable")
 
@@ -155,6 +159,8 @@ class AstrBotSharedContext:
             native_request,
             response_instruction=instruction
             + "\n"
+            + "\n".join(text for _, text in getattr(request, "prompt_overrides", ()))
+            + "\n"
             + (request.response_schema_json or ""),
         )
         history = [
@@ -172,5 +178,6 @@ class AstrBotSharedContext:
             instruction=instruction,
             role_instruction=persona.get("system_prompt", persona["prompt"]),
             role_guard_instruction=persona["prompt"],
+            host_provider_id=provider_id,
             context=replace(request.context, materials=(*materials, material)),
         )

@@ -22,6 +22,7 @@ from .models import MAX_TOOL_CATALOG, Amount, ModelCompletion, ProviderResponse,
 from .refusal import matches_refusal_text
 from .routing import ModelRouter
 from .response_diagnostics import checked_response_diagnostics
+from .shared_role_context import has_host_history, shares_role_context
 
 
 logger = getLogger(__name__)
@@ -79,13 +80,23 @@ class LocalModelGateway:
         self.tasks = tasks
         self.runtime = tasks.runtime
         self.role_reference = TaskRoleReference(self.runtime)
+        self.request_context = None
 
     async def generate(self, run: TaskRun, request: PromptRequest) -> ModelCompletion:
+        request = await self.prepare_request(run, request)
         session = self.open_session(run, request)
         # open_session may replace the captured persona with the task role
         # reference. Continue with the exact request frozen into the plan so
         # ModelSession's first-round context check compares like with like.
         return await session.generate(session.plan.envelope.original)
+
+    async def prepare_request(self, run, request):
+        profile = self.router.profiles.get(run.task.spec.kind)
+        if (self.request_context is not None and profile is not None
+                and shares_role_context(profile, request) and not has_host_history(request)):
+            request = await self.request_context(request)
+            run.validate()
+        return request
 
     def _task_role_request(self, run: TaskRun, request: PromptRequest) -> PromptRequest:
         """Use the self page as the task role, with the captured persona as fallback."""
@@ -441,6 +452,7 @@ class ModelSession:
                 ("host_role_instruction", (request.host_role_instruction, original.host_role_instruction)),
                 ("prompt_overrides", (request.prompt_overrides, original.prompt_overrides)),
                 ("proactive_mode", (request.proactive_mode, original.proactive_mode)),
+                ("host_provider_id", (request.host_provider_id, original.host_provider_id)),
                 ("context.deferred", (request.context.deferred, original.context.deferred)),
                 ("context.unavailable", (request.context.unavailable, original.context.unavailable)),
                 ("output_format", (request.output_format, original.output_format)),

@@ -6,12 +6,14 @@ from companion_v2.execution.models import encode
 from companion_v2.execution.models import TaskError
 from companion_v2.foundation.refs import ScopeKind
 from companion_v2.model_gateway.replacement_rules import checked_rules
+from companion_v2.model_gateway.shared_role_context import shares_role_context
 
 
 def conversation_provider_resolver(native_context):
     """Follow AstrBot's per-session model for replies and proactive dialogue."""
     def resolve(context, profile):
-        if profile.kind not in ("conversation.reply", "conversation.poke_reply", "proactive.compose"):
+        dialogue = profile.kind in ("conversation.reply", "conversation.poke_reply", "proactive.compose")
+        if not dialogue and not shares_role_context(profile):
             return None
         scope = context.scope
         message_type = {ScopeKind.PRIVATE: "FriendMessage", ScopeKind.GROUP: "GroupMessage"}.get(scope.kind)
@@ -23,6 +25,10 @@ def conversation_provider_resolver(native_context):
         if not callable(getter):
             return None
         identifier = f"{scope.platform}:{message_type}:{scope.native_scope_id}"
+        if not dialogue:
+            shared = getattr(getattr(native_context, "conversation_manager", None), "shared_history", None)
+            if scope.kind is not ScopeKind.PRIVATE or shared is None or shared.settings(identifier) is None:
+                return None
         provider = getter(identifier)
         if provider is None:
             raise TaskError("model_provider_unavailable", "AstrBot has no model selected for this conversation")

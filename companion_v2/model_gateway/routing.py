@@ -141,6 +141,8 @@ class ModelRouter:
                 providers)
 
     def resolve(self, run: TaskRun, request: PromptRequest, *, provider_id=None) -> ResolvedModelPlan:
+        if provider_id is None and request.host_provider_id is not None:
+            provider_id = request.host_provider_id
         task = run.validate()
         context = task.spec.context
         profile = self.profiles.get(task.spec.kind)
