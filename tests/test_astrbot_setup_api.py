@@ -161,13 +161,13 @@ class AstrBotSetupFlowTests(unittest.IsolatedAsyncioTestCase):
         api.simulation_status={"purposes":{"environment":{"allowed":True,"reason":None}}}
         return api,app,context,candidate
 
-    async def call_simulation_fixture(self, api, fields, *, raw=False):
+    async def call_simulation_fixture(self, api, fields, *, raw=False, simulation_error=None):
         payload=fields if raw else {"simulation":True,"confirm_delivery":False,**fields}
         request=NS(username="administrator",query={},body=AsyncMock(return_value=json.dumps(payload).encode()))
         manager=NS(status=lambda operator:Outcome.success(api.simulation_status))
         preview={"state":"passed","decision":"send","simulation":True,"parts":["第一句","第二句"],
                  "stages":[{"stage":"output_parsing","state":"passed"}]}
-        simulator=AsyncMock(return_value=preview)
+        simulator=AsyncMock(return_value=preview, side_effect=simulation_error)
         with patch("astrbot_host.setup_api.request",request), \
              patch("astrbot_host.setup_api.ContactManagement",return_value=manager), \
              patch("astrbot_host.setup_api.dashboard_operator",return_value=object()), \
@@ -260,6 +260,20 @@ class AstrBotSetupFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["data"]["parts"], [])
         self.assertTrue(response["data"]["simulation"])
         simulator.assert_not_awaited()
+        app.proactive.contact.assert_not_awaited()
+
+    async def test_simulation_parse_failure_only_reports_stages_that_ran(self):
+        api, app, _, candidate = self.simulation_api_fixture()
+        candidate["stages"] = [{"stage":"weather_fetch", "state":"passed"}]
+        response, simulator = await self.call_simulation_fixture(api, {"purpose":"environment"},
+            simulation_error=TaskError("simulation_output_invalid", "invalid response"))
+        result = response["data"]
+        self.assertEqual(result["stage"], "output_parsing")
+        self.assertEqual(result["stages"][-2:], [
+            {"stage":"model_generation", "state":"passed"},
+            {"stage":"output_parsing", "state":"failed"}])
+        self.assertNotIn("news_fetch", {item["stage"] for item in result["stages"]})
+        self.assertNotIn("delivery", {item["stage"] for item in result["stages"]})
         app.proactive.contact.assert_not_awaited()
 
 

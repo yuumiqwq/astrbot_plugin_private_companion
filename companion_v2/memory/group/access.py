@@ -31,6 +31,10 @@ class GroupMemoryAccess:
     def check(self, context, capability="group.memory.read", *, at=None):
         if capability not in CAPABILITIES or context.scope.kind is not ScopeKind.GROUP:
             raise TaskError("group_memory_context_required", "group memory requires its collective group context")
+        memory_context = self.messages.memory_context
+        if (memory_context is not None
+                and not memory_context.memory.writer.access.policy_for(context).enabled):
+            raise TaskError("memory_disabled", "memory is disabled in this runtime")
         at = at or self.tasks.now()
         self.messages.group_context.authorize(context, at)
         require(self.tasks.identity.authorize(context.actor, scope=context.scope, capability=capability, observed_at=at))

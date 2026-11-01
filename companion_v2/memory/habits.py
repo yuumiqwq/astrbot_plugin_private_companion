@@ -240,6 +240,8 @@ def habit_material(memory, context, *, at=None):
     if memory is None or context.scope.kind is not ScopeKind.PRIVATE or memory.settings is None:
         return None
     try:
+        if not memory.writer.access.policy_for(context).enabled:
+            return None
         settings = habit_settings(memory.settings.read(context)[0])
     except (TaskError, ValueError, KeyError, AttributeError):
         return None
@@ -290,6 +292,8 @@ def habit_capture(memory, context, current_text):
     if memory is None or context.scope.kind is not ScopeKind.PRIVATE or memory.settings is None:
         return None
     try:
+        if not memory.writer.access.policy_for(context).enabled:
+            return None
         settings = habit_settings(memory.settings.read(context)[0])
     except (TaskError, ValueError, KeyError, AttributeError):
         return None
@@ -339,6 +343,8 @@ class HabitProfile:
         if self.settings is None or context.scope.kind is not ScopeKind.PRIVATE:
             return False
         try:
+            if not self.memory.writer.access.policy_for(context).enabled:
+                return False
             return bool(habit_settings(self.settings.read(context)[0])["habit_learning_enabled"])
         except (TaskError, ValueError, KeyError, AttributeError):
             return False
@@ -348,6 +354,8 @@ class HabitProfile:
         return self.observe if self.available(context) else None
 
     def observe(self, context, event, connection):
+        if not self.available(context):
+            return
         settings = habit_settings(self.settings.read(context)[0])
         # Read through the memory access boundary: the audience and any forgetting
         # request are rechecked here, and the source text is never taken from the

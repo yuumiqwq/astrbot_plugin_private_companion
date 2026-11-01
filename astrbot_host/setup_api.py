@@ -944,8 +944,10 @@ class SetupWebAPI:
 
     async def proactive_diagnostic(self):
         async with self._test_lock:
+            stages = []
             try:
                 username = self._admin()
+                stages.append({"stage": "authorization", "state": "passed"})
                 data = await self._body({"purpose", "confirm_delivery", "simulation"},
                     optional={"variant", "synthetic_event", "diagnostic_image"})
                 purpose = data["purpose"]
@@ -967,6 +969,7 @@ class SetupWebAPI:
                     raise TaskError("contact_diagnostic_variant_invalid",
                                     "choose a supported environment source for this proactive purpose")
                 fallback_target = await self._proactive_diagnostic_target()
+                stages.append({"stage": "binding", "state": "passed"})
                 started = datetime.now(timezone.utc).isoformat()
                 attempt_id = uuid4().hex
                 existing = self.controller.session or self.controller.last_session
@@ -977,10 +980,12 @@ class SetupWebAPI:
                 session, context, instruction = await self._proactive_diagnostic_context(fallback_target)
                 if context.scope.kind is not ScopeKind.PRIVATE:
                     raise TaskError("setup_private_window_required", "the core administrator target must be private")
+                stages.append({"stage": "runtime", "state": "passed"})
 
                 operator = dashboard_operator(self.controller.runtime, username, at=self.controller.now())
                 manager = ContactManagement(session.application, context)
                 status = require(manager.status(operator))
+                stages.append({"stage": "settings", "state": "passed"})
                 purpose_status = status["purposes"].get(purpose)
                 test_policy_override = bool(purpose_status and purpose_status.get("reason") in
                     ("proactive_disabled", "proactive_paused", "proactive_quiet_hours")
@@ -988,6 +993,7 @@ class SetupWebAPI:
                 if not purpose_status or (not purpose_status["allowed"] and not test_policy_override):
                     code = purpose_status["reason"] if purpose_status else "contact_purpose_unavailable"
                     raise TaskError(code, "the selected proactive purpose is not currently authorized")
+                stages.append({"stage": "purpose", "state": "passed"})
 
                 now = session.application.now()
                 schedule = getattr(session.application, "contact_schedule", None)
@@ -1046,12 +1052,10 @@ class SetupWebAPI:
                         purpose, route_hint, failure_stage, error.code, str(error),
                         stages=stages, route=route_hint)))
                 from companion_v2.proactive.simulation import simulate_contact
-                preview = await simulate_contact(session.application, context, candidate,
-                    attempt_id=attempt_id, diagnostic_image=diagnostic_image)
-                stages = [{"stage": name, "state": "passed"} for name in
-                          ("authorization", "binding", "runtime", "settings", "purpose")]
                 stages.extend(candidate.get("stages", []))
                 stages.append({"stage": "trusted_candidate", "state": "passed"})
+                preview = await simulate_contact(session.application, context, candidate,
+                    attempt_id=attempt_id, diagnostic_image=diagnostic_image)
                 return self._response(Outcome.success({**preview,
                     "purpose": purpose, "purpose_label": PURPOSES[purpose],
                     "route": candidate["route"], "variant": candidate["route"],
@@ -1063,9 +1067,12 @@ class SetupWebAPI:
                     "stages": [*stages, *preview["stages"]], "replay_allowed": False}))
             except TaskError as error:
                 failure_stage = PROACTIVE_TEST_STAGE_BY_CODE.get(error.code, "execution")
+                if failure_stage == "output_parsing":
+                    stages.append({"stage": "model_generation", "state": "passed"})
+                stages.append({"stage": failure_stage, "state": "failed"})
                 return self._response(Outcome.success(self._diagnostic_failure(
                     data.get("purpose") if "data" in locals() and isinstance(data, dict) else None,
-                    None, failure_stage, error.code, str(error))))
+                    None, failure_stage, error.code, str(error), stages=stages)))
             except (ValueError, TypeError, KeyError, OSError, UnicodeError) as error:
                 return self._response(Outcome.success(self._diagnostic_failure(
                     None, None, "request", "proactive_test_failed", f"{type(error).__name__}: {error}")))

@@ -19,7 +19,7 @@ from companion_v2.foundation.refs import ScopeKind
 from companion_v2.identity_policy.group_audience import group_audience
 from companion_v2.memory.configuration import configuration_fields as memory_fields
 from companion_v2.memory.habits import (DEFAULTS, GUIDANCE, KIND, LIMITS, MEAL_GUIDANCE, habit_material,
-                                        habit_settings, classify_message, natural_line,
+                                        habit_capture, habit_settings, classify_message, natural_line,
                                         qualified_patterns, empty_document, retain_patterns)
 from tests.test_host_application import HostFixture
 from tests.test_management_access import NOW
@@ -240,6 +240,29 @@ class HabitProfileTests(HostFixture, unittest.IsolatedAsyncioTestCase):
         context = self.context(app, batch)
         self.assertIsNone(habit_material(app.memory, context))
         self.assertFalse(app.messages.habits.available(context))
+
+    async def test_memory_master_switch_stops_habit_reads_and_previously_captured_observers(self):
+        host = await self.start()
+        app = host.application
+        for index in range(3):
+            batch = await self.say(app, host, "我还没吃饭，晚点再说", days=0 if index == 0 else 1)
+        context = self.context(app, batch)
+        self.assertIsNotNone(habit_material(app.memory, context))
+        observer = app.messages.habits.intake_observer(context)
+        self.assertIsNotNone(observer)
+        stored = tuple(self.view(app)[0])
+        self._set(app, "memory.enabled", False)
+        self.assertIsNone(habit_material(app.memory, context))
+        self.assertIsNone(habit_capture(app.memory, context, "在吗"))
+        self.assertFalse(app.messages.habits.available(context))
+        self.assertIsNone(app.messages.habits.intake_observer(context))
+        with app.runtime.transaction() as connection:
+            observer(context, self.next_event("我还没吃饭，晚点再说"), connection)
+        batch = await self.say(app, host, "普通聊天仍可继续")
+        self.assertFalse(any(item.purpose == "current_user_habits" for item in self.materials()))
+        self.assertEqual(tuple(self.view(app)[0]), stored)
+        self._set(app, "memory.enabled", True)
+        self.assertIsNotNone(habit_material(app.memory, self.context(app, batch)))
 
     async def test_the_food_switch_only_removes_the_meal_material(self):
         host = await self.start()

@@ -6,10 +6,12 @@ import unittest
 from unittest.mock import patch
 
 from astrbot_host.group_authority import GroupAuthority
+from astrbot_host.management_identity import dashboard_operator
 from companion_v2.adapters.astrbot.model_wire import tool_alias
 from companion_v2.execution.models import TaskContext, TaskError, encode
 from companion_v2.memory.group.access import owner_key
 from companion_v2.memory.group.service import KIND
+from companion_v2.memory.management import MemoryManagement
 from tests.group_host_support import GroupFixture, group_config
 from tests.native_adapter_support import completion, final_text
 from tests.staging_bootstrap_support import wait_for_batch
@@ -65,6 +67,38 @@ class GroupMemoryTests(GroupFixture, unittest.IsolatedAsyncioTestCase):
 
     def materials(self, context, batch):
         return self.app.messages._request(self.app.messages.batch(batch), context, self.clock.now()).context.materials
+
+    async def test_memory_master_switch_blocks_group_use_and_keeps_archive_and_chat(self):
+        await self.start_host()
+        context, first, receipt = await self.save()
+        snapshot = self.memory.context.capture(context, first)
+        records = [tuple(row) for row in self.app.runtime.read_all(
+            "SELECT * FROM memory_views WHERE kind = ?", (KIND,))]
+        operator = dashboard_operator(self.app.runtime, "admin", at=self.clock.now())
+        manager = MemoryManagement(self.app.memory, operator)
+        settings = manager.settings(context).unwrap()
+        manager.patch_settings(context, operation_key="disable-group-memory",
+            expected_edit_token=settings["edit_token"], changes={"memory.enabled": False}).unwrap()
+        self.assertEqual(self.app.tools.group_memory.catalog_for(context), ())
+        for access in (
+            lambda: self.memory.read(context, receipt["memory_id"], 1),
+            lambda: self.memory.query(context),
+            lambda: self.memory.context.contributions(snapshot, context, first),
+            lambda: self.memory.change(context, first, "disabled-write", action="remember",
+                input_handle="group-input-1", statement="不能继续写入"),
+        ):
+            with self.assertRaises(TaskError) as caught:
+                access()
+            self.assertEqual(caught.exception.code, "memory_disabled")
+        current, batch = await self.receive("普通群聊仍可继续", sender="201")
+        self.assertEqual(self.app.messages.batch(batch)["state"], "ready")
+        self.assertFalse(any(material.owner == "memory.group" for material in self.materials(current, batch)))
+        self.assertEqual([tuple(row) for row in self.app.runtime.read_all(
+            "SELECT * FROM memory_views WHERE kind = ?", (KIND,))], records)
+        settings = manager.settings(context).unwrap()
+        manager.patch_settings(context, operation_key="enable-group-memory",
+            expected_edit_token=settings["edit_token"], changes={"memory.enabled": True}).unwrap()
+        self.assertEqual(self.memory.query(current)["items"][0]["memory_id"], receipt["memory_id"])
 
     async def test_member_statement_is_shared_and_grounded_without_private_source_access(self):
         await self.start_host()
