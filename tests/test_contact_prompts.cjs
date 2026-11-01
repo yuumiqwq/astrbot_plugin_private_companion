@@ -153,3 +153,12 @@ test('提示词文本转义后展示，不能结束textarea插入页面节点',a
   const h=harness();await h.boot(value);assert.doesNotMatch(h.root.innerHTML,/<img src=x/);
   assert.match(h.root.innerHTML,/&lt;\/textarea&gt;&lt;img/);
 });
+
+test('共享表达设置的实际继承文本和来源保持可见',async()=>{
+  const value=task();const shared=section('length','当前表达页的实际文本');
+  shared.field.source='presentation';shared.field.inherited_source='presentation';shared.field.inherited_value='当前表达页的实际文本';
+  value.prompt_sections=value.prompt_sections.filter(s=>s.key!=='length').concat(shared);
+  const h=harness();await h.boot(value);assert.match(h.root.innerHTML,/当前表达页的实际文本/);
+  assert.match(h.root.innerHTML,/data-prompt-state>表达设置<\/span>/);
+  h.action('inherit','length');assert.equal(h.page.state.drafts.get('length').text,'当前表达页的实际文本');
+});

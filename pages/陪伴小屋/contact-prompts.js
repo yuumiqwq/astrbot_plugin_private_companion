@@ -21,7 +21,7 @@ window.CompanionContactPrompts = (() => {
     staging_host_terminated:"插件已停止，请重新读取。",
   };
   const e = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-  const sourceLabel = source => ({default:"插件默认",installation:"全局设置",role:"角色默认",window:"当前窗口",relationship:"联系偏好"}[source] || "上级设置");
+  const sourceLabel = source => ({default:"插件默认",installation:"全局设置",role:"角色默认",window:"当前窗口",relationship:"联系偏好",presentation:"表达设置"}[source] || "上级设置");
   let root = null, state = null, options = null, version = 0;
   function current(ticket, s) { return state === s && root?.isConnected; }
   function sectionOf(s, key) {
