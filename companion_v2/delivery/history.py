@@ -108,6 +108,10 @@ class BackgroundHistory:
                 or self.reference(row) != ref or datetime.fromisoformat(row["delivered_at"]) > at):
             raise TaskError("delivery_history_changed", "history requires its original confirmed delivery")
         request = DeliveryRequest.restore(row["request_json"])
+        if request.owner == "proactive.contact" and self.runtime.read_one(
+                "SELECT 1 FROM proactive_contacts WHERE contact_id = ? "
+                "AND json_extract(record_json, '$.administrator_test') = 1", (request.source_ref,)):
+            raise TaskError("diagnostic_history_excluded", "message diagnostics are not conversation history")
         if self.verify_platform_message is not None:
             self.verify_platform_message(request.context.scope, row["platform_ref"])
         owner = self.delivery.owners.get(request.owner)

@@ -156,10 +156,12 @@ PROACTIVE_TEST_STAGE_ORDER = (
     "authorization", "binding", "runtime", "settings", "purpose", "news_fetch", "weather_fetch",
     "screen_capture", "screen_interpretation", "mobile_location_fetch", "image_attachment", "trusted_candidate",
     "attempt_budget", "delivery_budget",
-    "model_route", "model_generation", "persona_review", "delivery", "receipt",
+    "model_route", "model_generation", "output_parsing", "segmentation", "persona_review", "delivery", "receipt",
 )
 
 PROACTIVE_TEST_STAGE_BY_CODE = {
+    "simulation_output_missing": "model_generation",
+    "simulation_output_invalid": "output_parsing",
     "dashboard_identity_required": "authorization",
     "unbound_identity": "authorization",
     "binding_revoked": "authorization",
@@ -220,9 +222,9 @@ class SetupWebAPI:
             (PREFIX + "/host/start", self.reconnect_host, ["POST"], "Reconnect a completed Companion V2 setup"),
             (PREFIX + "/prepare", self.prepare, ["POST"], "Prepare the confirmed Companion V2 profile"),
             (PREFIX + "/complete", self.complete, ["POST"], "Record a completed Companion V2 setup section"),
-            (PREFIX + "/proactive-test", self.proactive_test, ["POST"], "Run a one-time proactive contact through the V2 contact and delivery pipeline"),
+            (PREFIX + "/proactive-test", self.proactive_test, ["POST"], "Retired real-send test endpoint"),
             (PREFIX + "/proactive-test/status", self.proactive_test_status, ["GET"], "Read the existing proactive test receipt without host discovery"),
-            (PREFIX + "/proactive-diagnostic", self.proactive_diagnostic, ["POST"], "Run a confirmed purpose-specific proactive diagnostic to the core administrator"),
+            (PREFIX + "/proactive-diagnostic", self.proactive_diagnostic, ["POST"], "Simulate a purpose-specific message without platform delivery"),
             (PREFIX + "/proactive-test/confirm", self.confirm_proactive_test, ["POST"], "Record administrator confirmation of the existing test message"),
         ]
 
@@ -933,62 +935,27 @@ class SetupWebAPI:
                 return self._error("setup_test_confirmation_invalid", "confirm receipt of the existing test message")
 
     async def proactive_test(self):
-        async with self._test_lock:
-            try:
-                username = self._admin()
-                data = await self._body({"enable_proactive"})
-                if type(data["enable_proactive"]) is not bool or not data["enable_proactive"]:
-                    raise TaskError("setup_proactive_opt_in_required",
-                                    "enable private proactive contact before starting its one-time test")
-                saved = self.progress.read()
-                if saved["ready"]:
-                    return self._response(Outcome.success({"state": saved["proactive_test"]["state"], "ready": True,
-                                                           "replay_allowed": False}))
-                receipt = saved["proactive_test"]
-                if receipt and receipt["state"] == "started" and self._test_task is not None and not self._test_task.done():
-                    return self._response(Outcome.success({"state": "started", "ready": False,
-                                                           "replay_allowed": False}))
-                if receipt is not None and receipt["state"] not in ("failed",):
-                    raise TaskError("setup_test_non_replayable",
-                                    "the proactive test already started; its result cannot be replayed")
-                active = await self.controller.start()
-                if active.failure is not None:
-                    raise TaskError(active.failure.code, active.failure.reason)
-                started = datetime.now(timezone.utc).isoformat()
-                attempt_id = uuid4().hex
-                try:
-                    self.progress.begin_proactive_test(attempt_id=attempt_id, started_at=started)
-                except SetupStepsIncomplete as error:
-                    # "The guide is not finished" and "this attempt already ran and
-                    # cannot be replayed" have nothing in common. Collapsing both
-                    # into setup_test_non_replayable told the operator to hunt a
-                    # replay problem while proactive_test was still null, i.e. while
-                    # no attempt had ever existed.
-                    raise TaskError("setup_steps_incomplete", str(error)) from error
-                except ValueError as error:
-                    raise TaskError("setup_test_non_replayable", str(error)) from error
-                self._test_task = asyncio.create_task(self._execute_proactive_test(username, attempt_id),
-                                                       name="companion-v2-setup-proactive-test")
-                return self._response(Outcome.success({"state": "started", "attempt_id": attempt_id,
-                                                       "ready": False, "replay_allowed": False}))
-            except TaskError as error:
-                return self._error(error.code, str(error))
-            except (ValueError, TypeError, KeyError, OSError, UnicodeError):
-                return self._error("setup_test_failed", "the active message test could not be started")
+        # Older setup pages must not retain an alternate real-send test path.
+        try:
+            self._admin()
+            return self._error("proactive_simulation_required", "use the message simulation endpoint")
+        except TaskError as error:
+            return self._error(error.code, str(error))
 
     async def proactive_diagnostic(self):
         async with self._test_lock:
             try:
                 username = self._admin()
-                data = await self._body({"purpose", "confirm_delivery"},
+                data = await self._body({"purpose", "confirm_delivery", "simulation"},
                     optional={"variant", "synthetic_event", "diagnostic_image"})
                 purpose = data["purpose"]
                 variant = data.get("variant")
                 synthetic_event = data.get("synthetic_event", False)
                 diagnostic_image = data.get("diagnostic_image", False)
-                if type(purpose) is not str or purpose not in PURPOSES or data["confirm_delivery"] is not True:
+                if (type(purpose) is not str or purpose not in PURPOSES or data["confirm_delivery"] is not False
+                        or data["simulation"] is not True):
                     raise TaskError("proactive_test_confirmation_required",
-                                    "choose one proactive purpose and confirm delivery to the core administrator")
+                                    "choose one purpose with simulation enabled and delivery disabled")
                 if type(synthetic_event) is not bool:
                     raise TaskError("proactive_test_confirmation_required", "synthetic_event must be an explicit boolean")
                 if type(diagnostic_image) is not bool or (diagnostic_image and
@@ -1078,116 +1045,22 @@ class SetupWebAPI:
                     return self._response(Outcome.success(self._diagnostic_failure(
                         purpose, route_hint, failure_stage, error.code, str(error),
                         stages=stages, route=route_hint)))
-                opportunity, intents = candidate["opportunity"], candidate["intents"]
-                route = candidate["route"]
-                label = PURPOSES[purpose]
-                result = await session.application.proactive.contact(context, opportunity, intents,
-                    role_instruction=candidate["role_instruction"], selection_seed=attempt_id,
-                    administrator_test=True, diagnostic_source_backed=not synthetic_event,
-                    diagnostic_origin=candidate["diagnostic_origin"],
-                    diagnostic_image_intent=("适合轻松、友好、自然日常互动的表情图片；不适合严肃、悲伤、冲突或边界语境。"
-                                             if diagnostic_image else None))
-                if result.failure is not None:
-                    failure = result.failure
-                    failure_stage = PROACTIVE_TEST_FAILURE_LABELS.get(
-                        failure.code, ("contact_admission", "主动联系准入检查失败"))[0]
-                    stages = [{"stage": name, "state": "passed"} for name in
-                        ("authorization", "binding", "runtime", "settings", "purpose")]
-                    stages.extend(candidate.get("stages", []))
-                    stages.append({"stage": "trusted_candidate", "state": "passed"})
-                    stages.append({"stage": failure_stage, "state": "failed"})
-                    budget_usage = self._diagnostic_attempt_usage(
-                        session, context, failure.code)
-                    return self._response(Outcome.success(self._diagnostic_failure(
-                        purpose, route, failure_stage, failure.code, failure.reason,
-                        stages=stages, budget_usage=budget_usage, route=route)))
-                task = result.unwrap().task
-                if task is None:
-                    return self._response(Outcome.success(self._diagnostic_failure(
-                        purpose, route, "model_generation", "contact_task_not_started",
-                        "the proactive service did not create an execution task", route=route)))
-
+                from companion_v2.proactive.simulation import simulate_contact
+                preview = await simulate_contact(session.application, context, candidate,
+                    attempt_id=attempt_id, diagnostic_image=diagnostic_image)
                 stages = [{"stage": name, "state": "passed"} for name in
-                    ("authorization", "binding", "runtime", "settings", "purpose")]
+                          ("authorization", "binding", "runtime", "settings", "purpose")]
                 stages.extend(candidate.get("stages", []))
                 stages.append({"stage": "trusted_candidate", "state": "passed"})
-                stages[-1]["detail"] = f"{route.get('label', route.get('id', ''))} · {route.get('variant', '')}".strip(" ·")
-                if diagnostic_image:
-                    stages.append({"stage": "image_attachment", "state": "pending"})
-                stages.extend(({"stage": "model_generation", "state": "running"},
-                               {"stage": "persona_review", "state": "pending"},
-                               {"stage": "delivery", "state": "pending"},
-                               {"stage": "receipt", "state": "pending"}))
-                deadline = asyncio.get_running_loop().time() + 150
-                observation = None
-                while asyncio.get_running_loop().time() < deadline:
-                    observed = session.application.proactive.observe(context, task.task_id)
-                    if observed.failure is not None:
-                        return self._response(Outcome.success(self._diagnostic_failure(
-                            purpose, route, "delivery", observed.failure.code, observed.failure.reason,
-                            stages=stages, task_id=task.task_id, route=route)))
-                    observation = observed.unwrap()
-                    current_task = require(session.application.tasks.read(context, task.task_id))
-                    if observation["skipped"] or observation["delivery"] in ("delivered", "failed", "unknown", "accepted"):
-                        break
-                    if current_task.state in ("failed", "cancelled", "expired", "uncertain"):
-                        break
-                    await asyncio.sleep(0.2)
-
-                current_task = require(session.application.tasks.read(context, task.task_id))
-                if observation is None:
-                    observation = require(session.application.proactive.observe(context, task.task_id))
-                skipped = observation["skipped"]
-                delivery = observation["delivery"]
-                judge = observation["judge"]
-                stage_by_name = {item["stage"]: item for item in stages}
-                stage_by_name["model_generation"]["state"] = "passed" if current_task.state == "succeeded" else "failed"
-                if diagnostic_image:
-                    image_result = (observation.get("stage_metrics") or {}).get("image_attachment", {})
-                    image_attached = image_result.get("state") == "passed"
-                    stage_by_name["image_attachment"]["state"] = "passed" if image_attached else "failed"
-                stage_by_name["persona_review"]["state"] = ("skipped" if skipped else "passed" if observation["judge_allowed"] is True
-                                       else "failed" if observation["judge_allowed"] is False
-                                       else "not_required" if judge is None else "pending")
-                stage_by_name["delivery"]["state"] = ("skipped" if skipped else "passed" if delivery == "delivered"
-                                       else "failed" if delivery in ("failed", "unknown")
-                                       else "pending")
-                stage_by_name["receipt"]["state"] = ("skipped" if skipped else "passed" if delivery == "delivered"
-                                      and observation.get("receipt_ref") else
-                                      "failed" if delivery in ("failed", "unknown") else "pending")
-                state = ("failed" if diagnostic_image and not image_attached else
-                         "skipped" if skipped else "passed" if delivery == "delivered"
-                         else "unknown" if delivery in ("unknown", "accepted")
-                         else "pending" if delivery in (None, "pending", "dispatched")
-                         else "failed")
-                code = ("proactive_diagnostic_image_unavailable" if diagnostic_image and not image_attached else
-                        None if state in ("passed", "skipped") else current_task.reason or (
-                    "delivery_result_unknown" if state == "unknown" else "delivery_failed" if state == "failed"
-                    else "proactive_test_timeout"))
-                return self._response(Outcome.success({"state": state, "purpose": purpose,
-                    "purpose_label": label, "variant": route,
-                    "route": route,
+                return self._response(Outcome.success({**preview,
+                    "purpose": purpose, "purpose_label": PURPOSES[purpose],
+                    "route": candidate["route"], "variant": candidate["route"],
                     "event_mode": "synthetic_event" if synthetic_event else "source_backed",
-                    "recipient": "core_administrator", "attempt_id": attempt_id, "task_id": task.task_id,
-                    "task_state": current_task.state, "delivery_state": delivery,
-                    "judge_state": judge, "judge_reason": (redact_text(observation["judge_reason"])
-                        if observation["judge_reason"] else None),
-                    "skip_reason": observation.get("skip_reason"),
-                    "model_skip_reason": observation.get("model_skip_reason"),
-                    "dedup_reason": observation.get("dedup_reason"),
-                    "presentation_reason": observation.get("presentation_reason"),
-                    "decision_confidence": observation.get("decision_confidence"),
-                    "silence_threshold": observation.get("silence_threshold"),
-                    "stage_metrics": observation.get("stage_metrics"),
+                    "recipient": "preview", "attempt_id": attempt_id,
+                    "delivery_state": "not_requested", "receipt_ref": None,
                     "usage_summary": self._diagnostic_usage_summary(session, context),
-                    "receipt_ref": observation["receipt_ref"], "stage": None if state in ("passed", "skipped") else
-                        "delivery" if delivery else "model_generation", "code": code,
-                    "error": None if code is None else redact_text(current_task.reason or code),
-                    "suggestion": (PROACTIVE_TEST_SUGGESTIONS.get(code)
-                        or PROACTIVE_TEST_STAGE_SUGGESTIONS.get(stage_by_name.get("delivery", {}).get("stage", "delivery")))
-                        if code else None,
                     "started_at": started, "finished_at": datetime.now(timezone.utc).isoformat(),
-                    "stages": stages, "replay_allowed": False}))
+                    "stages": [*stages, *preview["stages"]], "replay_allowed": False}))
             except TaskError as error:
                 failure_stage = PROACTIVE_TEST_STAGE_BY_CODE.get(error.code, "execution")
                 return self._response(Outcome.success(self._diagnostic_failure(
@@ -1256,12 +1129,12 @@ class SetupWebAPI:
             stages = ([{"stage": name, "state": "passed"}
                        for name in PROACTIVE_TEST_STAGE_ORDER[:failed_index]]
                       + [{"stage": stage, "state": "failed"}])
-        return {"state": state, "purpose": purpose,
+        return {"state": state, "purpose": purpose, "simulation": True, "parts": [],
             "purpose_label": PURPOSES.get(purpose) if purpose else None,
             "variant": (variant if isinstance(variant, dict) else
                         {"id": variant[0], "label": variant[1]} if variant else None),
             "route": route or (variant if isinstance(variant, dict) else None),
-            "recipient": "core_administrator", "task_id": task_id, "stage": stage, "code": code,
+            "recipient": "preview", "task_id": task_id, "stage": stage, "code": code,
             "failure_title": title if label else None, "explanation": explanation,
             "budget_usage": budget_usage,
             "error": redact_text(error), "suggestion": PROACTIVE_TEST_SUGGESTIONS.get(code)

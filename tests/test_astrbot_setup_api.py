@@ -144,405 +144,124 @@ class AstrBotSetupFlowTests(unittest.IsolatedAsyncioTestCase):
         await wait_for_batch(self.controller.session, batch)
         self.assertEqual(len(self.message_calls()), 1)
 
+    def simulation_api_fixture(self):
+        context = NS(scope=NS(kind=ScopeKind.PRIVATE,native_scope_id="200"))
+        candidate = {"opportunity":object(), "intents":(NS(purpose="environment"),),
+                     "role_instruction":"role instructions", "route":{"id":"weather_event"}, "stages":[]}
+        app=NS(state="running",now=lambda:NOW,proactive=NS(contact=AsyncMock()),
+               contact_schedule=NS(diagnostic_candidate=AsyncMock(return_value=candidate),
+                   synthetic_diagnostic_candidate=AsyncMock(return_value=candidate)))
+        session=NS(application=app)
+        api=SetupWebAPI.__new__(SetupWebAPI)
+        api.controller=NS(session=session,last_session=None,runtime=object(),now=lambda:NOW,
+                          start=AsyncMock(return_value=Outcome.success({})))
+        api._test_lock=asyncio.Lock()
+        api._setup_context=AsyncMock(return_value=(session,context,"role instructions"))
+        api._binding=lambda:{"bound":True,"pending":False}
+        api.simulation_status={"purposes":{"environment":{"allowed":True,"reason":None}}}
+        return api,app,context,candidate
+
+    async def call_simulation_fixture(self, api, fields, *, raw=False):
+        payload=fields if raw else {"simulation":True,"confirm_delivery":False,**fields}
+        request=NS(username="administrator",query={},body=AsyncMock(return_value=json.dumps(payload).encode()))
+        manager=NS(status=lambda operator:Outcome.success(api.simulation_status))
+        preview={"state":"passed","decision":"send","simulation":True,"parts":["第一句","第二句"],
+                 "stages":[{"stage":"output_parsing","state":"passed"}]}
+        simulator=AsyncMock(return_value=preview)
+        with patch("astrbot_host.setup_api.request",request), \
+             patch("astrbot_host.setup_api.ContactManagement",return_value=manager), \
+             patch("astrbot_host.setup_api.dashboard_operator",return_value=object()), \
+             patch("companion_v2.proactive.simulation.simulate_contact",simulator):
+            response=await api.proactive_diagnostic()
+        return response,simulator
+
+    async def test_real_delivery_flags_are_rejected_before_model_or_source_reads(self):
+        for fields in ({"purpose":"environment","confirm_delivery":True},
+                       {"purpose":"environment","simulation":True,"confirm_delivery":True},
+                       {"purpose":"environment","simulation":False,"confirm_delivery":False}):
+            api,app,_,_=self.simulation_api_fixture()
+            response,simulator=await self.call_simulation_fixture(api,fields,raw=True)
+            self.assertEqual(response["data"]["state"],"failed",response)
+            simulator.assert_not_awaited()
+            app.proactive.contact.assert_not_awaited()
+            app.contact_schedule.diagnostic_candidate.assert_not_awaited()
+
+    def seed_legacy_test(self, outcome="delivered"):
+        self.api.progress.begin_proactive_test(attempt_id="legacy-receipt",started_at=NOW.isoformat())
+        return self.api.progress.finish_proactive_test(outcome=outcome,finished_at=NOW.isoformat())["proactive_test"]
+
     async def test_proactive_diagnostic_uses_source_backed_route_and_core_context(self):
-        context = NS(scope=NS(kind=ScopeKind.PRIVATE),
-                     role_binding=NS(role=NS(subject_id="core-role")))
-        task = NS(task_id="diagnostic-task", state="succeeded", reason=None)
-        route = {"id": "weather_event", "label": "天气观测生产器", "variant": "weather"}
-        candidate = {"accepted": True, "opportunity": object(), "intents": (NS(purpose="environment",
-            thought=NS(summary="角色配置地点的当前天气观测：晴，18℃。")),),
-            "role_instruction": "role instructions", "route": route,
-            "stages": [{"stage": "weather_fetch", "state": "passed", "detail": "真实天气接口观测"}], "diagnostic_origin": {
-                "_diagnostic": {"route_id": "weather_event", "batch_id": "batch-1",
-                    "purpose": "environment", "event_key": "event-1", "event_hash": "hash-1", "role_hash": "role-1"},
-                "weather_event": {"slot": "slot-1"}}}
-        app = NS(state="running", now=lambda: NOW)
-        app.proactive = NS(contact=AsyncMock(return_value=Outcome.success(NS(task=task))),
-            observe=lambda _context, _task_id: Outcome.success({"skipped": False, "delivery": "delivered",
-                "judge": "allowed", "judge_allowed": True, "judge_reason": None, "receipt_ref": "receipt-1"}))
-        app.tasks = NS(read=lambda _context, _task_id: Outcome.success(task))
-        app.contact_schedule = NS(diagnostic_candidate=AsyncMock(return_value=candidate))
-        session = NS(application=app)
-        controller = NS(session=session, last_session=None, runtime=object(), now=lambda: NOW,
-            start=AsyncMock(return_value=Outcome.success({})))
-        api = SetupWebAPI.__new__(SetupWebAPI)
-        api.controller = controller
-        api._test_lock = asyncio.Lock()
-        api._setup_context = AsyncMock(return_value=(session, context, "role instructions"))
-        api._binding = lambda: {"bound": True, "pending": False}
-
-        class ContactManager:
-            def __init__(self, _app, _context):
-                pass
-
-            def status(self, _operator):
-                return Outcome.success({"purposes": {
-                    "environment": {"allowed": True, "reason": None},
-                    "chat": {"allowed": True, "reason": None}}})
-
-        payload = json.dumps({"purpose": "environment", "confirm_delivery": True}).encode("utf-8")
-        request = NS(username="administrator", query={}, body=AsyncMock(return_value=payload))
-        with patch("astrbot_host.setup_api.request", request), \
-             patch("astrbot_host.setup_api.ContactManagement", ContactManager), \
-             patch("astrbot_host.setup_api.dashboard_operator", return_value=object()):
-            response = await api.proactive_diagnostic()
-
+        api, app, context, candidate = self.simulation_api_fixture()
+        response, simulator = await self.call_simulation_fixture(api, {"purpose":"environment"})
         result = response["data"]
-        self.assertEqual(result["state"], "passed", result)
-        self.assertEqual(result["recipient"], "core_administrator")
-        self.assertEqual(result["purpose"], "environment")
-        self.assertEqual(result["route"], route)
-        self.assertIn({"stage": "weather_fetch", "state": "passed", "detail": "真实天气接口观测"}, result["stages"])
+        self.assertEqual((result["state"], result["recipient"], result["parts"]), ("passed", "preview", ["第一句", "第二句"]))
+        self.assertEqual(result["delivery_state"], "not_requested")
+        self.assertIsNone(result["receipt_ref"])
+        self.assertEqual(simulator.await_args.args, (app, context, candidate))
+        app.proactive.contact.assert_not_awaited()
         app.contact_schedule.diagnostic_candidate.assert_awaited_once_with(context, "environment", at=NOW, test_id=ANY)
-        app.proactive.contact.assert_awaited_once()
-        args, kwargs = app.proactive.contact.await_args
-        self.assertIs(args[0], context)
-        self.assertEqual(args[2][0].purpose, "environment")
-        self.assertEqual(args[2][0].thought.summary, "角色配置地点的当前天气观测：晴，18℃。")
-        self.assertEqual(kwargs["role_instruction"], "role instructions")
-        self.assertTrue(kwargs["administrator_test"])
-        self.assertTrue(kwargs["diagnostic_source_backed"])
-        self.assertEqual(kwargs["diagnostic_origin"], candidate["diagnostic_origin"])
-        self.assertFalse(result["replay_allowed"])
+        self.assertIn({"stage":"output_parsing", "state":"passed"}, result["stages"])
 
-        app.proactive.contact.return_value = Outcome.failed("model_budget_exhausted", "local model budget exhausted")
-        with patch("astrbot_host.setup_api.request", request), \
-             patch("astrbot_host.setup_api.ContactManagement", ContactManager), \
-             patch("astrbot_host.setup_api.dashboard_operator", return_value=object()):
-            budget_response = await api.proactive_diagnostic()
-        budget_failure = budget_response["data"]
-        self.assertEqual((budget_failure["state"], budget_failure["code"], budget_failure["stage"]),
-                         ("failed", "model_budget_exhausted", "model_generation"))
-        self.assertIn("硬额度", budget_failure["failure_title"])
-        self.assertTrue(any(item == {"stage": "model_generation", "state": "failed"}
-                            for item in budget_failure["stages"]))
-        app.proactive.contact.return_value = Outcome.success(NS(task=task))
-
-        app.proactive.observe = lambda _context, _task_id: Outcome.success({"skipped": True,
-            "delivery": None, "judge": None, "judge_allowed": None, "judge_reason": None,
-            "receipt_ref": None, "skip_reason": "model_decision", "model_skip_reason": "no_natural_opening",
-            "dedup_reason": None, "presentation_reason": None, "decision_confidence": 0.91,
-            "silence_threshold": 0.65})
-        with patch("astrbot_host.setup_api.request", request), \
-             patch("astrbot_host.setup_api.ContactManagement", ContactManager), \
-             patch("astrbot_host.setup_api.dashboard_operator", return_value=object()):
-            skipped_response = await api.proactive_diagnostic()
-        skipped = skipped_response["data"]
-        self.assertEqual((skipped["state"], skipped["skip_reason"], skipped["model_skip_reason"]),
-                         ("skipped", "model_decision", "no_natural_opening"))
-        self.assertIn({"stage": "model_generation", "state": "passed"}, skipped["stages"])
-
-        image_candidate = {"accepted": True, "opportunity": object(), "intents": (NS(purpose="chat",
-            thought=NS(summary="自然的聊天开场。")),), "role_instruction": "role instructions",
-            "route": {"id": "conversation_scheduler", "label": "真实私聊来源"}, "stages": [],
-            "diagnostic_origin": {"_diagnostic": {"route_id": "conversation_scheduler", "purpose": "chat",
-                "batch_id": "batch-2", "event_key": "event-2", "event_hash": "hash-2", "role_hash": "role-1"}}}
-        app.contact_schedule.diagnostic_candidate.return_value = image_candidate
-        app.proactive.observe = lambda _context, _task_id: Outcome.success({"skipped": False,
-            "delivery": "delivered", "judge": "allowed", "judge_allowed": True, "judge_reason": None,
-            "receipt_ref": "receipt-2", "stage_metrics": {
-                "image_attachment": {"state": "passed", "attached": True}}})
-        request.body.return_value = json.dumps({"purpose": "chat", "confirm_delivery": True,
-            "diagnostic_image": True}).encode("utf-8")
-        with patch("astrbot_host.setup_api.request", request), \
-             patch("astrbot_host.setup_api.ContactManagement", ContactManager), \
-             patch("astrbot_host.setup_api.dashboard_operator", return_value=object()):
-            image_response = await api.proactive_diagnostic()
-        image_result = image_response["data"]
-        self.assertEqual((image_result["state"], image_result["delivery_state"]), ("passed", "delivered"))
-        self.assertIn({"stage": "image_attachment", "state": "passed"}, image_result["stages"])
-        self.assertTrue(app.proactive.contact.await_args.kwargs["diagnostic_image_intent"])
 
     async def test_proactive_diagnostic_routes_mobile_location_to_reality_producer(self):
-        context = NS(scope=NS(kind=ScopeKind.PRIVATE, native_scope_id="200"))
-        task = NS(task_id="mobile-location-diagnostic", state="succeeded", reason=None)
-        receipt = {"_diagnostic": {"route_id": "reality_location_event", "purpose": "environment",
-            "batch_id": "batch-1", "event_key": "event-1", "event_hash": "hash-1", "role_hash": "role-1"}}
-        candidate = {"accepted": True, "opportunity": object(), "intents": (NS(purpose="environment",
-            thought=NS(summary="手机陪伴终端本次上报的地点。")),), "role_instruction": "role instructions",
-            "route": {"id": "reality_location_event", "label": "手机陪伴终端地点来源",
-                      "variant": "mobile_location"}, "stages": [
-                {"stage": "mobile_location_fetch", "state": "passed"}],
-            "diagnostic_origin": {**receipt, "reality_location_event": {"test_id": "attempt-1",
-                "captured_at": 123, "source_id": "reality-location-1", "place_fingerprint": "place-1"}}}
-        app = NS(state="running", now=lambda: NOW,
-            contact_schedule=NS(diagnostic_candidate=AsyncMock(),
-                diagnostic_receipt=Mock(return_value=(object(), object(), object(), receipt))),
-            proactive=NS(contact=AsyncMock(return_value=Outcome.success(NS(task=task))),
-                observe=lambda _context, _task_id: Outcome.success({"skipped": False, "delivery": "delivered",
-                    "judge": "allowed", "judge_allowed": True, "judge_reason": None,
-                    "receipt_ref": "receipt-1", "stage_metrics": {}})),
-            tasks=NS(read=lambda _context, _task_id: Outcome.success(task)))
-        session = NS(application=app)
-        native_api = NS(mobile_location_diagnostic_candidate=AsyncMock(return_value=candidate))
-        reality = NS(v2_api=Mock(return_value=native_api))
-        controller = NS(session=session, last_session=None, runtime=object(), now=lambda: NOW,
-            start=AsyncMock(return_value=Outcome.success({})),
-            native_extensions=NS(active_service=Mock(return_value=reality)))
-        api = SetupWebAPI.__new__(SetupWebAPI)
-        api.controller = controller
-        api._test_lock = asyncio.Lock()
-        api._proactive_diagnostic_target = AsyncMock(return_value=object())
-        api._proactive_diagnostic_context = AsyncMock(return_value=(session, context, "role instructions"))
-        api._binding = lambda: {"bound": True, "pending": False}
-        api._diagnostic_usage_summary = lambda _session, _context: {}
-
-        class ContactManager:
-            def __init__(self, _app, _context):
-                pass
-
-            def status(self, _operator):
-                return Outcome.success({"purposes": {"environment": {"allowed": True, "reason": None}}})
-
-        payload = json.dumps({"purpose": "environment", "confirm_delivery": True,
-                              "synthetic_event": False, "variant": "mobile_location"}).encode("utf-8")
-        request = NS(username="administrator", query={}, body=AsyncMock(return_value=payload))
-        with patch("astrbot_host.setup_api.request", request), \
-             patch("astrbot_host.setup_api.ContactManagement", ContactManager), \
-             patch("astrbot_host.setup_api.dashboard_operator", return_value=object()):
-            response = await api.proactive_diagnostic()
-
-        result = response["data"]
-        self.assertEqual((result.get("state"), result.get("route"), result.get("delivery_state")),
-            ("passed", candidate["route"], "delivered"), result)
-        controller.native_extensions.active_service.assert_called_once_with("reality")
-        app.contact_schedule.diagnostic_receipt.assert_called_once_with(
-            context, "environment", "reality_location_event", NOW)
-        native_api.mobile_location_diagnostic_candidate.assert_awaited_once_with(
-            "200", test_id=result["attempt_id"], diagnostic_origin=receipt)
+        api, app, context, candidate = self.simulation_api_fixture()
+        receipt = {"_diagnostic":{"route_id":"reality_location_event"}}
+        app.contact_schedule.diagnostic_receipt = Mock(return_value=(None,None,None,receipt))
+        native = NS(mobile_location_diagnostic_candidate=AsyncMock(return_value={**candidate,"accepted":True}))
+        api.controller.native_extensions = NS(active_service=Mock(return_value=NS(v2_api=lambda:native)))
+        response, simulator = await self.call_simulation_fixture(api, {"purpose":"environment","variant":"mobile_location"})
+        self.assertEqual(response["data"]["state"], "passed", response)
+        native.mobile_location_diagnostic_candidate.assert_awaited_once_with("200", test_id=ANY, diagnostic_origin=receipt)
         app.contact_schedule.diagnostic_candidate.assert_not_awaited()
-        self.assertEqual(app.proactive.contact.await_args.kwargs["diagnostic_origin"],
-                         candidate["diagnostic_origin"])
+        simulator.assert_awaited_once()
+        app.proactive.contact.assert_not_awaited()
 
-    async def test_proactive_diagnostic_uses_synthetic_candidate_and_real_delivery_pipeline(self):
-        context = NS(scope=NS(kind=ScopeKind.PRIVATE))
-        task = NS(task_id="synthetic-diagnostic-task", state="succeeded", reason=None)
-        route = {"id": "synthetic_event", "label": "合成测试事件", "variant": "news"}
-        diagnostic_origin = {"_diagnostic": {"route_id": "synthetic_event", "purpose": "news",
-            "batch_id": "batch-1", "event_key": "event-1", "event_hash": "hash-1", "role_hash": "role-1"},
-            "synthetic_event": {"test_id": "attempt-1", "scenario_hash": "scenario-1"}}
-        candidate = {"opportunity": object(), "intents": (NS(purpose="news",
-            thought=NS(summary="合成测试事件：模拟虚构资讯分享。")),),
-            "role_instruction": "role instructions", "route": route, "diagnostic_origin": diagnostic_origin}
-        app = NS(state="running", now=lambda: NOW)
-        app.proactive = NS(contact=AsyncMock(return_value=Outcome.success(NS(task=task))),
-            observe=lambda _context, _task_id: Outcome.success({"skipped": False, "delivery": "delivered",
-                "judge": "allowed", "judge_allowed": True, "judge_reason": None, "receipt_ref": "receipt-1"}))
-        app.tasks = NS(read=lambda _context, _task_id: Outcome.success(task))
-        app.contact_schedule = NS(
-            diagnostic_candidate=AsyncMock(),
-            synthetic_diagnostic_candidate=AsyncMock(return_value=candidate))
-        session = NS(application=app)
-        controller = NS(session=session, last_session=None, runtime=object(), now=lambda: NOW,
-            start=AsyncMock(return_value=Outcome.success({})))
-        api = SetupWebAPI.__new__(SetupWebAPI)
-        api.controller = controller
-        api._test_lock = asyncio.Lock()
-        api._setup_context = AsyncMock(return_value=(session, context, "role instructions"))
-        api._binding = lambda: {"bound": True, "pending": False}
 
-        class ContactManager:
-            def __init__(self, _app, _context):
-                pass
-
-            def status(self, _operator):
-                return Outcome.success({"purposes": {"news": {"allowed": True, "reason": None},
-                                                      "screen": {"allowed": True, "reason": None}}})
-
-        payload = json.dumps({"purpose": "news", "confirm_delivery": True,
-                              "synthetic_event": True}).encode("utf-8")
-        request = NS(username="administrator", query={}, body=AsyncMock(return_value=payload))
-        with patch("astrbot_host.setup_api.request", request), \
-             patch("astrbot_host.setup_api.ContactManagement", ContactManager), \
-             patch("astrbot_host.setup_api.dashboard_operator", return_value=object()):
-            response = await api.proactive_diagnostic()
-
-        result = response["data"]
-        self.assertEqual((result["state"], result["event_mode"], result["route"]),
-                         ("passed", "synthetic_event", route))
+    async def test_proactive_diagnostic_uses_synthetic_candidate_without_delivery(self):
+        api, app, context, candidate = self.simulation_api_fixture()
+        response, simulator = await self.call_simulation_fixture(api, {"purpose":"environment","synthetic_event":True})
+        self.assertEqual(response["data"]["event_mode"], "synthetic_event")
         app.contact_schedule.synthetic_diagnostic_candidate.assert_awaited_once()
-        call_args = app.contact_schedule.synthetic_diagnostic_candidate.await_args
-        self.assertEqual(call_args.args, (context, "news"))
-        self.assertEqual(call_args.kwargs["at"], NOW)
-        self.assertTrue(call_args.kwargs["test_id"])
         app.contact_schedule.diagnostic_candidate.assert_not_awaited()
-        app.proactive.contact.assert_awaited_once()
-        kwargs = app.proactive.contact.await_args.kwargs
-        self.assertTrue(kwargs["administrator_test"])
-        self.assertFalse(kwargs["diagnostic_source_backed"])
-        self.assertEqual(kwargs["diagnostic_origin"], diagnostic_origin)
+        simulator.assert_awaited_once()
+        app.proactive.contact.assert_not_awaited()
+
 
     async def test_proactive_diagnostic_recovers_recipient_from_current_core_identity(self):
-        context = NS(scope=NS(kind=ScopeKind.PRIVATE))
-        task = NS(task_id="diagnostic-task", state="succeeded", reason=None)
-        route = {"id": "weather_event", "label": "天气观测生产器", "variant": "weather"}
-        candidate = {"opportunity": object(), "intents": (NS(purpose="environment",
-            thought=NS(summary="角色配置地点的当前天气观测：晴，18℃。")),),
-            "role_instruction": "role instructions", "route": route, "diagnostic_origin": {
-                "_diagnostic": {"route_id": "weather_event", "batch_id": "batch-1",
-                    "purpose": "environment", "event_key": "event-1", "event_hash": "hash-1", "role_hash": "role-1"},
-                "weather_event": {"slot": "slot-1"}}}
-        app = NS(state="running", now=lambda: NOW)
-        app.proactive = NS(contact=AsyncMock(return_value=Outcome.success(NS(task=task))),
-            observe=lambda _context, _task_id: Outcome.success({"skipped": False, "delivery": "delivered",
-                "judge": "allowed", "judge_allowed": True, "judge_reason": None, "receipt_ref": "receipt-1"}))
-        app.tasks = NS(read=lambda _context, _task_id: Outcome.success(task))
-        app.contact_schedule = NS(diagnostic_candidate=AsyncMock(return_value=candidate))
-        session = NS(application=app, synchronize=AsyncMock(return_value=(context, "role instructions")))
-        target = NS(target_id="private-core", platform_id="qq-main", account_id="100",
-                    bot_id="staging-bot", participant_id="200")
-        controller = NS(session=session, last_session=None, runtime=object(), now=lambda: NOW,
-            start=AsyncMock(return_value=Outcome.success({})), _multi_host=True,
-            proactive_diagnostic_target=AsyncMock(return_value=target))
-        api = SetupWebAPI.__new__(SetupWebAPI)
-        api.controller = controller
-        api._test_lock = asyncio.Lock()
-        api._binding = lambda: ({"bound": True, "pending": False,
-            "platform_id": target.platform_id, "account_id": target.account_id,
-            "participant_id": target.participant_id} if controller.proactive_diagnostic_target.await_count
-            else {"bound": False, "pending": False})
+        api, app, context, candidate = self.simulation_api_fixture()
+        target = NS(target_id="private-current")
+        api._proactive_diagnostic_target = AsyncMock(return_value=target)
+        api._proactive_diagnostic_context = AsyncMock(return_value=(api.controller.session,context,"role instructions"))
+        response, _ = await self.call_simulation_fixture(api, {"purpose":"environment"})
+        self.assertEqual(response["data"]["state"], "passed", response)
+        api._proactive_diagnostic_context.assert_awaited_once_with(target)
+        app.proactive.contact.assert_not_awaited()
 
-        class ContactManager:
-            def __init__(self, _app, _context):
-                pass
-
-            def status(self, _operator):
-                return Outcome.success({"purposes": {"environment": {"allowed": True, "reason": None}}})
-
-        payload = json.dumps({"purpose": "environment", "confirm_delivery": True}).encode("utf-8")
-        request = NS(username="administrator", query={}, body=AsyncMock(return_value=payload))
-        with patch("astrbot_host.setup_api.request", request), \
-             patch("astrbot_host.setup_api.ContactManagement", ContactManager), \
-             patch("astrbot_host.setup_api.dashboard_operator", return_value=object()):
-            response = await api.proactive_diagnostic()
-
-        result = response["data"]
-        self.assertEqual(result["state"], "passed", result)
-        self.assertEqual(result["recipient"], "core_administrator")
-        session.synchronize.assert_awaited_once_with(target)
-        self.assertEqual(controller.proactive_diagnostic_target.await_count, 2)
-        app.proactive.contact.assert_awaited_once()
 
     async def test_proactive_diagnostic_only_bypasses_master_and_time_gates(self):
-        context = NS(scope=NS(kind=ScopeKind.PRIVATE))
-        task = NS(task_id="diagnostic-task", state="succeeded", reason=None)
-        candidate = {"opportunity": object(), "intents": (NS(purpose="care",
-            thought=NS(summary="对方刚才明确说最近很累。")),), "role_instruction": "role instructions",
-            "route": {"id": "relationship_event", "label": "关系语境候选", "variant": "care"},
-            "diagnostic_origin": {"_diagnostic": {"route_id": "relationship_event", "batch_id": "batch-1",
-                "purpose": "care", "event_key": "event-1", "event_hash": "hash-1", "role_hash": "role-1"},
-                "relationship_event": {"purpose": "care"}}}
-        app = NS(state="running", now=lambda: NOW)
-        app.proactive = NS(
-            contact=AsyncMock(return_value=Outcome.success(NS(task=task))),
-            observe=lambda _context, _task_id: Outcome.success({"skipped": False, "delivery": "delivered",
-                "judge": None, "judge_allowed": None, "judge_reason": None, "receipt_ref": "receipt-1"}))
-        app.tasks = NS(read=lambda _context, _task_id: Outcome.success(task))
-        app.contact_schedule = NS(diagnostic_candidate=AsyncMock(return_value=candidate))
-        session = NS(application=app)
-        controller = NS(session=session, last_session=None, runtime=object(), now=lambda: NOW,
-            start=AsyncMock(return_value=Outcome.success({})))
-        api = SetupWebAPI.__new__(SetupWebAPI)
-        api.controller = controller
-        api._test_lock = asyncio.Lock()
-        api._setup_context = AsyncMock(return_value=(session, context, "role instructions"))
-        api._binding = lambda: {"bound": True, "pending": False}
+        for enabled, reason, allowed in ((True,"proactive_paused",True),
+                (True,"proactive_quiet_hours",True),(True,"proactive_disabled",True),
+                (False,"proactive_disabled",False),(True,"authorization_revoked",False)):
+            with self.subTest(enabled=enabled,reason=reason):
+                api, app, _, _ = self.simulation_api_fixture()
+                api.simulation_status = {"settings":{"environment.enabled":enabled},
+                    "purposes":{"environment":{"allowed":False,"reason":reason}}}
+                response, simulator = await self.call_simulation_fixture(api, {"purpose":"environment"})
+                self.assertEqual(response["data"]["state"], "passed" if allowed else "failed", response)
+                self.assertEqual(simulator.await_count, int(allowed))
+                app.proactive.contact.assert_not_awaited()
 
-        preferences = {"enabled": True, "care.enabled": True}
-        blocked_reason = "proactive_quiet_hours"
-
-        class ContactManager:
-            def __init__(self, _app, _context):
-                pass
-
-            def status(self, _operator):
-                return Outcome.success({"settings": preferences,
-                    "purposes": {"care": {"allowed": False, "reason": blocked_reason}}})
-
-        payload = json.dumps({"purpose": "care", "confirm_delivery": True}).encode("utf-8")
-        request = NS(username="administrator", query={}, body=AsyncMock(return_value=payload))
-        for master, purpose_enabled, blocked_reason, permitted in (
-                (True, True, "proactive_quiet_hours", True),
-                (True, True, "proactive_paused", True),
-                (False, True, "proactive_disabled", True),
-                (False, False, "proactive_disabled", False),
-                (True, False, "proactive_disabled", False),
-                (True, True, "authorization_revoked", False)):
-            with self.subTest(master=master, purpose=purpose_enabled, reason=blocked_reason):
-                preferences.update(enabled=master, **{"care.enabled": purpose_enabled})
-                app.proactive.contact.reset_mock()
-                app.contact_schedule.diagnostic_candidate.reset_mock()
-                with patch("astrbot_host.setup_api.request", request), \
-                     patch("astrbot_host.setup_api.ContactManagement", ContactManager), \
-                     patch("astrbot_host.setup_api.dashboard_operator", return_value=object()):
-                    response = await api.proactive_diagnostic()
-                result = response["data"]
-                if permitted:
-                    self.assertEqual(result["state"], "passed", result)
-                    self.assertEqual(result["delivery_state"], "delivered")
-                    app.proactive.contact.assert_awaited_once()
-                    self.assertTrue(app.proactive.contact.await_args.kwargs["administrator_test"])
-                else:
-                    self.assertEqual(result["state"], "failed", result)
-                    self.assertEqual(result["code"], blocked_reason)
-                    app.proactive.contact.assert_not_awaited()
-                    app.contact_schedule.diagnostic_candidate.assert_not_awaited()
-                self.assertEqual(preferences["enabled"], master)
 
     async def test_proactive_diagnostic_without_a_real_source_never_calls_contact(self):
-        context = NS(scope=NS(kind=ScopeKind.PRIVATE))
-        app = NS(state="running", now=lambda: NOW)
-        app.proactive = NS(contact=AsyncMock())
-        app.contact_schedule = NS(diagnostic_candidate=AsyncMock(side_effect=TaskError(
-            "contact_diagnostic_source_required", "no current news source")))
-        session = NS(application=app)
-        controller = NS(session=session, last_session=None, runtime=object(), now=lambda: NOW,
-            start=AsyncMock(return_value=Outcome.success({})))
-        api = SetupWebAPI.__new__(SetupWebAPI)
-        api.controller = controller
-        api._test_lock = asyncio.Lock()
-        api._setup_context = AsyncMock(return_value=(session, context, "role instructions"))
-        api._binding = lambda: {"bound": True, "pending": False}
-
-        class ContactManager:
-            def __init__(self, _app, _context):
-                pass
-
-            def status(self, _operator):
-                return Outcome.success({"purposes": {"news": {"allowed": True, "reason": None}, "screen": {"allowed": True, "reason": None}}})
-
-        payload = json.dumps({"purpose": "news", "confirm_delivery": True}).encode("utf-8")
-        request = NS(username="administrator", query={}, body=AsyncMock(return_value=payload))
-        with patch("astrbot_host.setup_api.request", request), \
-             patch("astrbot_host.setup_api.ContactManagement", ContactManager), \
-             patch("astrbot_host.setup_api.dashboard_operator", return_value=object()):
-            response = await api.proactive_diagnostic()
-
-        result = response["data"]
-        self.assertEqual(result["state"], "failed")
-        self.assertEqual(result["code"], "contact_diagnostic_source_required")
-        self.assertEqual(result["stage"], "trusted_candidate")
-        self.assertEqual(result["failure_title"], "当前用途没有可核验的测试机会")
-        self.assertIn("阶段记录", result["explanation"])
-        self.assertIn("关系表达类使用已完成的私聊窗口和用途设置", result["suggestion"])
-        self.assertEqual(result["stages"][-1], {"stage": "trusted_candidate", "state": "failed"})
-        self.assertTrue(all(stage["state"] == "passed" for stage in result["stages"][:-1]))
+        api, app, _, _ = self.simulation_api_fixture()
+        app.contact_schedule.diagnostic_candidate.side_effect = TaskError("contact_diagnostic_source_required","no current source")
+        response, simulator = await self.call_simulation_fixture(api, {"purpose":"environment"})
+        self.assertEqual(response["data"]["code"], "contact_diagnostic_source_required")
+        self.assertEqual(response["data"]["parts"], [])
+        self.assertTrue(response["data"]["simulation"])
+        simulator.assert_not_awaited()
         app.proactive.contact.assert_not_awaited()
-        app.contact_schedule.diagnostic_candidate.assert_awaited_once_with(context, "news", at=NOW, test_id=ANY)
 
-        app.contact_schedule.diagnostic_candidate.side_effect = DiagnosticSourceError(
-            "model_timeout", "视觉模型结果未知", stage="screen_interpretation", state="unknown",
-            task_id="vision-task", stages=[{"stage": "screen_capture", "state": "passed"}])
-        request.body.return_value = json.dumps({"purpose": "screen", "confirm_delivery": True}).encode("utf-8")
-        with patch("astrbot_host.setup_api.request", request), \
-             patch("astrbot_host.setup_api.ContactManagement", ContactManager), \
-             patch("astrbot_host.setup_api.dashboard_operator", return_value=object()):
-            unknown = (await api.proactive_diagnostic())["data"]
-        self.assertEqual((unknown["state"], unknown["stage"], unknown["task_id"]),
-                         ("unknown", "screen_interpretation", "vision-task"))
-        self.assertEqual(unknown["stages"][-2:], [{"stage": "screen_capture", "state": "passed"},
-                                                {"stage": "screen_interpretation", "state": "unknown"}])
-        app.proactive.contact.assert_not_awaited()
 
     async def bind_core_window(self, persona_id="original"):
         write_binding(self.controller.binding_root,
@@ -782,37 +501,13 @@ class AstrBotSetupFlowTests(unittest.IsolatedAsyncioTestCase):
             await self.api._setup_context()
         self.assertEqual(setup_ambiguous.exception.code, "setup_core_window_ambiguous")
 
-    async def test_active_test_is_persisted_and_never_replayed(self):
-        await self.enter_model_step()
-        self.assertEqual((await self.call("model", {"provider_id": "native-model"}))["status"], "ok")
-        self.assertEqual((await self.call("complete", {"step": "model", "skipped": False}))["status"], "ok")
-        self.assertEqual((await self.call("complete", {"step": "knowledge", "skipped": True}))["status"], "ok")
-        self.assertEqual((await self.call("complete", {"step": "relationships", "skipped": True}))["status"], "ok")
-        await self.skip_optional_setup_sections()
-        await self.prepare_trusted_conversation_source()
+    async def test_old_real_send_test_endpoint_is_disabled(self):
+        for opted in (True,False):
+            result = await self.call("proactive_test", {"enable_proactive":opted})
+            self.assertEqual(result["data"]["code"], "proactive_simulation_required")
+        self.assertEqual(self.message_calls(), [])
+        self.assertIsNone(self.api.progress.read()["proactive_test"])
 
-        generated_text = "想起你说过的航行计划。"
-        self.prepare_contact_model(generated_text)
-        self.native.platform.client._api._wsr_api.result = {"message_id": -456}
-        first = await self.call("proactive_test", {"enable_proactive": True})
-        again = await self.call("proactive_test", {"enable_proactive": True})
-        receipt = await self.wait_for_test()
-
-        self.assertEqual(first["data"]["state"], "started")
-        self.assertEqual(again["data"]["state"], "started")
-        self.assertEqual(receipt["state"], "delivered", receipt)
-        calls = self.message_calls()
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(calls[1][0], "send_private_msg")
-        self.assertIn(generated_text, json.dumps(calls[1][1], ensure_ascii=False))
-        self.assertEqual(len(self.native.provider.client.state.calls), 2)
-        from astrbot_host.management_identity import dashboard_operator
-        from companion_v2.proactive.management import ContactManagement
-        session = self.controller.session or self.controller.last_session
-        settings = ContactManagement(session.application, session.profile.target).status(
-            dashboard_operator(self.controller.runtime, "administrator", at=NOW)).unwrap()["settings"]
-        self.assertFalse(settings["enabled"])
-        self.assertFalse(settings["automatic_enabled"])
 
     async def test_proactive_poll_does_not_load_host_catalog_or_upgrade_plan(self):
         from astrbot_host.setup_state import SETUP_STEPS
@@ -880,11 +575,10 @@ class AstrBotSetupFlowTests(unittest.IsolatedAsyncioTestCase):
         self.prepare_contact_model()
         reverse_api = self.native.platform.client._api._wsr_api
         reverse_api.error = TimeoutError("the message may have been sent")
-        self.assertEqual((await self.call("proactive_test", {"enable_proactive": True}))["data"]["state"], "started")
-        receipt_after_test = await self.wait_for_test()
+        receipt_after_test = self.seed_legacy_test("unknown")
         self.assertEqual(receipt_after_test["state"], "unknown", receipt_after_test)
         self.assertEqual((await self.call("proactive_test", {"enable_proactive": True}))["data"]["code"],
-                         "setup_test_non_replayable")
+                         "proactive_simulation_required")
         receipt = self.api.progress.read()["proactive_test"]
 
         stale = await self.call("confirm_proactive_test", {"attempt_id": "another-attempt"})
@@ -901,7 +595,7 @@ class AstrBotSetupFlowTests(unittest.IsolatedAsyncioTestCase):
         saved = self.api.progress.read()["proactive_test"]
         self.assertEqual(saved["finished_at"], receipt["finished_at"])
         self.assertEqual(saved["confirmed_by"], "administrator")
-        self.assertEqual((await self.call("proactive_test", {"enable_proactive": True}))["data"]["state"], "received")
+        self.assertEqual((await self.call("proactive_test", {"enable_proactive": True}))["data"]["code"], "proactive_simulation_required")
         self.assertEqual(len(self.message_calls()), sends_before_confirmation)
 
         await self.controller.terminate()
@@ -912,7 +606,7 @@ class AstrBotSetupFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_recipient_confirmation_cannot_complete_setup_without_a_test(self):
         await self.enter_model_step()
         denied = await self.call("proactive_test", {"enable_proactive": False})
-        self.assertEqual(denied["data"]["code"], "setup_proactive_opt_in_required")
+        self.assertEqual(denied["data"]["code"], "proactive_simulation_required")
         result = await self.call("confirm_proactive_test", {"attempt_id": "unstarted"})
         self.assertEqual(result["data"]["code"], "setup_test_confirmation_invalid")
         self.assertFalse(self.api.progress.read()["ready"])
@@ -927,9 +621,8 @@ class AstrBotSetupFlowTests(unittest.IsolatedAsyncioTestCase):
         await self.skip_optional_setup_sections()
         await self.prepare_trusted_conversation_source()
         self.prepare_contact_model()
-        self.assertEqual((await self.call("proactive_test", {"enable_proactive": True}))["data"]["state"], "started")
-        receipt = await self.wait_for_test()
-        self.assertEqual(receipt["state"], "delivered", receipt)
+        receipt = self.seed_legacy_test()
+        self.assertEqual(receipt["state"], "delivered")
 
         await self.controller.terminate()
         self.controller = self.make_single_controller()
@@ -1017,9 +710,8 @@ class AstrBotSetupFlowTests(unittest.IsolatedAsyncioTestCase):
         await self.skip_optional_setup_sections()
         await self.prepare_trusted_conversation_source()
         self.prepare_contact_model()
-        self.assertEqual((await self.call("proactive_test", {"enable_proactive": True}))["data"]["state"], "started")
-        receipt = await self.wait_for_test()
-        self.assertEqual(receipt["state"], "delivered", receipt)
+        receipt = self.seed_legacy_test()
+        self.assertEqual(receipt["state"], "delivered")
 
         connected = await self.call("reconnect_host")
 
@@ -1042,9 +734,9 @@ class AstrBotSetupFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await self.call("proactive_test", {"enable_proactive": True})
 
         self.assertEqual(result["status"], "error", result)
-        self.assertEqual(result["data"]["code"], "setup_steps_incomplete", result)
-        self.assertEqual(result["message"], "setup_steps_incomplete")
-        self.assertIn("guided setup steps", result["reason"])
+        self.assertEqual(result["data"]["code"], "proactive_simulation_required", result)
+        self.assertEqual(result["message"], "proactive_simulation_required")
+        self.assertIn("simulation", result["reason"])
         self.assertIsNone(self.api.progress.read()["proactive_test"])
         # Nothing was dispatched and no attempt was recorded: the refusal happened
         # before the test could start, exactly like the null receipt says.
@@ -1061,16 +753,14 @@ class AstrBotSetupFlowTests(unittest.IsolatedAsyncioTestCase):
         self.prepare_contact_model()
         self.native.platform.client._api._wsr_api.error = TimeoutError("the message may have been sent")
 
-        first = await self.call("proactive_test", {"enable_proactive": True})
-        self.assertEqual(first["data"]["state"], "started", first)
-        receipt = await self.wait_for_test()
+        receipt = self.seed_legacy_test("unknown")
         self.assertEqual(receipt["state"], "unknown", receipt)
 
         again = await self.call("proactive_test", {"enable_proactive": True})
 
         self.assertEqual(again["status"], "error", again)
-        self.assertEqual(again["data"]["code"], "setup_test_non_replayable", again)
-        self.assertIn("cannot be replayed", again["reason"])
+        self.assertEqual(again["data"]["code"], "proactive_simulation_required", again)
+        self.assertIn("simulation", again["reason"])
 
 
 if __name__ == "__main__":

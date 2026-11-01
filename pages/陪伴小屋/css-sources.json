@@ -20,6 +20,7 @@
   "config-editor.css",
   "workbench.css",
   "console.css",
+  "module-switches.css",
   "output-page.css",
   "decision-page.css",
   "action-page.css",
