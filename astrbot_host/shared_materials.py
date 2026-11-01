@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from companion_v2.conversation.foreground import PromptMaterial
@@ -47,6 +48,11 @@ def common_materials(application, context, request, history):
     native_input = SimpleNamespace(text=latest_user_text(history),
         event_id=getattr(request.event, "cause_id", None) or request.event.event_id,
         received_at=at)
+    source_times = [item.get("_qq_time") for item in history
+                    if item.get("role") in {"user", "assistant"} and not item.get("_no_save")
+                    and type(item.get("_qq_time")) is int and 0 < item["_qq_time"] <= at.timestamp()]
+    if source_times:
+        native_input.history_last_interaction_at = datetime.fromtimestamp(max(source_times), timezone.utc).isoformat()
     def collect():
         return build_core_reply_prompt(application, context, native_input, at=at,
                                        include_sections=COMMON_SECTIONS)

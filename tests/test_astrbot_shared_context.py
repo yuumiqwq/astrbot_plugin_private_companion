@@ -160,6 +160,31 @@ class SharedHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.loader.split_reply(request.event, body), ("First", "Second"))
         self.assertEqual(data["decision"], "send")
 
+    async def test_all_background_modes_render_real_qq_time_without_dating_examples(self):
+        from astrbot.core.session_context import prepare_request_context
+
+        examples = [{"role": "user", "content": "Preset question", "_no_save": True},
+                    {"role": "assistant", "content": "Preset answer", "_no_save": True}]
+        history = [{"role": "assistant", "content": "晚安姐姐", "_qq_time": 1793481687, "_qq_sequence": 672}]
+        self.manager.get_conversation.return_value = NS(history=json.dumps(history))
+        self.bridge.verified_persona.return_value = {
+            "prompt": "OvO", "system_prompt": "OvO", "begin_dialogs": examples}
+        self.native.get_config = Mock(return_value={"timezone": "Asia/Shanghai"})
+        provider = NS(provider_config={"max_context_tokens": 128000}, get_model=lambda: "offline-test")
+        self.native.get_provider_by_id.return_value = provider
+        async def prepare(*args, **kwargs):
+            await prepare_request_context(self.native, *args, **kwargs)
+        self.native.prepare_session_request.side_effect = prepare
+        for output, mode in (("proactive_contact", "simple"), ("proactive_contact", "companion"),
+                             ("role_daily_review", "companion")):
+            with self.subTest(output=output, mode=mode):
+                result = await self.loader(replace(self.request, output_format=output, proactive_mode=mode))
+                messages = json.loads(result.context.materials[-1].payload)
+                self.assertEqual([m["content"] for m in messages[:2]], ["Preset question", "Preset answer"])
+                self.assertEqual(messages[-1]["content"],
+                    "[QQ消息发送时间：2026-11-01T05:21:27+08:00；Asia/Shanghai]\n晚安姐姐")
+                self.assertEqual(json.loads(self.manager.get_conversation.return_value.history), history)
+
     async def test_simple_does_not_collect_companion_materials_and_budgets_native_presets(self):
         examples = [{"role": "user", "content": "Preset question", "_no_save": True},
                     {"role": "assistant", "content": "Preset answer", "_no_save": True}]

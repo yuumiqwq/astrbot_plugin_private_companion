@@ -6,7 +6,7 @@ admits a V2 reply batch, invokes a model or starts a worker.
 """
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 import json
 import logging
 import time
@@ -347,9 +347,18 @@ def build_core_reply_prompt(application, context, native_input, *, at, keyword_m
                 received_at = _input_received_at(native_input, at)
                 interaction = owner.interaction(context, min(received_at, at), action="conversation.reply")
                 if isinstance(interaction, dict):
-                    last_at = max((value for value in (interaction.get("last_user_at"),
-                                                       interaction.get("last_assistant_at"))
-                                   if isinstance(value, str) and value), default=None)
+                    prior_times = []
+                    for value in (interaction.get("last_input_at"),
+                                  getattr(native_input, "history_last_interaction_at", None)):
+                        if not isinstance(value, str) or not value:
+                            continue
+                        try:
+                            moment = datetime.fromisoformat(value)
+                        except ValueError:
+                            continue
+                        if moment.tzinfo is not None and moment.utcoffset() is not None:
+                            prior_times.append(moment)
+                    last_at = max(prior_times, default=None)
                     gap = project_interaction_gap(at, last_at, settings["calendar_timezone"])
                     if gap is not None:
                         perception_data["interaction_gap"] = gap

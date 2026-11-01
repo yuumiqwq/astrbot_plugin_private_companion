@@ -1,4 +1,5 @@
 import json
+from datetime import timedelta, timezone
 from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
@@ -43,6 +44,31 @@ class SharedRoleMaterialTests(ModelFixture, unittest.IsolatedAsyncioTestCase):
     def memory():
         return (ContextContribution("memory-test", "memory", "current_memory", ContributionState.READY,
                                     '{"text":"Remembered examination"}'),)
+
+    def test_interaction_gap_uses_the_actual_history_service_field(self):
+        app, request = self.application(), self.request()
+        at = request.event.received_at
+        app.background_history = NS(interaction=Mock(return_value={
+            "last_input_at": (at - timedelta(hours=5)).isoformat()}))
+        native = NS(text="hello", event_id=request.event.event_id, received_at=at)
+        with patch("astrbot_host.core_reply_context._memory_materials", return_value=self.memory()):
+            prompt = build_core_reply_prompt(app, self.context, native, at=at)
+        self.assertEqual(json.loads(prompt.perception_context)["interaction_gap"]["elapsed_minutes"], 300)
+
+    def test_background_gap_uses_latest_qq_time_and_excludes_examples(self):
+        app, request = self.application(), self.request()
+        at = request.event.received_at
+        app.background_history = NS(interaction=Mock(return_value={
+            "last_input_at": (at - timedelta(hours=6)).astimezone(timezone(timedelta(hours=8))).isoformat()}))
+        history = [
+            {"role": "user", "content": "old", "_qq_time": int((at - timedelta(hours=6)).timestamp())},
+            {"role": "assistant", "content": "reply", "_qq_time": int((at - timedelta(hours=5)).timestamp())},
+            {"role": "assistant", "content": "example", "_no_save": True, "_qq_time": int(at.timestamp())},
+        ]
+        with patch("astrbot_host.core_reply_context._memory_materials", return_value=self.memory()):
+            materials = common_materials(app, self.context, request, history)
+        perception = json.loads(next(item.payload for item in materials if item.purpose == "perception"))
+        self.assertEqual(perception["context"]["interaction_gap"]["elapsed_minutes"], 300)
 
     async def test_common_materials_match_normal_reply_and_enter_the_native_history_budget(self):
         app = self.application()
