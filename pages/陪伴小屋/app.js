@@ -715,13 +715,14 @@ function panelHead(title,subtitle,icon,extra='',titleActions=''){
    还没有真实工作区的（创作书架/见闻电台/衣柜陈设）保留说明卡与真实入口，
    不放假工作区。 */
 const FURNITURE_WORKSPACES={desk:['life','archive'],bed:['life','sleep']};
+function moduleSwitchesMarkup(id){return `<div data-module-switches="${escapeHTML(id)}"></div>`;}
 function renderFurniturePanel(id){
   if(id==='wardrobe')return panelHead('衣柜陈设','','door-open',button('回到小屋','data-shell-home'))
-    +`<div class="shell-panel-body"><div class="furniture-brief-actions">${button(I('armchair')+' 布置衣柜','data-detail="arrange"')}${button(I('shirt')+' 参考素材与衣柜','data-go="manage" data-manage="output" data-output-target="materials"')}</div></div>`;
+    +moduleSwitchesMarkup(id)+`<div class="shell-panel-body"><div class="furniture-brief-actions">${button(I('armchair')+' 布置衣柜','data-detail="arrange"')}${button(I('shirt')+' 参考素材与衣柜','data-go="manage" data-manage="output" data-output-target="materials"')}</div></div>`;
   const entry=directory.find(item=>item.station===id);
   if(!entry)return renderHomePanel();
   const status=capabilityStatus(entry.cap)[0];
-  const head=panelHead(entry.name,entry.text,entry.icon,chip(status));
+  const head=panelHead(entry.name,entry.text,entry.icon,chip(status))+moduleSwitchesMarkup(id);
   if(id==='calendar')return head+`<div class="shell-panel-body">${renderRoleState('','planning')}</div>`;
   if(id==='garden')return head+`<div class="shell-panel-body">${product.growthMarkup()}</div>`;
   const ws=FURNITURE_WORKSPACES[id]?product.workspace(...FURNITURE_WORKSPACES[id]):'';
@@ -767,6 +768,7 @@ function renderSectionPanel(id){
     data:renderData}[id];
   if(!renderer)return renderHomePanel();
   return panelHead(heading,subtitle,'settings-2',button('回到小屋','data-shell-home'))
+    +moduleSwitchesMarkup(id)
     +`<div class="shell-panel-body">${renderer()}</div>`;
 }
 
@@ -795,6 +797,7 @@ function renderViewPanel(name){
     return panelHead('状态','身体与心理状态、生理期与作息，以及已定下的计划。','activity',
       button('回到小屋','data-shell-home'),
       `<button type="button" id="state-settings-button" class="state-title-settings" data-state-open-home-settings aria-label="状态设置" title="状态功能与首页展示" aria-haspopup="dialog" aria-controls="state-home-settings" aria-expanded="false" disabled>${I('settings-2')}</button>`)
+      +moduleSwitchesMarkup(name)
       +`<div class="shell-panel-body">${renderRoleState()}</div>`;
   }
   if(name==='diary'){
@@ -803,6 +806,7 @@ function renderViewPanel(name){
        家具面板里的「日记书桌」「睡眠与梦境」是同一套数据的另一个入口。 */
     return panelHead('日记与生活','阅读、睡眠、书写与真实执行记录。','notebook-pen',
       button('回到小屋','data-shell-home'))
+      +moduleSwitchesMarkup(name)
       +`<div class="shell-panel-body">${renderLifeWorkspace()}<div class="life-routine-config">${configEditors('lifeConfigWorkspace',['life'],'生活例程')}${configEditors('libraryConfigWorkspace',['library'],'阅读资料与偏好')}</div></div>`;
   }
   return renderHomePanel();
@@ -863,6 +867,10 @@ function guarded(label,run){
   catch(failure){ console.warn('[陪伴小屋] 工作区挂载失败：'+label,failure); }
 }
 function mountPanelWorkspaces(){
+  guarded('模块开关',()=>{
+    window.CompanionModuleSwitches?.unmount();
+    document.querySelectorAll('[data-module-switches]').forEach(node=>window.CompanionModuleSwitches?.mount(node));
+  });
   /* 自带版式的整页模块：容器在就挂，不在就卸。
      这两页此前只挂在老的 manage 路由（下面 render() 里那两行），而外壳重排后
      左栏走的是 section 面板——于是从新版小屋点「主动与联系」只会得到一个空的
