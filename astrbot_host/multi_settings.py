@@ -200,7 +200,8 @@ class MultiHostSettings:
         data["common"].pop("voice_reply_enabled")  # Delivery presentation can change without re-pinning identity.
         data["common"].pop("voice_reply_policy")
         # Routing is adopted at assembly/request boundaries, not an identity pin.
-        for field in ("additional_providers", "fallback_provider_id", "replacement_rules", "fallback_on_refusal"):
+        for field in ("additional_providers", "fallback_provider_id", "replacement_rules", "fallback_on_refusal",
+                      "provider_output_limit"):
             data["common"].pop(field)
         if not self.group_targets:
             data.pop("group_targets")  # Preserve already initialized private-only installations.

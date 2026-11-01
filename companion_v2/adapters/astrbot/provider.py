@@ -782,6 +782,17 @@ class AstrBotTextProvider:
                 payload = {"model": envelope.model_override or self.model,
                            "messages": deepcopy(_gemini_messages(wire.messages)),
                            "max_tokens": envelope.max_output_tokens}
+            if envelope.reasoning_effort:
+                if self.kind != "openai":
+                    raise TaskError("model_reasoning_unsupported", "this task effort requires a Chat Completions provider")
+                payload["reasoning_effort"] = envelope.reasoning_effort
+                # Native _query merges custom_extra_body after the payload;
+                # only this copied task configuration receives the override.
+                extra = dict(native.provider_config.get("custom_extra_body") or {})
+                extra["reasoning_effort"] = envelope.reasoning_effort
+                if native.provider_config.get("provider") == "deepseek":
+                    extra["thinking"] = {"type": "enabled"}
+                native.provider_config["custom_extra_body"] = extra
             if self.kind == "openai_responses":
                 text_format = responses_text_format(envelope.original)
                 if text_format is not None:

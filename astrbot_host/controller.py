@@ -483,6 +483,7 @@ class AstrBotStagingController:
                                          self.config.get("solar_terms") if isinstance(self.config, dict) else None),
                                      voice=NativeVoiceReply(self.context).render,
                                      additional_providers=self.settings.additional_providers,
+                                     provider_output_limit=self.settings.output_token_ceiling,
                                      fallback_provider_id=self.settings.fallback_provider_id,
                                      replacement_rules=self.settings.replacement_rules,
                                      fallback_on_refusal=self.settings.fallback_on_refusal,

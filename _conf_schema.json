@@ -318,6 +318,11 @@
         "type": "int",
         "default": 2048
       },
+      "provider_output_limit": {
+        "description": "主模型输出容量（0 沿用默认上限）",
+        "type": "int",
+        "default": 0
+      },
       "streaming": {
         "description": "对话模型使用流式请求",
         "hint": "启用后按分段配置选择收齐再发送或边生成边发送。中断时停止剩余内容，已确认发出的段落不重发；后台书写保持完整响应协议。",

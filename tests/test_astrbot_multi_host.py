@@ -42,6 +42,20 @@ class _Query(dict):
 
 
 class MultiSettingsTests(unittest.TestCase):
+    def test_provider_capacity_is_separate_from_task_defaults_and_identity(self):
+        config = multi_config()
+        old = MultiHostSettings.parse(config)
+        self.assertEqual(old.common.output_token_ceiling, old.common.max_output_tokens)
+        config["model"]["provider_output_limit"] = 8192
+        changed = MultiHostSettings.parse(config)
+        self.assertEqual(changed.common.output_token_ceiling, 8192)
+        self.assertEqual(changed.common.max_output_tokens, old.common.max_output_tokens)
+        self.assertEqual(changed.fingerprint, old.fingerprint)
+        for invalid in (-1, 65_537):
+            config["model"]["provider_output_limit"] = invalid
+            with self.assertRaises(ValueError):
+                MultiHostSettings.parse(config)
+
     def test_model_output_limit_uses_the_same_ceiling_as_runtime(self):
         config = multi_config()
         config["model"]["max_output_tokens"] = 65_536
@@ -208,6 +222,17 @@ class LegacyStagingReceiptTests(unittest.TestCase):
 
 
 class MultiHostTests(MultiFixture, unittest.IsolatedAsyncioTestCase):
+    async def test_provider_capacity_changes_without_enlarging_task_defaults(self):
+        config = multi_config()
+        config["model"].update(max_output_tokens=2048, provider_output_limit=8192)
+        self.controller = self.make_controller(config)
+        app = await self.start_host()
+        model = self.controller.session.model
+        self.assertEqual(model.maximum_output_tokens, 8192)
+        self.assertEqual(app.router.providers[model.binding.provider].maximum_output_tokens, 8192)
+        self.assertEqual(app.router.profiles["conversation.reply"].max_output_tokens, 2048)
+        self.assertEqual(app.router.profiles["proactive.compose"].max_output_tokens, 2048)
+
     async def test_saved_large_output_limit_prepares_and_reloads(self):
         prepared = await self.controller.initialize_profile()
         self.assertTrue(prepared.is_success, prepared.failure)

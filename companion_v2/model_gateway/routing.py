@@ -12,7 +12,7 @@ from companion_v2.conversation.foreground import PromptRequest
 from companion_v2.execution.models import TaskError, digest, require
 from companion_v2.execution.runner import TaskRun
 
-from .models import LocalProvider, MAX_MODEL_OUTPUT_TOKENS, ModelEnvelope, ModelTaskProfile
+from .models import LocalProvider, MAX_MODEL_OUTPUT_TOKENS, REASONING_EFFORTS, ModelEnvelope, ModelTaskProfile
 from .refusal import parse_refusal_terms
 from .replacement_rules import checked_rules, match_route, validate_targets
 
@@ -28,6 +28,7 @@ def configuration_fields(profiles: tuple[ModelTaskProfile, ...]) -> tuple[FieldD
             ("fallback", ValueKind.TEXT, profile.default_fallback or profile.default_provider),
             ("prompt", ValueKind.TEXT, profile.default_prompt),
             ("max_output_tokens", ValueKind.INTEGER, profile.max_output_tokens),
+            ("reasoning_effort", ValueKind.TEXT, profile.reasoning_effort),
             ("replacement_rules", ValueKind.TEXT, profile.replacement_rules),
             ("fallback_on_refusal", ValueKind.BOOLEAN, profile.fallback_on_refusal),
             ("refusal_terms", ValueKind.TEXT, profile.refusal_terms),
@@ -38,6 +39,8 @@ def configuration_fields(profiles: tuple[ModelTaskProfile, ...]) -> tuple[FieldD
                           {"minimum": 1, "maximum": MAX_MODEL_OUTPUT_TOKENS} if kind is ValueKind.INTEGER else {})
             if suffix == "refusal_terms":
                 boundaries = {"maximum_chars": 4096}
+            elif suffix == "reasoning_effort":
+                boundaries = {"maximum_chars": 8}
             fields.append(FieldDefinition(profile.group + "." + suffix, profile.group, CONSUMER,
                                           kind, default, **boundaries))
     return tuple(fields)
@@ -102,6 +105,8 @@ class ModelRouter:
         return self.generation
 
     def _route_selection(self, profile, values, context, request, at):
+        if values["reasoning_effort"] not in REASONING_EFFORTS:
+            raise TaskError("model_configuration_invalid", "reasoning effort is not supported")
         rules = checked_rules(values["replacement_rules"])
         validate_targets(rules, self.providers, capabilities=profile.capabilities,
                          max_output_tokens=values["max_output_tokens"])
@@ -158,6 +163,8 @@ class ModelRouter:
         provider_default = self.provider_default(context, profile, snapshot) if provider_id is None else None
         routed_snapshot = self.apply_provider_default(profile, snapshot, provider_default)
         values = {name.rsplit(".", 1)[1]: item.value for name, item in routed_snapshot.fields.items()}
+        if values["reasoning_effort"] not in REASONING_EFFORTS:
+            raise TaskError("model_configuration_invalid", "reasoning effort is not supported")
         fallback_field = routed_snapshot.fields[profile.group + ".fallback"]
         if provider_id is None and values["fallback"] and values["fallback"] == values["provider"] and fallback_field.explicit:
             raise TaskError("model_fallback_duplicate", "fallback must select a different provider")
@@ -206,6 +213,7 @@ class ModelRouter:
             "task_prompt_hash": digest(values["prompt"]),
             "request_hash": digest(request),
             "max_output_tokens": values["max_output_tokens"],
+            "reasoning_effort": values["reasoning_effort"],
             "timeout_seconds": values["timeout_seconds"],
             "replacement_scope": values["replacement_scope"],
             "transport": selected[0].transport,
@@ -219,7 +227,8 @@ class ModelRouter:
         }
         return ResolvedModelPlan(ModelEnvelope(request, values["prompt"], values["max_output_tokens"],
                                               snapshot.resolution_token, model_override=match.model if match else "",
-                                              refusal_terms=parse_refusal_terms(values["refusal_terms"])),
+                                              refusal_terms=parse_refusal_terms(values["refusal_terms"]),
+                                              reasoning_effort=values["reasoning_effort"]),
                                  snapshot, tuple(selected), self.generation, audit)
 
     def validate_plan(self, plan: ResolvedModelPlan):

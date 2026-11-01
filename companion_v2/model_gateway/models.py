@@ -18,6 +18,7 @@ from .response_diagnostics import ResponseDiagnostics
 
 MAX_TOOL_CATALOG = 64
 MAX_MODEL_OUTPUT_TOKENS = 65_536
+REASONING_EFFORTS = ("", "low", "high", "max")
 
 # A model call whose provider never returned a usage receipt would otherwise keep
 # its ceiling in ``held_tokens`` for the lifetime of the installation. The
@@ -142,6 +143,7 @@ class ModelTaskProfile:
     replacement_scope: str = "all"
     prompt_sections: tuple[PromptSection, ...] = ()
     refusal_terms: str = DEFAULT_REFUSAL_TERMS_TEXT
+    reasoning_effort: str = ""
 
     def __post_init__(self):
         for name in ("kind", "default_provider", "version"):
@@ -168,6 +170,8 @@ class ModelTaskProfile:
             raise ValueError("model timeout must be between 1 and 600 seconds")
         if self.replacement_scope not in ("all", "plugin", "conversation"):
             raise ValueError("replacement scope must name a supported task class")
+        if self.reasoning_effort not in REASONING_EFFORTS:
+            raise ValueError("reasoning effort must follow the provider or select a supported level")
         if (any(not isinstance(section, PromptSection) for section in self.prompt_sections)
                 or len({section.key for section in self.prompt_sections}) != len(self.prompt_sections)
                 or any(section.key == "task_prompt" for section in self.prompt_sections)):
@@ -330,6 +334,7 @@ class ModelEnvelope:
     on_reply_prefix: Callable[[ModelDraft], Awaitable[bool]] | None = field(default=None, compare=False, repr=False)
     reply_prefix_ready: Callable[[ModelDraft], bool] | None = field(default=None, compare=False, repr=False)
     refusal_terms: tuple[str, ...] = ()
+    reasoning_effort: str = ""
 
 
 @dataclass(frozen=True)

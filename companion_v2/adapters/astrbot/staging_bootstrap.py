@@ -507,7 +507,8 @@ class AstrBotStagingBootstrap:
              qzone_transport=None,
              additional_providers=(), fallback_provider_id="", replacement_rules="[]",
              fallback_on_refusal=False, review_only=False, default_provider_resolver=None,
-             relay_tool_port_factory=None, search_port_factory=None) -> Outcome[AstrBotStagingSession]:
+             relay_tool_port_factory=None, search_port_factory=None,
+             provider_output_limit=0) -> Outcome[AstrBotStagingSession]:
         """Read current authority and assemble; never initialize, grant or start work."""
         try:
             with self.runtime.read_snapshot():
@@ -515,7 +516,7 @@ class AstrBotStagingBootstrap:
                                                   weather_port, weather_alert_port, balance_port, news_port, solar_term_port, additional_providers,
                                                   fallback_provider_id, replacement_rules, fallback_on_refusal, review_only,
                                                   qzone_transport, default_provider_resolver, relay_tool_port_factory,
-                                                  search_port_factory))
+                                                  search_port_factory, provider_output_limit))
         except TaskError as error:
             return Outcome.failed(error.code, str(error))
         except Exception:
@@ -526,7 +527,7 @@ class AstrBotStagingBootstrap:
               additional_providers=(), fallback_provider_id="", replacement_rules="[]",
               fallback_on_refusal=False, review_only=False, qzone_transport=None,
               default_provider_resolver=None, relay_tool_port_factory=None,
-              search_port_factory=None) -> AstrBotStagingSession:
+              search_port_factory=None, provider_output_limit=0) -> AstrBotStagingSession:
         if self._marker() is None:
             raise TaskError("staging_not_initialized", "use explicit initialization on a fresh staging store first")
         target = self._target(self._time())
@@ -550,6 +551,7 @@ class AstrBotStagingBootstrap:
             qzone_transport=qzone_transport,
             default_provider_resolver=default_provider_resolver,
             additional_providers=additional_providers,
+            provider_output_limit=provider_output_limit,
             fallback_provider_id=fallback_provider_id, replacement_rules=replacement_rules,
             fallback_on_refusal=fallback_on_refusal, review_only=review_only,
             relay_tool_port_factory=relay_tool_port_factory,

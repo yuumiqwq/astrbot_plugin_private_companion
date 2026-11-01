@@ -34,6 +34,40 @@ class SdkClient:
 
 
 class ProactiveNativeContractTests(NativeFixture, unittest.IsolatedAsyncioTestCase):
+    async def test_task_effort_and_output_budget_reach_sdk_without_changing_native_defaults(self):
+        from astrbot.core.provider.sources.openai_source import ProviderOpenAIOfficial
+
+        state = NS(calls=[], text='{"decision":"skip","text":"","skip_reason":"no_natural_opening"}')
+        self.native.provider.provider_config.update(provider="deepseek", custom_extra_body={
+            "temperature": 0.7, "thinking": {"type": "disabled"}, "reasoning_effort": "low"})
+        self.native.provider.client = SdkClient(state)
+        self.native.provider.default_params = inspect.signature(AsyncCompletions.create).parameters.keys()
+        native_defaults = deepcopy(self.native.provider.provider_config)
+        self.native_model = self.make_model()
+        self.native_model.maximum_output_tokens = 8192
+        envelope = await self.envelope(reasoning_effort="max", max_output_tokens=8192)
+        request = replace(envelope.original, output_format="proactive_contact", response_format="json_object",
+            response_schema_json=json.dumps(contact_schema("companion")))
+        with patch.object(FakeProvider, "_query", ProviderOpenAIOfficial._query), \
+             patch.object(FakeProvider, "_apply_provider_specific_request_overrides",
+                          ProviderOpenAIOfficial._apply_provider_specific_request_overrides, create=True), \
+             patch.object(FakeProvider, "_sanitize_assistant_messages",
+                          staticmethod(ProviderOpenAIOfficial._sanitize_assistant_messages), create=True):
+            result = await self.native_model.generate(replace(envelope, original=request))
+            self.assertEqual(result.status, "generated")
+            selected = state.calls[-1]
+            self.assertEqual(selected["max_tokens"], 8192)
+            self.assertEqual(selected["reasoning_effort"], "max")
+            self.assertEqual(selected["extra_body"]["reasoning_effort"], "max")
+            self.assertEqual(selected["extra_body"]["thinking"], {"type": "enabled"})
+            self.assertEqual(selected["response_format"], {"type": "json_object"})
+            self.assertEqual(self.native.provider.provider_config, native_defaults)
+            inherited = await self.native_model.generate(replace(envelope, original=request, reasoning_effort=""))
+            self.assertEqual(inherited.status, "generated")
+            self.assertNotIn("reasoning_effort", state.calls[-1])
+            self.assertEqual(state.calls[-1]["extra_body"], native_defaults["custom_extra_body"])
+            self.assertEqual(self.native.provider.provider_config, native_defaults)
+
     async def test_final_sdk_payload_keeps_json_mode_and_schema_after_shared_history(self):
         from astrbot.core.provider.sources.openai_source import ProviderOpenAIOfficial
 

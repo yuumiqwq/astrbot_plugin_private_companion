@@ -93,6 +93,11 @@ class HostSettings:
     replacement_rules: str = "[]"
     fallback_on_refusal: bool = False
     forward_intake: ForwardIntakePolicy = ForwardIntakePolicy()
+    provider_output_limit: int = 0
+
+    @property
+    def output_token_ceiling(self) -> int:
+        return max(self.max_output_tokens, self.provider_output_limit)
 
     @property
     def installation_id(self) -> str:
@@ -162,6 +167,7 @@ class HostSettings:
             fallback_on_refusal=_boolean(model.get("fallback_on_refusal", False)),
             task_prompt=_text(model.get("task_prompt", "沿用当前 AstrBot 人格，先回应本轮真正的问题或话题。自然、具体地说清意思；只使用本轮输入和有依据的材料，不补造事实。按任务需要调整长短与格式，闲聊不复述、不写客服式收尾。")),
             max_output_tokens=_integer(model.get("max_output_tokens", 2048), minimum=1, maximum=MAX_MODEL_OUTPUT_TOKENS),
+            provider_output_limit=_integer(model.get("provider_output_limit", 0), minimum=0, maximum=MAX_MODEL_OUTPUT_TOKENS),
             maximum_input_estimate=_integer(
                 model.get("maximum_input_estimate", 131_072), minimum=1_024, maximum=1_000_000
             ),

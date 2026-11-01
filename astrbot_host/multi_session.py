@@ -439,7 +439,7 @@ class MultiHostSession:
             binding=ProviderBinding("model.text", common.provider_id, native_types.version, provider_fingerprint),
             provider_id=common.provider_id, version=native_types.version, provider_type=native_types.provider_types,
             function_tool_type=native_types.function_tool, tool_set_type=native_types.tool_set,
-            tariff=common.tariff, maximum_output_tokens=common.max_output_tokens,
+            tariff=common.tariff, maximum_output_tokens=common.output_token_ceiling,
             maximum_input_estimate=common.maximum_input_estimate, output_parameter=common.output_parameter,
             streaming=common.streaming)
         self.model._current()

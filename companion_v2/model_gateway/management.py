@@ -14,7 +14,7 @@ from companion_v2.role_work.life.management import RoleLifeManagement
 from .budget import effective_soft
 from .cache_diagnostics import checked_signature, event_severity, signature_changes, signature_snapshot
 from .core_observations import availability_summary, observations_for_role, request_rows
-from .models import MAX_MODEL_OUTPUT_TOKENS
+from .models import MAX_MODEL_OUTPUT_TOKENS, REASONING_EFFORTS
 from .reply_efficiency import reply_efficiency_report
 from .refusal import canonical_refusal_terms
 from .replacement_rules import checked_rules, validate_targets
@@ -22,7 +22,7 @@ from .usage import MAIN_CHAIN_KIND, ModelUsageReport, usage_source
 
 
 FIELDS = ("provider", "fallback", "prompt", "max_output_tokens", "replacement_rules", "fallback_on_refusal",
-          "refusal_terms", "timeout_seconds", "replacement_scope")
+          "refusal_terms", "timeout_seconds", "replacement_scope", "reasoning_effort")
 OWNER = "configuration"
 PROMPT_LAYERS = (
     {"key": "role_instruction", "label": "角色指令", "editable": False,
@@ -805,6 +805,7 @@ class ModelManagement:
                 or type(values["fallback_on_refusal"]) is not bool
                 or not 1 <= values["max_output_tokens"] <= MAX_MODEL_OUTPUT_TOKENS
                 or type(values["timeout_seconds"]) is not int or not 1 <= values["timeout_seconds"] <= 600
+                or values["reasoning_effort"] not in REASONING_EFFORTS
                 or values["replacement_scope"] not in ("all", "plugin", "conversation")):
             raise TaskError("model_configuration_invalid", "check task prompt and output token limit")
         selected = [values["provider"]] + ([values["fallback"]] if values["fallback"] else [])

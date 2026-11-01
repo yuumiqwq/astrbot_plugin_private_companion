@@ -241,7 +241,7 @@ class AstrBotStagingSession:
                  weather_alert_port=None, balance_port=None, news_port=None, solar_term_port=None, qzone_transport=None, additional_providers=(), fallback_provider_id="", replacement_rules="[]",
                  fallback_on_refusal=False, review_only=False, profile_field_shapes=None,
                  bootstrap_receipt_validated=False, default_provider_resolver=None,
-                 relay_tool_port_factory=None, search_port_factory=None):
+                 relay_tool_port_factory=None, search_port_factory=None, provider_output_limit=0):
         if runtime.installation_id != profile.target.scope.installation_id:
             raise ValueError("staging storage and target must have the same installation")
         self.runtime, self.profile, self.native_types = runtime, profile, native_types
@@ -277,7 +277,7 @@ class AstrBotStagingSession:
         self.model = AstrBotTextProvider(context, bridge=self.bridge, binding=binding,
             provider_id=profile.provider_id, version=native_types.version, provider_type=native_types.provider_types,
             function_tool_type=native_types.function_tool, tool_set_type=native_types.tool_set,
-            tariff=profile.tariff, maximum_output_tokens=profile.max_output_tokens,
+            tariff=profile.tariff, maximum_output_tokens=max(profile.max_output_tokens, provider_output_limit),
             maximum_input_estimate=profile.maximum_input_estimate, output_parameter=profile.output_parameter,
             streaming=profile.streaming)
         if self.model.native is not native:

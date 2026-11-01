@@ -655,3 +655,31 @@ class ModelManagementTests(HostFixture, unittest.IsolatedAsyncioTestCase):
             "露骨性行为", "没办法提交这个请求", "这个请求没办法提交",
             "The prompt could not be submitted", "request could not be submitted")))
         self.assertFalse(field["explicit"])
+
+    async def test_reasoning_effort_is_scoped_editable_and_resettable(self):
+        before = self.manager.status(self.core, layer="window").unwrap()
+        initial = before["tasks"][0]["fields"]["reasoning_effort"]
+        self.assertEqual((initial["value"], initial["source"]), ("", "default"))
+        saved = self.manager.configure(self.core, self.request(before,
+            changes={"reasoning_effort": "max"}, key="task-effort")).unwrap()
+        field = saved["task"]["fields"]["reasoning_effort"]
+        self.assertEqual((field["value"], field["source"], field["explicit"]), ("max", "window", True))
+        current = self.manager.status(self.core, layer="window").unwrap()
+        self.assertTrue(all(task["fields"]["reasoning_effort"]["value"] == ""
+                            for task in current["tasks"] if task["kind"] != saved["task"]["kind"]))
+        role = self.manager.status(self.core, layer="role").unwrap()
+        self.assertEqual(role["tasks"][0]["fields"]["reasoning_effort"]["value"], "")
+        stale = self.manager.configure(self.core, self.request(before,
+            changes={"reasoning_effort": "low"}, key="stale-effort"))
+        self.assertEqual(stale.failure.code, "configuration_revision_conflict")
+        restored = self.manager.configure(self.core, self.request(current,
+            reset=["reasoning_effort"], key="inherit-effort")).unwrap()["task"]["fields"]["reasoning_effort"]
+        self.assertEqual((restored["value"], restored["source"], restored["explicit"]), ("", "default", False))
+
+    async def test_reasoning_effort_rejects_unsupported_values(self):
+        before = self.manager.status(self.core).unwrap()
+        for index, value in enumerate(("ultra", "none", None, 1)):
+            with self.subTest(value=value):
+                result = self.manager.configure(self.core, self.request(before,
+                    changes={"reasoning_effort": value}, key="invalid-effort-" + str(index)))
+                self.assertEqual(result.failure.code, "model_configuration_invalid")
