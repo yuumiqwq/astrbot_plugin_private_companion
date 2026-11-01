@@ -165,7 +165,7 @@ class AstrBotSetupFlowTests(unittest.IsolatedAsyncioTestCase):
     async def call_simulation_fixture(self, api, fields, *, raw=False, simulation_error=None, preview_result=None):
         payload=fields if raw else {"simulation":True,"confirm_delivery":False,**fields}
         request=NS(username="administrator",query={},body=AsyncMock(return_value=json.dumps(payload).encode()))
-        manager=NS(status=lambda operator:Outcome.success(api.simulation_status))
+        manager=NS(status=lambda operator:Outcome.success(api.simulation_status), _authorize=lambda operator:None)
         preview=preview_result or {"state":"passed","decision":"send","simulation":True,
                  "parts":["第一句","第二句"], "task_id":"simulation-task", "call_id":"model-call",
                  "stages":[{"stage":stage,"state":"passed"} for stage in
@@ -174,9 +174,31 @@ class AstrBotSetupFlowTests(unittest.IsolatedAsyncioTestCase):
         with patch("astrbot_host.setup_api.request",request), \
              patch("astrbot_host.setup_api.ContactManagement",return_value=manager), \
              patch("astrbot_host.setup_api.dashboard_operator",return_value=object()), \
+             patch("companion_v2.proactive.simulation.simple_candidate",return_value={"unified":True}), \
              patch("companion_v2.proactive.simulation.simulate_contact",simulator):
             response=await api.proactive_diagnostic()
         return response,simulator
+
+    async def test_simple_simulation_uses_one_entry_without_category_authorization_or_sources(self):
+        api, app, context, _ = self.simulation_api_fixture()
+        api.simulation_status = {"purposes": {}}
+        result, simulator = await self.call_simulation_fixture(api, {"mode": "simple"})
+        self.assertEqual((result["data"]["state"], result["data"]["mode"]), ("passed", "simple"))
+        self.assertNotIn("purpose", result["data"])
+        simulator.assert_awaited_once_with(app, context, {"unified": True}, attempt_id=ANY, mode="simple")
+        app.contact_schedule.diagnostic_candidate.assert_not_awaited()
+        app.contact_schedule.synthetic_diagnostic_candidate.assert_not_awaited()
+        app.proactive.contact.assert_not_awaited()
+
+    async def test_simple_simulation_failure_retains_mode_and_rejects_category_parameters(self):
+        api, app, _, _ = self.simulation_api_fixture()
+        result, simulator = await self.call_simulation_fixture(api, {"mode": "simple", "purpose": "chat"})
+        self.assertEqual((result["data"]["state"], result["data"]["mode"]), ("failed", "simple"))
+        simulator.assert_not_awaited()
+        result, _ = await self.call_simulation_fixture(api, {"mode": "simple"},
+            simulation_error=TaskError("model_output_invalid", "invalid output"))
+        self.assertEqual((result["data"]["code"], result["data"]["mode"]), ("model_output_invalid", "simple"))
+        app.proactive.contact.assert_not_awaited()
 
     async def test_real_delivery_flags_are_rejected_before_model_or_source_reads(self):
         for fields in ({"purpose":"environment","confirm_delivery":True},

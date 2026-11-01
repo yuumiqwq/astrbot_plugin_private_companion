@@ -7,12 +7,36 @@ from companion_v2.conversation.foreground import PromptMaterial
 from companion_v2.execution.models import TaskError
 from companion_v2.model_gateway.failures import ModelFailure
 from companion_v2.model_gateway.models import Amount, CapturedModelOutput, ProviderResponse
-from companion_v2.proactive.simulation import RESULT_PREFIX, simulate_contact
+from companion_v2.proactive.simulation import RESULT_PREFIX, simple_candidate, simulate_contact
+from companion_v2.proactive.configuration import PURPOSES
 from tests.proactive_support import ContactFixture
 from tests.test_role_tool_loop import answered
 
 
 class ProactiveSimulationTests(ContactFixture, unittest.IsolatedAsyncioTestCase):
+    async def test_simple_preview_has_no_category_and_does_not_change_saved_mode(self):
+        app = await self.enabled()
+        self.settings(app, {purpose + ".enabled": False for purpose in PURPOSES}).unwrap()
+        context = self.contact_context()
+        preferences_before = self.preferences(app)
+        before = self.protected_counts(app)
+        async def model(_):
+            return answered('{"send":true,"message":"First\\nSecond"}')
+        self.model_behavior = model
+        app.proactive.output_segments = lambda context, text: tuple(text.splitlines())
+        candidate = simple_candidate(context, "Current persona", at=self.clock.now(), attempt_id="pure-simple")
+        self.assertEqual(candidate["intents"][0].thought.evidence.sources, ())
+        self.assertNotIn("diagnostic_origin", candidate)
+        result = await simulate_contact(app, context, candidate, attempt_id="pure-simple", mode="simple")
+        self.assertEqual((result["mode"], result["parts"]), ("simple", ["First", "Second"]))
+        self.assertEqual(self.called[-1].original.context.materials, ())
+        self.assertEqual(self.called[-1].original.prompt_overrides, ())
+        preferences_after = self.preferences(app)
+        self.assertEqual(preferences_after.values["prompt_mode"], "companion")
+        self.assertEqual(preferences_before.snapshot, preferences_after.snapshot)
+        self.assertEqual(self.protected_counts(app), before)
+        self.assertEqual(self.sent, [])
+
     def candidate(self, identifier="preview"):
         opportunity = self.opportunity(identifier)
         return {"opportunity": opportunity, "intents": (self.intent(opportunity),),

@@ -423,6 +423,11 @@ def request_for(job, records, preferences, history=(), *, last_reply=None, reply
         dedup_active=dedup_active, sent_cutoff=sent_cutoff, reply_for_dedup=reply_for_dedup))
     trigger = BackgroundPromptTrigger(thought.opportunity.opportunity_id, context.actor.principal,
                                       context.scope, preferences.observed_at)
+    if preferences.simple:
+        from .simple_prompts import simple_request
+        request = PromptRequest(trigger, job.role_instruction, SealedForegroundContext(tuple(materials), (), ()),
+            "", context.role_binding, output_format="proactive_contact", response_format="json_object")
+        return simple_request(request, job, preferences)
     official_alert = any(record.reference.owner == OFFICIAL_ALERT_SOURCE_OWNER for record in records)
     greeting_event = job.automatic_origin and job.automatic_origin.get("greeting_event")
     greeting_instruction = ""
@@ -492,9 +497,6 @@ def request_for(job, records, preferences, history=(), *, last_reply=None, reply
                          prompt_overrides=tuple((key, effective_prompt(preferences.values, section)) for key, section in
                              (("output_contract", "output"), ("terminal_prompt_guard", "terminal"),
                               ("capability_instruction", "capability"))))
-    if preferences.values.get("prompt_mode", "companion") == "simple":
-        from .simple_prompts import simple_request
-        return simple_request(request, job, preferences)
     return request
 
 

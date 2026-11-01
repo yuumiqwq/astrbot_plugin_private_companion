@@ -51,3 +51,5 @@ class ContactJob:
     dialogue_history: dict | None = None
     diagnostic_image_intent: str | None = None
     voice_policy: VoiceReplyPolicy | None = None
+    # Preview-only selection; production uses the saved preference snapshot.
+    prompt_mode: str | None = None

@@ -947,17 +947,23 @@ class SetupWebAPI:
     async def proactive_diagnostic(self):
         async with self._test_lock:
             stages = []
+            mode = "companion"
+            def respond(result):
+                return self._response(Outcome.success({**result, "mode": mode}))
             try:
                 username = self._admin()
                 stages.append({"stage": "authorization", "state": "passed"})
-                data = await self._body({"purpose", "confirm_delivery", "simulation"},
-                    optional={"variant", "synthetic_event", "diagnostic_image"})
-                purpose = data["purpose"]
+                data = await self._body({"confirm_delivery", "simulation"},
+                    optional={"mode", "purpose", "variant", "synthetic_event", "diagnostic_image"})
+                mode = data.get("mode", "companion")
+                purpose = data.get("purpose")
                 variant = data.get("variant")
                 synthetic_event = data.get("synthetic_event", False)
                 diagnostic_image = data.get("diagnostic_image", False)
-                if (type(purpose) is not str or purpose not in PURPOSES or data["confirm_delivery"] is not False
-                        or data["simulation"] is not True):
+                if (mode not in ("simple", "companion") or data["confirm_delivery"] is not False
+                        or data["simulation"] is not True
+                        or mode == "simple" and set(data) - {"mode", "simulation", "confirm_delivery"}
+                        or mode == "companion" and (type(purpose) is not str or purpose not in PURPOSES)):
                     raise TaskError("proactive_test_confirmation_required",
                                     "choose one purpose with simulation enabled and delivery disabled")
                 if type(synthetic_event) is not bool:
@@ -986,9 +992,27 @@ class SetupWebAPI:
 
                 operator = dashboard_operator(self.controller.runtime, username, at=self.controller.now())
                 manager = ContactManagement(session.application, context)
-                status = require(manager.status(operator))
+                if mode == "simple":
+                    manager._authorize(operator)
+                else:
+                    status = require(manager.status(operator))
                 stages.append({"stage": "settings", "state": "passed"})
+                if mode == "simple":
+                    from companion_v2.proactive.simulation import simple_candidate, simulate_contact
+                    candidate = simple_candidate(context, instruction, at=session.application.now(), attempt_id=attempt_id)
+                    preview = await simulate_contact(session.application, context, candidate,
+                        attempt_id=attempt_id, mode="simple")
+                    result = {**preview, "mode": "simple", "recipient": "preview", "attempt_id": attempt_id,
+                        "delivery_state": "not_requested", "receipt_ref": None,
+                        "usage_summary": self._diagnostic_usage_summary(session, context),
+                        "started_at": started, "finished_at": datetime.now(timezone.utc).isoformat(),
+                        "stages": [*stages, *preview["stages"]], "replay_allowed": False}
+                    setup = self.progress.complete_simulation(result)
+                    result.update(ready=setup["ready"], proactive_test=setup["proactive_test"])
+                    return respond(result)
                 purpose_status = status["purposes"].get(purpose)
+                if status.get("settings", {}).get(purpose + ".enabled") is False:
+                    raise TaskError("proactive_disabled", "the selected companion purpose is disabled")
                 test_policy_override = bool(purpose_status and purpose_status.get("reason") in
                     ("proactive_disabled", "proactive_paused", "proactive_quiet_hours")
                     and status.get("settings", {}).get(purpose + ".enabled") is True)
@@ -1043,21 +1067,21 @@ class SetupWebAPI:
                     failure = self._diagnostic_failure(purpose, route_hint, error.stage, error.code, str(error),
                         stages=stages, route=route_hint, state=error.state, task_id=error.task_id)
                     failure.update(attempt_id=attempt_id, event_mode="source_backed")
-                    return self._response(Outcome.success(failure))
+                    return respond(failure)
                 except TaskError as error:
                     failure_stage = PROACTIVE_TEST_FAILURE_LABELS.get(
                         error.code, ("trusted_candidate", "当前来源生产器未能生成有效候选"))[0]
                     stages = [{"stage": name, "state": "passed"} for name in
                         ("authorization", "binding", "runtime", "settings", "purpose")]
                     stages.append({"stage": failure_stage, "state": "failed"})
-                    return self._response(Outcome.success(self._diagnostic_failure(
+                    return respond(self._diagnostic_failure(
                         purpose, route_hint, failure_stage, error.code, str(error),
-                        stages=stages, route=route_hint)))
+                        stages=stages, route=route_hint))
                 from companion_v2.proactive.simulation import simulate_contact
                 stages.extend(candidate.get("stages", []))
                 stages.append({"stage": "trusted_candidate", "state": "passed"})
                 preview = await simulate_contact(session.application, context, candidate,
-                    attempt_id=attempt_id, diagnostic_image=diagnostic_image)
+                    attempt_id=attempt_id, diagnostic_image=diagnostic_image, mode="companion")
                 result = {**preview,
                     "purpose": purpose, "purpose_label": PURPOSES[purpose],
                     "route": candidate["route"], "variant": candidate["route"],
@@ -1069,22 +1093,22 @@ class SetupWebAPI:
                     "stages": [*stages, *preview["stages"]], "replay_allowed": False}
                 setup = self.progress.complete_simulation(result)
                 result.update(ready=setup["ready"], proactive_test=setup["proactive_test"])
-                return self._response(Outcome.success(result))
+                return respond(result)
             except TaskError as error:
                 failure_stage = PROACTIVE_TEST_STAGE_BY_CODE.get(error.code, "execution")
                 if failure_stage == "output_parsing":
                     stages.append({"stage": "model_generation", "state": "passed"})
                 stages.append({"stage": failure_stage, "state": "failed"})
-                return self._response(Outcome.success(self._diagnostic_failure(
+                return respond(self._diagnostic_failure(
                     data.get("purpose") if "data" in locals() and isinstance(data, dict) else None,
-                    None, failure_stage, error.code, str(error), stages=stages)))
+                    None, failure_stage, error.code, str(error), stages=stages))
             except (ValueError, TypeError, KeyError, OSError, UnicodeError) as error:
-                return self._response(Outcome.success(self._diagnostic_failure(
-                    None, None, "request", "proactive_test_failed", f"{type(error).__name__}: {error}")))
+                return respond(self._diagnostic_failure(
+                    None, None, "request", "proactive_test_failed", f"{type(error).__name__}: {error}"))
             except Exception as error:
-                return self._response(Outcome.success(self._diagnostic_failure(
+                return respond(self._diagnostic_failure(
                     data.get("purpose") if "data" in locals() and isinstance(data, dict) else None,
-                    None, "execution", "proactive_test_failed", f"{type(error).__name__}: {error}")))
+                    None, "execution", "proactive_test_failed", f"{type(error).__name__}: {error}"))
 
     async def daily_diagnostic(self):
         async with self._test_lock:

@@ -18,7 +18,8 @@ from companion_v2.storage.models import OperationState
 from companion_v2.storage.repositories import OperationRepository
 
 from .budget import DIAGNOSTIC_TASK_PREFIX
-from .contact_models import ContactJob
+from .contact_models import ContactIntent, ContactJob
+from .models import EvidenceSnapshot, Opportunity, Thought, ThoughtKind
 from .planner import ProactivePlanner
 from .prompt_catalog import presentation_instructions
 from .prompts import request_for
@@ -65,7 +66,16 @@ def _memory_preview(contacts, job, records):
             db.execute("RELEASE SAVEPOINT message_simulation_memory")
 
 
-async def simulate_contact(app, context, candidate, *, attempt_id, diagnostic_image=False):
+def simple_candidate(context, role_instruction, *, at, attempt_id):
+    opportunity = Opportunity("simple-preview-" + digest([context.key, attempt_id]),
+                              context.scope, at, at + timedelta(minutes=3))
+    thought = Thought("simple-preview-thought-" + digest([context.key, attempt_id]), opportunity,
+                      ThoughtKind.CONVERSATION, "periodic", EvidenceSnapshot(context.scope, at), 1.0)
+    return {"opportunity": opportunity, "intents": (ContactIntent("chat", thought),),
+            "role_instruction": role_instruction}
+
+
+async def simulate_contact(app, context, candidate, *, attempt_id, diagnostic_image=False, mode=None):
     """Use current model routing and parsing, retaining only a diagnostic result.
 
     The existing task validator keeps checking role, sources and configuration.
@@ -80,7 +90,7 @@ async def simulate_contact(app, context, candidate, *, attempt_id, diagnostic_im
     opportunity, intents = candidate["opportunity"], candidate["intents"]
     if opportunity.scope != context.scope or not opportunity.opened_at <= now < opportunity.expires_at:
         raise TaskError("opportunity_not_current", "simulation source opportunity is unavailable")
-    preferences = require(contacts.preferences.read(context, observed_at=now))
+    preferences = require(contacts.preferences.read(context, observed_at=now)).for_mode(mode)
     contacts._adopt(context, preferences)
     feasible, by_id = [], {}
     for intent in intents:
@@ -94,7 +104,7 @@ async def simulate_contact(app, context, candidate, *, attempt_id, diagnostic_im
     intent = by_id[selected.selected.thought_id]
     records = contacts._records(context, intent.thought.evidence.sources, now)
     task_id = DIAGNOSTIC_TASK_PREFIX + "simulation-" + digest([context.key, attempt_id])
-    request_hash = digest([context.key, attempt_id, candidate, "simulation"])
+    request_hash = digest([context.key, attempt_id, candidate, "simulation", mode])
     presentation = ReplySettings(contacts.configuration).capture(context, now)["settings"]
     deadline = min(opportunity.expires_at, now + timedelta(seconds=180))
     job = ContactJob(context, intent, candidate["role_instruction"], request_hash,
@@ -103,8 +113,9 @@ async def simulate_contact(app, context, candidate, *, attempt_id, diagnostic_im
         presentation_settings={key: presentation[key] for key in TEXT_DEFAULTS},
         segmentation_settings={key: presentation[key] for key in _SEGMENTATION_SETTINGS_KEYS if key in presentation},
         deadline_at=deadline, administrator_test=True,
-        diagnostic_source_backed=(candidate.get("diagnostic_origin", {}).get("_diagnostic", {}).get("route_id") != "synthetic_event"),
-        diagnostic_origin=candidate.get("diagnostic_origin"))
+        diagnostic_source_backed=bool(candidate.get("diagnostic_origin") and
+            candidate.get("diagnostic_origin", {}).get("_diagnostic", {}).get("route_id") != "synthetic_event"),
+        diagnostic_origin=candidate.get("diagnostic_origin"), prompt_mode=mode)
     result, completion_call = None, None
 
     def failed_output(request, text, call_id, code, error, error_type, finish_reason="stop"):
@@ -119,7 +130,7 @@ async def simulate_contact(app, context, candidate, *, attempt_id, diagnostic_im
     async def generate(run):
         nonlocal result, completion_call
         current = contacts._policy(context, intent.purpose, contacts.tasks.now(),
-            token=job.preference_token, administrator_test=True)
+            token=job.preference_token, administrator_test=True, prompt_mode=mode)
         source_records = contacts._records(context, intent.thought.evidence.sources, contacts.tasks.now(),
                                            hashes=job.source_hashes)
         # Render the production task, not the former force-send test prompt.
@@ -140,7 +151,7 @@ async def simulate_contact(app, context, candidate, *, attempt_id, diagnostic_im
                                                                                      action="proactive.contact"))
         policy = text_policy(job.presentation_settings or {})
         segmentation = _segmentation_policy(job.segmentation_settings)
-        memory = _memory_preview(contacts, render_job, source_records)
+        memory = () if current.simple else _memory_preview(contacts, render_job, source_records)
         role_state = role_state_for_prompt(contacts._role_state_summary(context, now), intent.purpose)
         recent_life = contacts._recent_life_summary(context, now)
         request = request_for(render_job, source_records, current, history, last_reply=last_reply,

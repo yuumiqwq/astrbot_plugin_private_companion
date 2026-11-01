@@ -404,8 +404,8 @@ class ProactiveContacts:
             return False
         return result.failure.code in REVOCABLE_ABSENCE_CODES
 
-    def _policy(self, context, purpose, at, *, token=None, contact_id="", administrator_test=False):
-        preferences = require(self.preferences.read(context, observed_at=at))
+    def _policy(self, context, purpose, at, *, token=None, contact_id="", administrator_test=False, prompt_mode=None):
+        preferences = require(self.preferences.read(context, observed_at=at)).for_mode(prompt_mode)
         preferences.require_contact(purpose, ignore_time_restrictions=administrator_test,
                                     ignore_master_switch=administrator_test)
         if token is not None and preferences.snapshot.resolution_token != token:
@@ -598,6 +598,11 @@ class ProactiveContacts:
                 raise TaskError("model_task_unregistered", "contact requires its own explicit background model profile")
             require(self.tasks.authorize_context(context, action=GROUP, observed_at=self.tasks.now()))
             initial_preferences = require(self.preferences.read(context, observed_at=self.tasks.now()))
+            if initial_preferences.simple and not administrator_test:
+                identity_fields = {"batch_id", "event_key", "event_hash", "role_hash", "reanchored", "previous_batch_id"}
+                if (len(intents) != 1 or intents[0].purpose != "chat"
+                        or automatic_origin is not None and set(automatic_origin) - identity_fields):
+                    raise TaskError("contact_simple_periodic_only", "simple mode uses one periodic contact decision")
             self._adopt(context, initial_preferences)
             invocation = None
             registered = False
@@ -648,7 +653,7 @@ class ProactiveContacts:
                             continue
                         # Preference weights affect this competition only, never rights or scheduling.
                         weight = preferences.weight(intent.purpose)
-                        if automatic_origin is not None:
+                        if automatic_origin is not None and not preferences.simple:
                             prior = self.runtime.read_one("""SELECT record_json FROM proactive_contacts
                                 WHERE origin_key = ? AND json_extract(record_json, '$.purpose') = ?
                                 ORDER BY created_at DESC LIMIT 1""", (context.key, intent.purpose))
@@ -687,7 +692,7 @@ class ProactiveContacts:
                                   voice_policy=voice_policy({**presentation, "voice_enabled": True}),
                                   segmentation_settings=segmentation_settings,
                                   deadline_at=task_deadline)
-                    if not administrator_test:
+                    if not administrator_test and not preferences.simple:
                         job = replace(job, expression_style=self._capture_expression(context, at))
                     self._pending[task_id] = job
                     invocation = asyncio.current_task()
@@ -755,7 +760,7 @@ class ProactiveContacts:
             raise TaskError("contact_request_unavailable", "original contact inputs are no longer held")
         preferences = self._policy(job.context, job.intent.purpose, at, token=job.preference_token,
                                    contact_id="contact-" + digest(spec.task_id),
-                                   administrator_test=job.administrator_test)
+                                   administrator_test=job.administrator_test, prompt_mode=job.prompt_mode)
         self._records(job.context, job.intent.thought.evidence.sources, at, hashes=job.source_hashes)
         self._continuity(job.context, job.history, job.interaction, job.automatic_origin, at,
                          last_reply=job.last_reply, dialogue_history=job.dialogue_history,
@@ -789,7 +794,7 @@ class ProactiveContacts:
         job = self._pending[run.task.task_id]
         at = self.tasks.now()
         preferences = self._policy(job.context, job.intent.purpose, at, token=job.preference_token,
-                                   administrator_test=job.administrator_test)
+                                   administrator_test=job.administrator_test, prompt_mode=job.prompt_mode)
         records = self._records(job.context, job.intent.thought.evidence.sources, at, hashes=job.source_hashes)
         source_origin = job.automatic_origin or job.diagnostic_origin
         contact_id = "contact-" + digest(run.task.task_id)
@@ -867,8 +872,8 @@ class ProactiveContacts:
                 self._pending[run.task.task_id] = job
             presentation = text_policy(job.presentation_settings or {})
             segmentation = _segmentation_policy(job.segmentation_settings)
-            memory_materials = () if job.administrator_test else self._memory_materials(job, records)
-            expression_materials = self._expression_materials(job, contact_id)
+            memory_materials = () if job.administrator_test or preferences.simple else self._memory_materials(job, records)
+            expression_materials = () if preferences.simple else self._expression_materials(job, contact_id)
             rhythm_snapshot = (None if job.administrator_test else
                                self.budget.rhythm_snapshot(job.context, preferences, at))
             role_state = (None if job.administrator_test else role_state_for_prompt(
@@ -934,7 +939,7 @@ class ProactiveContacts:
             if confidence_skip:
                 body, reaction_intent = None, None
             run.validate()
-            if (body is not None and not job.administrator_test and job.expression_style is not None
+            if (body is not None and not preferences.simple and not job.administrator_test and job.expression_style is not None
                     and job.expression_style.get("style_review_enabled", True) and self.expression_review is not None
                     and expression_settings(self.runtime, job.context).style_review_enabled):
                 body = await self.expression_review.review(run, request, replace(completion.draft, text=body),
@@ -1293,7 +1298,7 @@ class ProactiveContacts:
         one that is merely outstanding leaves the draft sealed and undelivered.
         """
         values = preferences.values
-        if not values["enable_llm_proactive_persona_judge"]:
+        if preferences.simple or not values["enable_llm_proactive_persona_judge"]:
             return None, None
         signature = signature_for(job.intent.purpose, body, review_context={
             "role_instruction": job.role_instruction, "preference_token": job.preference_token,

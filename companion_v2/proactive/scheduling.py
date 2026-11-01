@@ -372,7 +372,7 @@ class ContactSchedule:
         preferences = require(self.contacts.preferences.read(context, observed_at=at))
         if not preferences.values["automatic_enabled"]:
             raise TaskError("contact_automatic_disabled", "automatic opportunities are disabled")
-        idle = self.rhythm.idle_seconds(preferences)
+        idle = (preferences.values["idle_seconds"] if preferences.simple else self.rhythm.idle_seconds(preferences))
         if at < max(event.received_at, datetime.fromisoformat(row["created_at"])) + timedelta(seconds=idle):
             raise TaskError("contact_conversation_active", "original conversation has not reached its configured idle time")
         interaction = None
@@ -460,13 +460,13 @@ class ContactSchedule:
             self._note_window(context, row, at, "settings", "skipped", "automatic_contact_disabled")
             return None
         sleep = from_health_source(self.health_source, at)
-        if sleep is not None and sleep.quiet_until > at:
+        if not preferences.simple and sleep is not None and sleep.quiet_until > at:
             self._note_window(context, row, at, "sleep", "skipped", "sleep_wake_grace",
                               next_at=sleep.morning_opened_at)
             return None
         origin, batch, event = self._origin(context, row["batch_id"], at)
         first = max(event.received_at, datetime.fromisoformat(batch["created_at"])) + timedelta(
-            seconds=self.rhythm.idle_seconds(preferences))
+            seconds=preferences.values["idle_seconds"] if preferences.simple else self.rhythm.idle_seconds(preferences))
         if at < first:
             self._note_window(context, row, at, "rhythm", "skipped", "idle_period_not_elapsed", next_at=first)
             return None
@@ -475,6 +475,8 @@ class ContactSchedule:
         interaction = self.contacts.history.interaction(context, at, action=GROUP)
         unanswered = interaction["contacts_since_last_input"]
         self.contacts.budget.contacts(context, preferences, at)
+        if preferences.simple:
+            return self._simple_plan(context, row, batch, event, origin, preferences, at, first, unanswered)
         last_contact = self.rhythm.last_contact(context)
         # A burst continuation is timed from its own round, not from the ordinary
         # slot grid, so the coarse interval gate does not consume its slot. The
@@ -724,6 +726,32 @@ class ContactSchedule:
             return None
         return context, opportunity, tuple(intents), batch["role_instruction"], origin
 
+    def _simple_plan(self, context, row, batch, event, origin, preferences, at, first, unanswered):
+        reason = preferences.reason("chat")
+        if reason:
+            self._note_window(context, row, at, "settings", "skipped", reason)
+            return None
+        if preferences.unanswered_paused(unanswered):
+            self._note_window(context, row, at, "rhythm", "skipped", "unanswered_pause")
+            return None
+        base_interval = timedelta(seconds=preferences.values["interval_seconds"])
+        interval = timedelta(seconds=preferences.contact_interval_seconds(unanswered))
+        if (self._recent_attempt_blocking(context, at, base_interval, include_skips=True)
+                or self._recent_attempt_blocking(context, at, interval)):
+            self._note_window(context, row, at, "rhythm", "skipped", "recent_attempt_cooldown")
+            return None
+        opened = first + ((at - first) // interval) * interval
+        opportunity = Opportunity("simple-periodic-" + digest([context.key, stamp(opened)]),
+                                  context.scope, opened, opened + interval)
+        task_id = self.contacts.task_id(context, opportunity)
+        if (self.runtime.read_one("SELECT 1 FROM execution_tasks WHERE task_id=?", (task_id,))
+                or self.runtime.read_one("SELECT 1 FROM proactive_contacts WHERE task_id=?", (task_id,))):
+            self._note_window(context, row, at, "rhythm", "skipped", "slot_already_processed")
+            return None
+        thought = Thought("simple-periodic-thought-" + digest([context.key, stamp(opened)]), opportunity,
+            ThoughtKind.CONVERSATION, "periodic", EvidenceSnapshot(context.scope, at, (event.source,)), 1.0)
+        return context, opportunity, (ContactIntent("chat", thought),), batch["role_instruction"], origin
+
     def _share_candidate(self, context, preferences, candidate):
         """Apply the configured share probability to a role-share candidate only."""
         if candidate is None:
@@ -746,6 +774,7 @@ class ContactSchedule:
         authorization and delivery checks.
         """
         values = dict(preferences.values)
+        values["prompt_mode"] = "companion"
         values["enabled"] = True
         values["quiet_enabled"] = False
         values["pause_until"] = ""
@@ -1461,9 +1490,11 @@ class ContactSchedule:
             return False
         try:
             context = TaskContext.restore(json.loads(row["context_json"]))
+            preferences = require(self.contacts.preferences.read(context, observed_at=at))
+            if preferences.simple:
+                return False
             if not service.ready(context, at):
                 return False
-            preferences = require(self.contacts.preferences.read(context, observed_at=at))
             decision = self.screen_events.peek_due(context, preferences, at)
             if decision is None:
                 return False

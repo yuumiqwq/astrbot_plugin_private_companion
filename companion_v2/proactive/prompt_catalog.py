@@ -140,12 +140,14 @@ def assembly(mode="companion"):
                      "voice_preference", "poke", "memory", "learned_style", "dialogue", "length", "news_length",
                      "history", "dedup", "dedup_parameters", "diagnostic_synthetic", "diagnostic_source",
                      "diagnostic_plain", "diagnostic_presentation", "diagnostic_image", "style", "style_wrapper"]
-    simple_sections = ["simple", "simple_output", "simple_terminal"]
+    simple_sections = ["simple"]
+    legacy_simple_sections = ["simple_output", "simple_terminal"]
     result = {"purpose_count": len(PURPOSES), "purpose_sections": {key: "purpose." + key for key in PURPOSES},
             "current_mode": mode, "simple_sections": simple_sections,
             "common_sections": common,
             "conditional_sections": [item.key for item in sections()
-                                     if item.key not in common + simple_sections and not item.key.startswith("purpose.")],
+                                     if item.key not in common + simple_sections + legacy_simple_sections
+                                     and not item.key.startswith("purpose.")],
             "diagnostic_variants": {
                 "mobile_location": {"purpose": "environment", "sections": ["origin.reality_location_event", "diagnostic_source"]},
                 "reaction_image": {"purpose": "chat", "sections": ["diagnostic_image"]}},
@@ -164,10 +166,8 @@ def assembly(mode="companion"):
     result["companion_order"] = result["order"]
     result["simple_order"] = [
         {"key": "role_instruction", "label": "当前人格与预设", "sections": []},
-        {"key": "request_instruction", "label": "简洁主动提示词", "sections": ["simple"]},
-        {"key": "output_contract", "label": "简洁输出格式", "sections": ["simple_output"]},
-        {"key": "terminal_prompt_guard", "label": "简洁末尾格式", "sections": ["simple_terminal"]},
-        {"key": "materials", "label": "会话历史与本轮资料", "sections": []}]
+        {"key": "materials", "label": "会话历史", "sections": []},
+        {"key": "request_instruction", "label": "简洁主动提示词", "sections": ["simple"]}]
     if mode == "simple":
         result["order"] = result["simple_order"]
     return result

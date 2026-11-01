@@ -18,21 +18,11 @@ def simple_request(request, job, preferences):
     from .prompt_catalog import effective_prompt
     from .response_schema import contact_schema
 
-    materials = []
     local_now = preferences.observed_at
     for material in request.context.materials:
         if material.purpose == "contact_intent":
             source = json.loads(material.payload)
             local_now = source.get("local_now", local_now.isoformat())
-            # Candidate thoughts can contain event-specific instructions. The
-            # compact task keeps actual state and time, not those instructions.
-            facts = {key: value for key, value in source.items() if key in {
-                "now", "local_now", "local_date", "local_time", "weekday", "timezone",
-                "role_state", "recent_life", "recent_timing"}}
-            materials.append(replace(material, purpose="current_context",
-                                     payload=json.dumps(facts, ensure_ascii=False)))
-        elif material.owner not in {"expression", "expression.learning", "expression.style", "role.expression"}:
-            materials.append(material)
     interaction = getattr(job, "interaction", None) or {}
     unanswered = interaction.get("contacts_since_last_input", 0)
     if type(unanswered) is not int or unanswered < 0:
@@ -42,12 +32,7 @@ def simple_request(request, job, preferences):
     prompt = prompt.replace("{{unanswered_count}}", str(unanswered))
     return replace(request, instruction=prompt, proactive_mode="simple",
         response_schema_json=json.dumps(contact_schema("simple")),
-        context=replace(request.context, materials=tuple(materials)),
-        prompt_overrides=(
-            ("task_prompt", ""),
-            ("output_contract", effective_prompt(preferences.values, "simple_output")),
-            ("terminal_prompt_guard", effective_prompt(preferences.values, "simple_terminal")),
-            ("capability_instruction", "")))
+        context=replace(request.context, materials=()), prompt_overrides=())
 
 
 def normalize_output(text, *, mode="companion"):

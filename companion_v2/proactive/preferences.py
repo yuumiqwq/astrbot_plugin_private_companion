@@ -1,6 +1,6 @@
 """Time-aware contact policy consumed at both generation and dispatch boundaries."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 import math
 from types import MappingProxyType
@@ -40,15 +40,29 @@ class ContactPreferences:
     def __post_init__(self):
         object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
 
+    @property
+    def simple(self):
+        return self.values.get("prompt_mode", "companion") == "simple"
+
+    def for_mode(self, mode):
+        if mode is None:
+            return self
+        if mode not in ("companion", "simple"):
+            raise TaskError("contact_prompt_mode_invalid", "select a supported proactive prompt mode")
+        return replace(self, values={**self.values, "prompt_mode": mode})
+
     def reason(self, purpose, *, ignore_time_restrictions=False, ignore_master_switch=False):
         if purpose not in PURPOSES:
             raise TaskError("unknown_contact_purpose", "contact purpose must be registered")
         values = self.values
-        if (not values["enabled"] and not ignore_master_switch) or not values[purpose + ".enabled"]:
+        if ((not values["enabled"] and not ignore_master_switch)
+                or not self.simple and not values[purpose + ".enabled"]):
             return "proactive_disabled"
         if not ignore_time_restrictions:
-            if any(until is not None and self.observed_at < until for until in
-                   (pause_time(values["pause_until"]), pause_time(values[purpose + ".pause_until"]))):
+            pauses = [pause_time(values["pause_until"])]
+            if not self.simple:
+                pauses.append(pause_time(values[purpose + ".pause_until"]))
+            if any(until is not None and self.observed_at < until for until in pauses):
                 return "proactive_paused"
         if not ignore_time_restrictions and values["quiet_enabled"]:
             now = self.observed_at.astimezone(ZoneInfo(values["quiet_timezone"])).time()
@@ -64,13 +78,14 @@ class ContactPreferences:
             raise TaskError(reason, "current contact preferences do not permit this contact")
 
     def weight(self, purpose):
-        return self.values[purpose + ".weight"]
+        return 1.0 if self.simple else self.values[purpose + ".weight"]
 
     def dedup_applies(self, purpose, origin=None):
         if not self.values["dedup_enabled"]:
             return False
-        policy = next((route for marker, route in DEDUP_EVENT_POLICY if origin and marker in origin),
-                      DEDUP_PURPOSE_POLICY[purpose])
+        policy = ("semantic" if self.simple else
+                  next((route for marker, route in DEDUP_EVENT_POLICY if origin and marker in origin),
+                       DEDUP_PURPOSE_POLICY[purpose]))
         return policy in dedup_policies(self.values["dedup_policies"])
 
     def unanswered_paused(self, count):
