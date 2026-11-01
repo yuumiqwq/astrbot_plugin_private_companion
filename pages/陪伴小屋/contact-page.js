@@ -455,7 +455,7 @@ window.CompanionContactPage = (() => {
     return {view:"dial", purposeQuery:"", purposeBucket:"all", purposeFilter:"all",
       testQuery:"", testBucket:"all", testCoverage:"all", promptTestId:"chat", materialQuery:"", materialCategory:"all",
       materialKind:"window", materialWindow:"all", materialDay:localDayKey(), materialTimezone:localTimezone(),
-      nativePath:"", configPath:"",
+      nativePath:"", configPath:"", promptMode:"companion", promptModeRevision:0,
       settings:null, effective:null, effectiveSettings:null, purposes:{}, hostState:"",
       materialItems:[], materialsLoaded:false, materialsLoading:false, materialsError:"",
       materialsState:"not_checked", materialsCheckedAt:"", materialsPatrolPolls:0,
@@ -892,6 +892,26 @@ window.CompanionContactPage = (() => {
                  ["purposes","契机矩阵",ICON.seed],
                  ["gates","开口闸门",ICON.gate],["budgets","额度与去重",ICON.quota],
                  ["sources","外部触发源",ICON.source],["materials","主动检视",ICON.seed]];
+  const visibleViews = () => VIEWS.filter(([id]) => data.promptMode !== "simple" || id !== "purposes");
+  function acceptPromptMode(mode) {
+    if (!data || !["simple", "companion"].includes(mode)) return;
+    data.promptModeRevision++;
+    if (data.promptMode === mode) return;
+    data.promptMode = mode;
+    data.notice = ""; data.error = false;
+    if (!visibleViews().some(([id]) => id === data.view)) data.view = "tests";
+    render();
+  }
+  async function loadPromptMode(ticket = version) {
+    const endpoint = window.CompanionProduct?.role?.()?.model_api;
+    if (!endpoint) return;
+    const revision = data.promptModeRevision;
+    try {
+      const result = await api("GET", rel(endpoint), {layer:"window"});
+      const mode = result.tasks?.find(task => task.kind === "proactive.compose")?.prompt_assembly?.current_mode;
+      if (live(ticket) && data.promptModeRevision === revision) acceptPromptMode(mode);
+    } catch { /* 提示词编辑区保留读取和重试入口。 */ }
+  }
   function headMarkup() {
     const v = verdict();
     const label = VIEWS.find(([id]) => id === data.view)?.[1] || "节律盘";
@@ -913,7 +933,7 @@ window.CompanionContactPage = (() => {
     </header>`;
   }
   function railMarkup() {
-    return `<nav class="ct-rail" aria-label="联系工作台">${VIEWS.map(([id, text, icon]) =>
+    return `<nav class="ct-rail" aria-label="联系工作台">${visibleViews().map(([id, text, icon]) =>
       `<button type="button" data-view="${id}" aria-pressed="${data.view === id}"`
       + `${data.view === id && data.viewShiftNow ? ' class="is-picked"' : ""}>
         <span class="ct-rail-icon">${icon}</span><span class="ct-rail-label">${e(text)}</span></button>`).join("")}</nav>`;
@@ -1225,6 +1245,21 @@ window.CompanionContactPage = (() => {
       </select></label>` : ""}`;
   }
   function testsView() {
+    const daily = `<section class="ct-daily-test" aria-label="每日整理测试">
+      <header><h3>每日整理</h3><button type="button" class="ct-btn is-primary" data-daily-test-run
+        ${data.testBusy ? " disabled" : ""}>${data.testBusy === "daily_review"
+          ? '<span class="ct-spinner" aria-hidden="true"></span><span>模拟中…</span>' : "测试每日整理"}</button></header>
+      ${dailyResultMarkup()}
+    </section>`;
+    if (data.promptMode === "simple") return `<div class="ct-tests" data-proactive-mode="simple">
+      <div data-contact-prompts></div>
+      <section class="ct-daily-test" aria-label="主动消息测试">
+        <header><h3>主动消息</h3><button type="button" class="ct-btn is-primary" data-test-run="simple"
+          ${data.testBusy ? " disabled" : ""}>${data.testBusy === "simple"
+            ? '<span class="ct-spinner" aria-hidden="true"></span><span>模拟中…</span>' : "运行模拟"}</button></header>
+        ${testResultMarkup("simple")}
+      </section>${daily}
+    </div>`;
     const counts = Object.fromEntries(["ready", "partial", "missing"].map(coverage => [
       coverage, TEST_INSTRUCTIONS.filter(item => item.coverage === coverage).length,
     ]));
@@ -1253,14 +1288,9 @@ window.CompanionContactPage = (() => {
         <button type="button" class="ct-btn ct-test-copy" data-test-copy="${e(item.id)}">${ICON.copy}<span>复制测试说明</span></button>
       </footer>
     </article>`).join("");
-    return `<div class="ct-tests">
+    return `<div class="ct-tests" data-proactive-mode="companion">
       <div data-contact-prompts></div>
-      <section class="ct-daily-test" aria-label="每日整理测试">
-        <header><h3>每日整理</h3><button type="button" class="ct-btn is-primary" data-daily-test-run
-          ${data.testBusy ? " disabled" : ""}>${data.testBusy === "daily_review"
-            ? '<span class="ct-spinner" aria-hidden="true"></span><span>模拟中…</span>' : "测试每日整理"}</button></header>
-        ${dailyResultMarkup()}
-      </section>
+      ${daily}
       <div class="ct-test-overview">
         <div class="ct-test-coverage-summary" aria-label="生产器覆盖情况">
           <span><i class="is-ready"></i>生产器已接通 <strong>${counts.ready}</strong></span>
@@ -1345,6 +1375,8 @@ window.CompanionContactPage = (() => {
   function testResultMarkup(id) {
     const result = data.testResults[id];
     if (!result) return "";
+    const mode = id === "simple" ? "simple" : "companion";
+    if (result.mode && result.mode !== mode) return "";
     const state = ["passed", "skipped", "failed", "unknown"].includes(result.state) ? result.state : "unknown";
     const title = state === "passed" ? "模拟完成" : state === "skipped" ? "模型选择不发送"
       : state === "failed" ? "模拟未完成" : "模拟结果未收到";
@@ -1355,8 +1387,8 @@ window.CompanionContactPage = (() => {
       && Array.isArray(result.parts) ? result.parts.filter(part => typeof part === "string") : [];
     const technical = result.code || result.error ? `<details class="ct-test-technical"><summary>展开技术详情</summary>
       ${result.code ? `<code>${e(result.code)}</code>` : ""}${result.error ? `<pre>${e(result.error)}</pre>` : ""}</details>` : "";
-    return `<section class="ct-test-result is-${state}" role="status" aria-live="polite">
-      <strong>${e(title)}${state === "failed" && stage ? ` · 卡在${e(stage)}` : ""}</strong>
+    return `<section class="ct-test-result is-${state}" data-simulation-mode="${mode}" role="status" aria-live="polite">
+      <strong>${mode === "simple" ? "简洁" : "陪伴插件"} · ${e(title)}${state === "failed" && stage ? ` · 卡在${e(stage)}` : ""}</strong>
       ${parts.length ? `<ol class="ct-simulation-messages" aria-label="模拟消息">${parts.map((part,index) => `<li class="ct-simulation-message" data-simulation-part="${index}">${e(part)}</li>`).join("")}</ol>` : ""}
       ${typeof result.reaction_intent === "string" && result.reaction_intent ? `<p><b>图片意图</b> ${e(result.reaction_intent)}</p>` : ""}
       ${result.failure_title ? `<p class="ct-test-cause"><b>失败原因</b>${e(result.failure_title)}</p>` : ""}
@@ -1954,8 +1986,10 @@ window.CompanionContactPage = (() => {
      所以只有入场动画可写，方向就是唯一能说清「我是往哪边走的」的信息，
      没有方向的话两屏切换看起来只是闪了一下。 */
   function switchView(next) {
-    const from = VIEWS.findIndex(([id]) => id === data.view);
-    const to = VIEWS.findIndex(([id]) => id === next);
+    const views = visibleViews();
+    const from = views.findIndex(([id]) => id === data.view);
+    const to = views.findIndex(([id]) => id === next);
+    if (to < 0) return;
     data.viewShift = to > from ? 1 : to < from ? -1 : null;
     data.view = next;
     data.notice = "";
@@ -1980,8 +2014,10 @@ window.CompanionContactPage = (() => {
     if (data.view === "purposes") updatePurposeFilters();
     if (data.view === "tests") updateTestFilters();
     const promptHost = root.querySelector?.("[data-contact-prompts]");
+    const mountedData = data;
     if (promptHost) window.CompanionContactPrompts?.mount(promptHost,{items:TEST_INSTRUCTIONS,
-      selected:data.promptTestId,onSelect:id => { if (data) data.promptTestId = id; }});
+      selected:data.promptTestId,mode:data.promptMode,onSelect:id => { if (data === mountedData) data.promptTestId = id; },
+      onModeChange:mode => { if (data === mountedData) acceptPromptMode(mode); }});
     else window.CompanionContactPrompts?.unmount();
     if (data.view === "materials") updateMaterialFilters();
     const screenObservationHost = root.querySelector?.("[data-screen-observation]");
@@ -2044,6 +2080,7 @@ window.CompanionContactPage = (() => {
     const action = event.target.closest("[data-action]")?.dataset.action;
     if (action === "refresh") {
       data.notice = ""; data.error = false; loadContract();
+      void loadPromptMode();
       if (data.view === "materials") void loadMaterials();
       return;
     }
@@ -2183,8 +2220,10 @@ window.CompanionContactPage = (() => {
     render();
   }
   async function runProactiveTest(id) {
+    const simple = id === "simple";
+    const mode = simple ? "simple" : "companion";
     const item = TEST_INSTRUCTIONS.find(candidate => candidate.id === id);
-    if (!item || data.testBusy) return;
+    if ((!simple && !item) || mode !== data.promptMode || data.testBusy) return;
     const ticket = version;
     data.testBusy = id;
     data.testResults[id] = null;
@@ -2193,23 +2232,26 @@ window.CompanionContactPage = (() => {
     render();
     try {
       const purpose = id === "mobile_location" ? "environment" : id === "reaction_image" ? "chat" : id;
-      const result = await api("POST", "setup/proactive-diagnostic",
-        {purpose, simulation:true, confirm_delivery:false, synthetic_event:synthetic,
+      const payload = simple ? {mode,simulation:true,confirm_delivery:false}
+        : {mode,purpose, simulation:true, confirm_delivery:false, synthetic_event:synthetic,
           ...(id === "environment" ? {variant:data.testVariants?.environment || "weather"} : {}),
           ...(id === "mobile_location" ? {variant:"mobile_location"} : {}),
-          ...(id === "reaction_image" ? {diagnostic_image:true} : {})}, id === "screen" && !synthetic ? 300000 : 180000);
+          ...(id === "reaction_image" ? {diagnostic_image:true} : {})};
+      const result = await api("POST", "setup/proactive-diagnostic",payload,
+        id === "screen" && !synthetic ? 300000 : 180000);
       if (!live(ticket)) return;
-      if (result.simulation !== true || !["passed", "skipped", "failed"].includes(result.state)
+      if (result.simulation !== true || (result.mode && result.mode !== mode)
+          || !["passed", "skipped", "failed"].includes(result.state)
           || (result.state === "passed" && (result.decision !== "send" || !Array.isArray(result.parts)
               || !result.parts.length || result.parts.some(part => typeof part !== "string" || !part.trim())))) throw problem("invalid_response");
-      data.testResults[id] = result;
-      notice(result.state === "passed" ? "模拟完成。" : result.state === "skipped"
+      data.testResults[id] = {...result,mode};
+      if (data.promptMode === mode) notice(result.state === "passed" ? "模拟完成。" : result.state === "skipped"
         ? "模拟完成，模型选择不发送。" : "模拟未完成，查看具体阶段。", result.state === "failed");
     } catch (error) {
       if (!live(ticket)) return;
-      data.testResults[id] = {simulation:true,state:error?.confirmed ? "failed" : "unknown",
+      data.testResults[id] = {mode,simulation:true,state:error?.confirmed ? "failed" : "unknown",
         code:error?.code || "",error:error?.confirmed ? reason(error.code) : "尚未收到模拟结果。"};
-      notice(error?.confirmed ? "模拟未完成，查看具体原因。" : "模拟结果未确认，请稍后重试。",true);
+      if (data.promptMode === mode) notice(error?.confirmed ? "模拟未完成，查看具体原因。" : "模拟结果未确认，请稍后重试。",true);
     } finally {
       if (live(ticket)) { data.testBusy = ""; render(); }
     }
@@ -2289,9 +2331,10 @@ window.CompanionContactPage = (() => {
     const rail = event.target.closest("[data-view]");
     if (rail && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
       event.preventDefault();
-      const index = VIEWS.findIndex(([id]) => id === data.view);
-      const next = (index + (event.key === "ArrowDown" ? 1 : VIEWS.length - 1)) % VIEWS.length;
-      switchView(VIEWS[next][0]); render();
+      const views = visibleViews();
+      const index = views.findIndex(([id]) => id === data.view);
+      const next = (index + (event.key === "ArrowDown" ? 1 : views.length - 1)) % views.length;
+      switchView(views[next][0]); render();
       root.querySelector('[data-view="' + data.view + '"]')?.focus();
     }
   }
@@ -2354,7 +2397,7 @@ window.CompanionContactPage = (() => {
       if (context?.pluginName !== HOST) throw problem("bridge_unavailable");
       addresses();
       data.pendingWrite = restorePendingWrite();
-      await loadContract();
+      await Promise.all([loadContract(),loadPromptMode(ticket)]);
       if (live(ticket)) render();
     } catch (error) {
       if (!live(ticket)) return;

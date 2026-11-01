@@ -38,6 +38,7 @@ window.CompanionContactPrompts = (() => {
   }
   function acceptTask(s, task) {
     s.task = task;
+    s.currentMode = task.prompt_assembly?.current_mode === "simple" ? "simple" : "companion";
     for (const [key, draft] of s.drafts) {
       const section = sectionOf(s, key);
       if (!section || draft.pending) continue;
@@ -49,6 +50,7 @@ window.CompanionContactPrompts = (() => {
       }
       if (!draft.conflict) { draft.token = section.edit_token; draft.base = baseline(section); }
     }
+    if (state === s) options?.onModeChange?.(s.currentMode);
   }
   async function api(method, path, body) {
     let timer;
@@ -118,7 +120,7 @@ window.CompanionContactPrompts = (() => {
     } finally { s.busy = ""; if (current(ticket,s)) render(); }
   }
   function promptMode(s = state) {
-    return s?.task?.prompt_assembly?.current_mode === "simple" ? "simple" : "companion";
+    return (s?.currentMode || s?.task?.prompt_assembly?.current_mode) === "simple" ? "simple" : "companion";
   }
   async function changeMode(mode) {
     const s = state, field = s?.task?.prompt_assembly?.mode;
@@ -198,18 +200,19 @@ window.CompanionContactPrompts = (() => {
     const excluded = new Set([...primary,...common]);
     const conditional = (assembly?.conditional_sections || state.task?.prompt_sections?.map(item => item.key) || [])
       .filter(key => !excluded.has(key) && !key.startsWith("purpose.") && !["simple","simple_output","simple_terminal"].includes(key));
-    const order = mode === "simple" ? (assembly?.simple_order || []) : (assembly?.order || []);
+    const order = mode === "simple" ? (assembly?.simple_order || [])
+      .filter(item => !["output_contract","terminal_prompt_guard"].includes(item.key)) : (assembly?.order || []);
     root.innerHTML = `<section class="ct-prompt-panel" aria-label="主动消息提示词">
       <header class="ct-prompt-header"><h3>主动消息提示词</h3><span class="ct-prompt-draft-count">${[...state.drafts.values()].filter(d => d.dirty).length} 项未保存</span></header>
       <div class="ct-prompt-modes" role="group" aria-label="主动提示模式">${[["companion","陪伴插件"],["simple","简洁"]].map(([key,label]) => `<button type="button" data-prompt-mode="${key}" aria-pressed="${mode === key}"${state.busy || state.modePending || state.loading || !assembly?.mode?.edit_token ? " disabled" : ""}>${label}</button>`).join("")}</div>
       ${state.modeError ? `<div class="ct-prompt-mode-error" role="alert"><p class="ct-prompt-error">${e(state.modeError)}</p>${state.modePending ? '<button type="button" class="ct-btn" data-prompt-action="retry-mode">核对切换</button>' : ""}</div>` : ""}
       <div class="ct-prompt-controls">
-        <label>测试入口<select data-prompt-entry aria-label="选择提示词入口">${(options.items || []).map(item => `<option value="${e(item.id)}"${state.selected === item.id ? " selected" : ""}>${e(item.label)}</option>`).join("")}</select></label>
+        ${mode === "companion" ? `<label>测试入口<select data-prompt-entry aria-label="选择提示词入口">${(options.items || []).map(item => `<option value="${e(item.id)}"${state.selected === item.id ? " selected" : ""}>${e(item.label)}</option>`).join("")}</select></label>` : ""}
         <label>生效范围<select data-prompt-layer aria-label="提示词生效范围"${state.busy ? " disabled" : ""}><option value="window"${state.layer === "window" ? " selected" : ""}>当前窗口</option><option value="role"${state.layer === "role" ? " selected" : ""}>角色默认</option></select></label>
         <button type="button" class="ct-btn" data-prompt-action="refresh"${state.loading || state.busy ? " disabled" : ""}>${state.loading ? "读取中…" : "重新读取"}</button>
       </div>
       ${state.error ? `<p class="ct-prompt-error" role="alert">${e(state.error)}</p>` : ""}
-      ${state.task ? `${mode === "simple" ? `<div class="ct-prompt-primary ct-prompt-simple">${["simple","simple_output","simple_terminal"].map(editor).join("")}</div>` : `<div class="ct-prompt-primary">${primary.map(editor).join("")}</div>
+      ${state.task ? `${mode === "simple" ? `<div class="ct-prompt-primary ct-prompt-simple">${editor("simple")}</div>` : `<div class="ct-prompt-primary">${primary.map(editor).join("")}</div>
         ${group("common","共用提示",common)}${group("conditional","条件提示",conditional)}`}
         <details class="ct-prompt-group" data-prompt-group="assembly"${state.open.has("assembly") ? " open" : ""}><summary>组装顺序</summary>
           <ol class="ct-prompt-order">${order.map(item => `<li><strong>${e(item.label)}</strong>${item.sections?.length ? `<span>${item.sections.filter(key => !key.startsWith("purpose.") || key === primary[0]).map(key => e(sectionOf(state,key)?.label || key)).join(" · ")}</span>` : ""}</li>`).join("")}</ol>
@@ -309,6 +312,7 @@ window.CompanionContactPrompts = (() => {
     const identity = product.identity?.() || {};
     const scope = JSON.stringify([identity.installation_id,identity.operator_id]);
     state = scopeState(scope,endpoint.slice(PREFIX.length),previousLayer);
+    if (["simple","companion"].includes(config.mode)) state.currentMode = config.mode;
     if (config.selected && (config.items || []).some(item => item.id === config.selected)) state.selected = config.selected;
     root.addEventListener("click",clicked); root.addEventListener("input",input);
     root.addEventListener("change",changed); root.addEventListener("toggle",toggled,true);

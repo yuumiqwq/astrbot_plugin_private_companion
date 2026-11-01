@@ -62,6 +62,85 @@ test('消息测试接入真实提示词编辑区，17张卡片均可选择且不
   assert.equal(h.requests.length, count);
 });
 
+function openPromptTests(h) {
+  const mounts = [];
+  h.element.__register('[data-contact-prompts]', {scrollIntoView() {}});
+  h.window.CompanionContactPrompts = {mount(host,options) {mounts.push(options);},unmount() {},select() {}};
+  h.element.dispatch('click',{target:{closest:selector => selector === '[data-view]' ? {dataset:{view:'tests'}} : null}});
+  return {changeMode:mode => mounts.at(-1).onModeChange(mode)};
+}
+function runMessageTest(h,id) {
+  h.element.dispatch('click',{target:{closest:selector => selector === '[data-test-run]' ? {dataset:{testRun:id}} : null}});
+}
+
+test('当前窗口简洁模式从配置读取，仅显示统一测试并隐藏契机入口',async()=>{
+  const h = harness({modelApi:'/'+HOST+'/targets/t/roles/r/model',promptMode:'simple'});
+  await boot(h);
+  assert.equal(h.page.state.data.promptMode,'simple');
+  assert.doesNotMatch(h.element.innerHTML,/data-view="purposes"/);
+  const {changeMode} = openPromptTests(h);
+  assert.equal((h.element.innerHTML.match(/data-test-run=/g)||[]).length,1);
+  assert.match(h.element.innerHTML,/data-test-run="simple"/);
+  assert.match(h.element.innerHTML,/data-daily-test-run/);
+  assert.doesNotMatch(h.element.innerHTML,/ct-test-tools|data-test-prompt-select|data-test-card|data-test-mode|data-test-variant/);
+  const count = h.requests.length;
+  runMessageTest(h,'news');await settle();assert.equal(h.requests.length,count);
+  changeMode('companion');
+  assert.equal((h.element.innerHTML.match(/data-test-run=/g)||[]).length,17);
+  assert.match(h.element.innerHTML,/data-view="purposes"/);
+  assert.match(h.element.innerHTML,/data-test-bucket-filter/);
+  assert.equal(h.requests.length,count);
+});
+
+test('简洁测试只传模式和模拟字段，切换时保留两种结果且每日整理独立',async()=>{
+  const h = harness();await boot(h);
+  const {changeMode} = openPromptTests(h);
+  runMessageTest(h,'chat');await settle();
+  h.reply(h.requests.at(-1),{mode:'companion',simulation:true,state:'passed',decision:'send',parts:['陪伴结果']});
+  await settle();changeMode('simple');
+  assert.doesNotMatch(h.element.innerHTML,/陪伴结果/);
+  runMessageTest(h,'simple');await settle();
+  const request = h.requests.at(-1);
+  assert.deepEqual(JSON.parse(JSON.stringify(request.values)),{mode:'simple',simulation:true,confirm_delivery:false});
+  h.reply(request,{mode:'simple',simulation:true,state:'passed',decision:'send',parts:['简洁第一条','简洁第二条']});
+  await settle();
+  assert.match(h.element.innerHTML,/data-simulation-mode="simple"/);
+  assert.equal((h.element.innerHTML.match(/data-simulation-part=/g)||[]).length,2);
+  h.element.dispatch('click',{target:{closest:selector => selector === '[data-daily-test-run]' ? {} : null}});
+  await settle();
+  assert.equal(h.requests.at(-1).route,'setup/daily-diagnostic');
+  h.reply(h.requests.at(-1),{simulation:true,state:'passed',parts_enabled:{diary:true,day_plan:false,memory:false},
+    result:{diary:{body:'独立日记结果'},day_plan:null,memory:null}});
+  await settle();changeMode('companion');
+  assert.match(h.element.innerHTML,/陪伴结果|独立日记结果/);
+  assert.doesNotMatch(h.element.innerHTML,/简洁第一条|data-simulation-mode="simple"/);
+  changeMode('simple');
+  assert.match(h.element.innerHTML,/简洁第一条/);assert.match(h.element.innerHTML,/独立日记结果/);
+  assert.doesNotMatch(h.element.innerHTML,/陪伴结果/);
+});
+
+test('运行期间切换模式，原模式结果留存且不显示到新模式',async()=>{
+  const h = harness();await boot(h);
+  const {changeMode} = openPromptTests(h);
+  runMessageTest(h,'chat');await settle();const request=h.requests.at(-1);
+  changeMode('simple');
+  h.reply(request,{mode:'companion',simulation:true,state:'passed',decision:'send',parts:['较晚返回的陪伴结果']});
+  await settle();
+  assert.doesNotMatch(h.element.innerHTML,/较晚返回的陪伴结果|模拟完成/);
+  assert.equal(h.page.state.data.testBusy,'');
+  changeMode('companion');assert.match(h.element.innerHTML,/较晚返回的陪伴结果/);
+});
+
+test('返回模式与请求不符时不展示成功气泡',async()=>{
+  const h = harness();await boot(h);
+  const {changeMode} = openPromptTests(h);changeMode('simple');
+  runMessageTest(h,'simple');await settle();
+  h.reply(h.requests.at(-1),{mode:'companion',simulation:true,state:'passed',decision:'send',parts:['错误模式结果']});
+  await settle();
+  assert.equal(h.page.state.data.testResults.simple.state,'unknown');
+  assert.doesNotMatch(h.element.innerHTML,/错误模式结果|data-simulation-part=/);
+});
+
 const baseSettings = () => ({
   enabled: true, automatic_enabled: true, quiet_enabled: true, quiet_start: '23:00', quiet_end: '07:00',
   quiet_timezone: 'Asia/Shanghai', proactive_intensity_preset: 'balanced',
@@ -74,7 +153,7 @@ const baseSettings = () => ({
 });
 
 /* 上界：只保留后面两条通用断言用得到的字段。 */
-function harness({nativeApi = NATIVE, configApi = CONFIG, sessionStore = new Map(), localStorageStore = new Map(),
+function harness({nativeApi = NATIVE, configApi = CONFIG, modelApi, promptMode = 'companion', sessionStore = new Map(), localStorageStore = new Map(),
   sessionStorageBlocked = false, localStorageBlocked = false, historyBlocked = false,
   historyEntry = {current: null}} = {}) {
   const requests = [];
@@ -88,7 +167,7 @@ function harness({nativeApi = NATIVE, configApi = CONFIG, sessionStore = new Map
       hosted: () => true,
       scopeKey: () => selectedScopeKey,
       identity: () => ({installation_id: 'install-1', operator_id: 'admin-1'}),
-      role: () => ({role_id: 'role-1', perception_native_api: nativeApi, config_api: configApi}),
+      role: () => ({role_id: 'role-1', perception_native_api: nativeApi, config_api: configApi, model_api:modelApi}),
       bridgeNow: () => window.AstrBotPluginPage,
       bridgeFor: () => ({then: resolve => resolve(window.AstrBotPluginPage)}),
     },
@@ -153,7 +232,7 @@ function harness({nativeApi = NATIVE, configApi = CONFIG, sessionStore = new Map
   }
   const page = window.CompanionContactPage;
   const element = root();
-  const fixture = {page, element, requests, clipboardWrites, window, sessionStore, historyEntry, localStore:window.localStorage._store,
+  const fixture = {page, element, requests, clipboardWrites, window, sessionStore, historyEntry, promptMode, localStore:window.localStorage._store,
     setScopeKey: value => {selectedScopeKey = value;},
     setGateSettingsTarget: target => {gateSettingsTarget = target;},
     setGateSettingsArea: target => {gateSettingsArea = target;},
@@ -189,6 +268,10 @@ async function boot(h, settings = baseSettings()) {
       answered.add(request);
       if (request.route === 'config' || request.route.endsWith('/config')) {
         replyGlobalConfig(h, request, settings);
+        continue;
+      }
+      if (request.route.endsWith('/model')) {
+        h.reply(request, {tasks:[{kind:'proactive.compose',prompt_assembly:{current_mode:h.promptMode}}]});
         continue;
       }
       h.reply(request, {});
@@ -1661,7 +1744,7 @@ test('消息模拟仅提交禁止投递的请求，并逐条保留后台消息�
   assert.equal(request.method, 'POST');
   assert.equal(request.route, 'setup/proactive-diagnostic');
   assert.deepEqual(JSON.parse(JSON.stringify(request.values)), {
-    purpose:'news', simulation:true, confirm_delivery:false, synthetic_event:false,
+    mode:'companion', purpose:'news', simulation:true, confirm_delivery:false, synthetic_event:false,
   });
   assert.equal(h.page.state.data.testBusy, 'news');
   h.element.dispatch('click', {target: {closest: sel => sel === '[data-test-run]'
@@ -1782,8 +1865,8 @@ test('模型选择跳过时显示状态且不渲染空消息气泡', async () =>
 
 test('手机地点和图片测试保留入口参数并始终禁止投递', async () => {
   for (const [id, expected] of [
-    ['mobile_location',{purpose:'environment',simulation:true,confirm_delivery:false,synthetic_event:false,variant:'mobile_location'}],
-    ['reaction_image',{purpose:'chat',simulation:true,confirm_delivery:false,synthetic_event:false,diagnostic_image:true}],
+    ['mobile_location',{mode:'companion',purpose:'environment',simulation:true,confirm_delivery:false,synthetic_event:false,variant:'mobile_location'}],
+    ['reaction_image',{mode:'companion',purpose:'chat',simulation:true,confirm_delivery:false,synthetic_event:false,diagnostic_image:true}],
   ]) {
     const h = harness();
     await boot(h);

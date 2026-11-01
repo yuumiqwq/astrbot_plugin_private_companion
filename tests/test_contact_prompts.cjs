@@ -32,12 +32,10 @@ function task() {
         {key:'materials',label:'会话历史与本轮资料',sections:[]}],
       simple_order:[{key:'role_instruction',label:'当前人格与预设',sections:[]},
         {key:'request_instruction',label:'简洁主动提示',sections:['simple']},
-        {key:'output_contract',label:'简洁输出格式',sections:['simple_output']},
-        {key:'terminal_prompt_guard',label:'简洁末尾约束',sections:['simple_terminal']},
-        {key:'materials',label:'会话历史与本轮资料',sections:[]}]}};
+        {key:'materials',label:'会话历史',sections:[]}]}};
 }
 function harness() {
-  const requests = [], chosen = [];
+  const requests = [], chosen = [], modes = [];
   let modelApi = endpoint;
   const root = {innerHTML:'',isConnected:true,handlers:{},querySelector:()=>null,
     addEventListener(type,handler){this.handlers[type]=handler;},removeEventListener(type){delete this.handlers[type];}};
@@ -46,13 +44,13 @@ function harness() {
       apiPost:(route,body)=>new Promise((resolve,reject)=>requests.push({method:'POST',route,body,resolve,reject}))})}};
   vm.runInNewContext(source,{window,console,setTimeout,clearTimeout});
   const page=window.CompanionContactPrompts;
-  const mount=(selected='chat')=>page.mount(root,{items,selected,onSelect:id=>chosen.push(id)});
+  const mount=(selected='chat',mode)=>page.mount(root,{items,selected,mode,onSelect:id=>chosen.push(id),onModeChange:value=>modes.push(value)});
   function event(type,selector,node) {return root.handlers[type]?.({target:{closest:query=>query===selector?node:null}});}
   const action=(name,key)=>event('click','[data-prompt-action]',{dataset:{promptAction:name,promptKey:key}});
   const edit=(key,value)=>event('input','[data-prompt-text]',{dataset:{promptText:key},value});
   const reply=(request,data)=>request.resolve({status:'ok',data});
   async function boot(value=task()) {mount();await settle();reply(requests.at(-1),{tasks:[value]});await settle();}
-  return {page,root,requests,chosen,mount,event,action,edit,reply,boot,setPath:value=>{modelApi=value;}};
+  return {page,root,requests,chosen,modes,mount,event,action,edit,reply,boot,setPath:value=>{modelApi=value;}};
 }
 
 test('只读取当前窗口的真实模型提示，17入口均能定位目的原文',async()=>{
@@ -179,10 +177,12 @@ test('模式切换保存真实mode字段，简洁与陪伴插件提示草稿分�
   const simple=task();simple.prompt_assembly.current_mode='simple';simple.prompt_assembly.mode.value='simple';
   simple.prompt_sections.find(s=>s.key==='simple').variables=['current_time','unanswered_count'];
   h.reply(request,{task:simple});await settle();
-  for(const key of ['simple','simple_output','simple_terminal'])assert.match(h.root.innerHTML,new RegExp('data-prompt-text="'+key+'"'));
-  assert.doesNotMatch(h.root.innerHTML,/data-prompt-text="purpose.chat"|data-prompt-group="common"|data-prompt-group="conditional"/);
+  assert.equal((h.root.innerHTML.match(/data-prompt-text=/g)||[]).length,1);
+  assert.match(h.root.innerHTML,/data-prompt-text="simple"/);
+  assert.doesNotMatch(h.root.innerHTML,/data-prompt-entry|data-prompt-text="simple_output"|data-prompt-text="simple_terminal"|data-prompt-text="purpose.chat"|data-prompt-group="common"|data-prompt-group="conditional"/);
   assert.match(h.root.innerHTML,/<code>\{\{current_time\}\}<\/code>/);
-  assert.match(h.root.innerHTML,/<strong>简洁输出格式<\/strong>/);
+  assert.doesNotMatch(h.root.innerHTML,/简洁输出格式|简洁末尾约束/);
+  assert.deepEqual(h.modes,['companion','simple']);
   h.edit('simple','简洁模式草稿');
   h.event('click','[data-prompt-mode]',{dataset:{promptMode:'companion'}});await settle();h.reply(h.requests.at(-1),{task:task()});await settle();
   assert.match(h.root.innerHTML,/陪伴模式草稿/);assert.doesNotMatch(h.root.innerHTML,/data-prompt-text="simple"/);
@@ -202,4 +202,30 @@ test('模式切换明确失败不改当前模式，网络未知时仅核对原�
   const simple=task();simple.prompt_assembly.current_mode='simple';simple.prompt_assembly.mode.value='simple';
   h.reply(h.requests.at(-1),{task:simple});await settle();assert.equal(h.page.state.modePending,null);
   assert.equal(h.page.state.task.prompt_assembly.current_mode,'simple');
+});
+
+test('简洁页只编辑旧提示词，保存时不修改陪伴片段或隐藏格式模板',async()=>{
+  const h=harness(), simple=task();simple.prompt_assembly.current_mode='simple';
+  await h.boot(simple);h.edit('simple','旧插件主动提示词的新草稿');h.action('save','simple');await settle();
+  const request=h.requests.at(-1);
+  assert.equal(request.body.section,'simple');
+  assert.deepEqual(JSON.parse(JSON.stringify(request.body.changes)),{prompt:'旧插件主动提示词的新草稿'});
+  const saved=task();saved.prompt_assembly.current_mode='simple';
+  saved.prompt_sections.find(item=>item.key==='simple').prompt='旧插件主动提示词的新草稿';
+  h.reply(request,{task:saved});await settle();
+  assert.equal((h.root.innerHTML.match(/data-prompt-text=/g)||[]).length,1);
+  assert.equal(h.page.state.drafts.get('simple').dirty,false);
+  assert.equal(h.requests.filter(r=>r.method==='POST').length,1);
+});
+
+test('父页面刷新模式时沿用缓存草稿，旧缓存模式不会覆盖最新选择',async()=>{
+  const h=harness();await h.boot();h.edit('purpose.chat','陪伴草稿保留');
+  h.mount('chat','simple');
+  assert.match(h.root.innerHTML,/data-prompt-text="simple"/);
+  assert.doesNotMatch(h.root.innerHTML,/data-prompt-entry/);
+  assert.deepEqual(h.modes,['companion']);
+  h.event('click','[data-prompt-mode]',{dataset:{promptMode:'companion'}});await settle();
+  assert.equal(h.requests.at(-1).body.changes.mode,'companion');
+  h.reply(h.requests.at(-1),{task:task()});await settle();
+  assert.match(h.root.innerHTML,/陪伴草稿保留/);
 });
