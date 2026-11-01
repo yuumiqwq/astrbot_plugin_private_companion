@@ -4,7 +4,7 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import AsyncMock, Mock
 
-from astrbot_host.shared_context import AstrBotSharedContext
+from astrbot_host.shared_context import AstrBotSharedContext, native_newline_reply_instruction
 from companion_v2.conversation.foreground import PromptMaterial, SealedForegroundContext
 from companion_v2.foundation.refs import ScopeKind
 from tests.proactive_support import ContactFixture
@@ -20,6 +20,7 @@ class Request:
     role_guard_instruction: str | None = None
     instruction: str = "Return the contact decision."
     response_schema_json: str = '{"type":"object"}'
+    output_format: str = ""
 
 
 class SharedHistoryTests(unittest.IsolatedAsyncioTestCase):
@@ -106,6 +107,26 @@ class SharedHistoryTests(unittest.IsolatedAsyncioTestCase):
             ),
             ("First. Second.", "Third.", "Fourth."),
         )
+
+    async def test_proactive_json_uses_native_newlines_and_skip_has_no_body(self):
+        from companion_v2.proactive.prompts import contact_output
+
+        settings = {"enable": True, "split_mode": "regex", "regex": r"[^\r\n]+"}
+        self.native.get_config = Mock(return_value={"platform_settings": {"segmented_reply": settings}})
+        request = replace(self.request, output_format="proactive_contact")
+        result = await self.loader(request)
+        self.assertIn("每个非空行", result.instruction)
+        self.assertIn("\\n", result.instruction)
+        self.assertNotIn("PRIVATE_COMPANION_SPLIT", result.instruction)
+        self.assertIn(result.instruction, self.native.prepare_session_request.await_args.kwargs["response_instruction"])
+        body, _ = contact_output(json.dumps({"decision": "send", "text": "第一条\n\n第二条。短句仍在同一条。"}))
+        self.assertEqual(self.loader.split_reply(request.event, body), ("第一条", "第二条。短句仍在同一条。"))
+        self.assertEqual(contact_output('{"decision":"skip","text":""}'), (None, None))
+        settings["enable"] = False
+        self.assertEqual(native_newline_reply_instruction(self.native, "qq:FriendMessage:peer"), "")
+        settings["enable"] = True
+        settings["regex"] = r".+"
+        self.assertEqual(native_newline_reply_instruction(self.native, "qq:FriendMessage:peer"), "")
 
     async def test_host_history_has_no_plugin_round_or_character_cap(self):
         result = await self.loader(self.request)

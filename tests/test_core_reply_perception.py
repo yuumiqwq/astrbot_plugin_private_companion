@@ -43,6 +43,25 @@ def perception_payload(request):
 
 
 class CoreReplyPerceptionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_native_newline_guidance_works_with_companion_segmentation_disabled(self):
+        event = Event()
+        event.extra[CORE_REPLY_CONTEXT_EXTRA] = {"prepared": prepared(options=(False, False, False))}
+        settings = {"enable": True, "split_mode": "regex", "regex": r"[^\r\n]+"}
+        native = NS(
+            conversation_manager=NS(shared_history=NS(settings=lambda umo: {})),
+            get_config=lambda **_: {"platform_settings": {"segmented_reply": settings}},
+        )
+        request = NS(prompt="你好", system_prompt="原人格", extra_user_content_parts=[])
+        await inject_core_reply_perception_context(event, request, native_context=native)
+        guidance = perception_payload(request)["reply_format_guidance"]
+        self.assertIn("每个非空行", guidance)
+        self.assertIn("直接输出聊天正文", guidance)
+        self.assertNotIn("PRIVATE_COMPANION_SPLIT", guidance)
+        self.assertEqual(request.system_prompt, "原人格")
+        settings["enable"] = False
+        await inject_core_reply_perception_context(event, request, native_context=native)
+        self.assertNotIn("reply_format_guidance", perception_payload(request))
+
     async def test_configured_wake_name_restores_primary_provider_prompt(self):
         event = Event()
         event.is_at_or_wake_command = True

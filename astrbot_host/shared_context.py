@@ -1,11 +1,37 @@
 """Reuse the host's private conversation and native context length policy."""
 
 from dataclasses import replace
+from collections.abc import Mapping
 import json
 import re
 
 from companion_v2.conversation.foreground import PromptMaterial
 from companion_v2.foundation.refs import ScopeKind
+
+
+def native_newline_reply_instruction(context, umo, *, structured=False):
+    """Describe the same newline boundary that the opted-in host will send."""
+    if not isinstance(umo, str) or ":FriendMessage:" not in umo:
+        return ""
+    manager = getattr(context, "conversation_manager", None)
+    shared = getattr(manager, "shared_history", None)
+    getter = getattr(context, "get_config", None)
+    if shared is None or not callable(getter) or shared.settings(umo) is None:
+        return ""
+    config = getter(umo=umo)
+    settings = config.get("platform_settings", {}).get("segmented_reply", {}) if isinstance(config, Mapping) else {}
+    if (not settings.get("enable") or settings.get("split_mode", "regex") != "regex"
+            or settings.get("regex") != r"[^\r\n]+"):
+        return ""
+    instruction = (
+        "正文的每个非空行会分别发送为一条消息，空行不发送。"
+        "希望放在同一条消息里的句子写在同一行，另发一条时换行；不使用特殊分段标记或分段数组。"
+    )
+    return instruction + (
+        "仍按本轮 JSON 输出格式返回，正文写在 text 字符串中，换行正确转义为 \\n；"
+        "程序先解析 JSON，再按正文换行发送。decision 为 skip 时 text 为空，不产生消息。"
+        if structured else "直接输出聊天正文。"
+    )
 
 
 class AstrBotSharedContext:
@@ -112,11 +138,16 @@ class AstrBotSharedContext:
                 *(json.loads(conversation.history or "[]") if conversation else []),
             ],
         )
+        instruction = request.instruction
+        if getattr(request, "output_format", None) == "proactive_contact":
+            newline_instruction = native_newline_reply_instruction(self.context, umo, structured=True)
+            if newline_instruction:
+                instruction += "\n" + newline_instruction
         await prepare(
             umo,
             provider,
             native_request,
-            response_instruction=request.instruction
+            response_instruction=instruction
             + "\n"
             + (request.response_schema_json or ""),
         )
@@ -132,6 +163,7 @@ class AstrBotSharedContext:
         )
         return replace(
             request,
+            instruction=instruction,
             role_instruction=persona.get("system_prompt", persona["prompt"]),
             role_guard_instruction=persona["prompt"],
             context=replace(request.context, materials=(*materials, material)),

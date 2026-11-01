@@ -533,7 +533,13 @@ async def inject_core_reply_perception_context(event, request, *, native_context
     image_material = core.get("_image_reference_material")
     if isinstance(image_material, Mapping):
         details["image_reference_material"] = image_material
-    if core.get("_reply_segmentation") or core.get("_group_segmentation"):
+    from .shared_context import native_newline_reply_instruction
+
+    native_format = native_newline_reply_instruction(
+        native_context, getattr(event, "unified_msg_origin", None))
+    if native_format:
+        details["reply_format_guidance"] = native_format
+    elif core.get("_reply_segmentation") or core.get("_group_segmentation"):
         from .core_reply_segmentation import segmentation_instruction
 
         segmentation = segmentation_instruction(event, request=request)
