@@ -22,7 +22,7 @@ from .models import MAX_TOOL_CATALOG, Amount, ModelCompletion, ProviderResponse,
 from .refusal import matches_refusal_text
 from .routing import ModelRouter
 from .response_diagnostics import checked_response_diagnostics
-from .shared_role_context import has_host_history, shares_role_context
+from .shared_role_context import has_host_history, prepare_role_context, shares_role_context
 
 
 logger = getLogger(__name__)
@@ -94,7 +94,7 @@ class LocalModelGateway:
         profile = self.router.profiles.get(run.task.spec.kind)
         if (self.request_context is not None and profile is not None
                 and shares_role_context(profile, request) and not has_host_history(request)):
-            request = await self.request_context(request)
+            request = await prepare_role_context(self.request_context, request, run.task.spec.context)
             run.validate()
         return request
 

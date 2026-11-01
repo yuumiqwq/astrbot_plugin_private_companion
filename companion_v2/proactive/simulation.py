@@ -12,6 +12,7 @@ from companion_v2.conversation.voice_reply import strip_voice_markup
 from companion_v2.execution.models import TaskError, TaskResult, TaskSpec, digest, encode, require, stamp
 from companion_v2.execution.runner import ExactTaskRunner
 from companion_v2.foundation.refs import OperationRef, VersionRef
+from companion_v2.model_gateway.shared_role_context import prepare_role_context
 from companion_v2.storage.models import OperationState
 from companion_v2.storage.repositories import OperationRepository
 
@@ -119,7 +120,7 @@ async def simulate_contact(app, context, candidate, *, attempt_id, diagnostic_im
         if extra:
             request = replace(request, instruction=request.instruction + "\n" + extra)
         if contacts.request_context is not None:
-            request = await contacts.request_context(request)
+            request = await prepare_role_context(contacts.request_context, request, context)
         completion = await contacts.gateway.generate(run, request)
         completion_call = completion.call_id
         if completion.draft is None:

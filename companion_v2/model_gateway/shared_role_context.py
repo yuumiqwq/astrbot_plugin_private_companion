@@ -23,3 +23,10 @@ def shares_role_context(profile, request=None):
 def has_host_history(request):
     return any(item.owner == "astrbot.conversation" and item.purpose == "recent_private_dialogue"
                for item in request.context.materials)
+
+
+async def prepare_role_context(adapter, request, context):
+    """Pass the validated task identity to host adapters that collect common material."""
+    if callable(getattr(type(adapter), "for_task", None)):
+        return await adapter.for_task(request, context)
+    return await adapter(request)

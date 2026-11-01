@@ -34,6 +34,7 @@ from companion_v2.expression.configuration import read_settings as expression_se
 from companion_v2.foundation.outcome import Outcome
 from companion_v2.foundation.refs import OperationRef, VersionRef, normalize_utc
 from companion_v2.model_gateway.models import ModelTaskProfile, is_released
+from companion_v2.model_gateway.shared_role_context import prepare_role_context
 from companion_v2.relationships.private_access import REVOCABLE_ABSENCE_CODES
 from companion_v2.role_work.state import humanized
 from companion_v2.sources.repositories import SourceRepository
@@ -886,7 +887,7 @@ class ProactiveContacts:
             if extra_instruction:
                 request = replace(request, instruction=request.instruction + "\n" + extra_instruction)
             if self.request_context is not None:
-                request = await self.request_context(request)
+                request = await prepare_role_context(self.request_context, request, job.context)
             if not self._contact_request_fits(run, request):
                 # Optional memory and history are the first things a smaller
                 # context model must lose; the current event, source evidence
@@ -900,10 +901,11 @@ class ProactiveContacts:
                 if extra_instruction:
                     compact = replace(compact, instruction=compact.instruction + "\n" + extra_instruction)
                 shared_materials = tuple(item for item in request.context.materials
-                                         if item.owner == "astrbot.conversation")
+                                         if item.owner in {"astrbot.conversation", "astrbot.role_context"})
                 if shared_materials:
                     compact = replace(compact, role_instruction=request.role_instruction,
                         role_guard_instruction=request.role_guard_instruction,
+                        host_provider_id=request.host_provider_id,
                         context=replace(compact.context, materials=(*compact.context.materials, *shared_materials)))
                 if not self._contact_request_fits(run, compact):
                     raise TaskError(

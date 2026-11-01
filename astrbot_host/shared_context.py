@@ -40,10 +40,11 @@ def native_newline_reply_instruction(context, umo, *, structured=False, proactiv
 
 
 class AstrBotSharedContext:
-    def __init__(self, context, bridge, provider_id):
+    def __init__(self, context, bridge, provider_id, *, application=None):
         self.context = context
         self.bridge = bridge
         self.provider_id = provider_id
+        self.application = application
 
     def supports(self, scope):
         """Whether the host manages this private window's shared history."""
@@ -98,6 +99,9 @@ class AstrBotSharedContext:
         Returns:
             Request with host-managed dialogue and the current persona.
         """
+        return await self.for_task(request, None)
+
+    async def for_task(self, request, task_context):
         scope = request.event.scope
         if not self.supports(scope):
             return request
@@ -113,6 +117,7 @@ class AstrBotSharedContext:
         )
         if conversation_id and conversation is None:
             raise ValueError("The selected AstrBot conversation is unavailable")
+        dialogue = json.loads(conversation.history or "[]") if conversation else []
         provider_id = self.provider_id
         selected_provider = getattr(self.context, "get_current_chat_provider_id", None)
         if callable(selected_provider):
@@ -132,6 +137,10 @@ class AstrBotSharedContext:
             and item.purpose
             not in {"confirmed_background_message", "confirmed_reply_context"}
         )
+        if self.application is not None and task_context is not None:
+            from .shared_materials import common_materials, merge_common_materials
+            common = common_materials(self.application, task_context, request, dialogue)
+            materials = merge_common_materials(materials, common)
         task = json.dumps(
             [
                 {"owner": item.owner, "purpose": item.purpose, "payload": item.payload}
@@ -144,7 +153,7 @@ class AstrBotSharedContext:
             system_prompt=persona.get("system_prompt", persona["prompt"]),
             contexts=[
                 *persona.get("begin_dialogs", ()),
-                *(json.loads(conversation.history or "[]") if conversation else []),
+                *dialogue,
             ],
         )
         instruction = request.instruction

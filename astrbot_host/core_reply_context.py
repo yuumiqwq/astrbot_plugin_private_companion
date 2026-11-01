@@ -85,6 +85,7 @@ class CoreReplyPrompt:
     perception_guidance: str = ""
     stable_instruction: str = ""
     context_instruction: str = ""
+    context_blocks: tuple[tuple[str, str], ...] = ()
 
 
 def _ready(materials):
@@ -237,10 +238,11 @@ def _input_received_at(native_input, fallback):
 
 
 def build_core_reply_prompt(application, context, native_input, *, at, keyword_materials=(), health_material=None,
-                            external_memory=None):
+                            external_memory=None, include_sections=None):
     """Build optional background independently; no failed section blocks reply."""
     blocks, stable_blocks, sections, expression_signal_ids = [], [], [], []
     measured, started = [], time.monotonic()
+    context_blocks = []
     messages = application.messages
     perception_snapshot = {}
 
@@ -250,6 +252,8 @@ def build_core_reply_prompt(application, context, native_input, *, at, keyword_m
         return perception_snapshot["settings"]
 
     def optional(name, load, *, include_in_background=True, stable=False):
+        if include_sections is not None and name not in include_sections:
+            return None
         began = time.monotonic()
         block, state = None, "empty"
         try:
@@ -270,6 +274,7 @@ def build_core_reply_prompt(application, context, native_input, *, at, keyword_m
                 stable_blocks.append(block)
             elif include_in_background:
                 blocks.append(block)
+                context_blocks.append((name, block))
             sections.append(name)
         return block
 
@@ -562,4 +567,5 @@ def build_core_reply_prompt(application, context, native_input, *, at, keyword_m
         perception_guidance=perception.get("guidance", "") if isinstance(perception, dict) else "",
         stable_instruction=stable_instruction,
         context_instruction=context_instruction,
+        context_blocks=tuple(context_blocks),
     )
