@@ -2143,6 +2143,36 @@ MIGRATION_V66_TO_V67_FINGERPRINT = hashlib.sha256(
     "\n".join(V67_MIGRATION_STATEMENTS).encode("utf-8")
 ).hexdigest()
 
+V68_MIGRATION_STATEMENTS = (
+    """CREATE TABLE role_daily_runs (
+        run_id TEXT PRIMARY KEY NOT NULL,
+        owner_key TEXT NOT NULL,
+        origin_key TEXT NOT NULL,
+        local_date TEXT NOT NULL,
+        timezone TEXT NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('prepared', 'running', 'received', 'complete', 'failed', 'unknown')),
+        context_json TEXT NOT NULL CHECK(json_valid(context_json)),
+        inputs_json TEXT NOT NULL CHECK(json_valid(inputs_json)),
+        output_json TEXT CHECK(output_json IS NULL OR json_valid(output_json)),
+        receipt_json TEXT CHECK(receipt_json IS NULL OR json_valid(receipt_json)),
+        task_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(owner_key, local_date, timezone)
+    )""",
+    "CREATE INDEX role_daily_runs_state_idx ON role_daily_runs(state, updated_at)",
+)
+V68_REQUIRED_TABLES = V67_REQUIRED_TABLES.union({"role_daily_runs"})
+V68_SCHEMA_STATEMENTS = V67_SCHEMA_STATEMENTS + V68_MIGRATION_STATEMENTS
+REQUIRED_TABLES = V68_REQUIRED_TABLES
+SCHEMA_STATEMENTS = V68_SCHEMA_STATEMENTS
+SCHEMA_VERSION_V68 = "companion-v2.storage.v68"
+SCHEMA_VERSION = SCHEMA_VERSION_V68
+MIGRATION_V67_TO_V68_ID = "companion-v2.storage.v67-to-v68"
+MIGRATION_V67_TO_V68_FINGERPRINT = hashlib.sha256(
+    "\n".join(V68_MIGRATION_STATEMENTS).encode("utf-8")
+).hexdigest()
+
 
 def migration_count() -> int:
     """How many ordered migrations a fully upgraded data root records.

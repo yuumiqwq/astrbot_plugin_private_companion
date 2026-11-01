@@ -37,8 +37,9 @@ from companion_v2.storage.schema import (
     MIGRATION_V64_TO_V65_FINGERPRINT, MIGRATION_V64_TO_V65_ID, SCHEMA_VERSION_V65,
     MIGRATION_V65_TO_V66_FINGERPRINT, MIGRATION_V65_TO_V66_ID, SCHEMA_VERSION_V66,
     MIGRATION_V66_TO_V67_FINGERPRINT, MIGRATION_V66_TO_V67_ID, SCHEMA_VERSION_V67,
+    MIGRATION_V67_TO_V68_FINGERPRINT, MIGRATION_V67_TO_V68_ID, SCHEMA_VERSION_V68, V68_MIGRATION_STATEMENTS,
 )
-from tests.execution_support import remove_v21, remove_v22, remove_v31, remove_v32, remove_v33, remove_v34, remove_v35, remove_v36, remove_v52, remove_v53, remove_v55, remove_v57, remove_v58, remove_v59, remove_v60, remove_v61, remove_v62, remove_v63, remove_v64, remove_v65, remove_v66, remove_v67
+from tests.execution_support import remove_v21, remove_v22, remove_v31, remove_v32, remove_v33, remove_v34, remove_v35, remove_v36, remove_v52, remove_v53, remove_v55, remove_v57, remove_v58, remove_v59, remove_v60, remove_v61, remove_v62, remove_v63, remove_v64, remove_v65, remove_v66, remove_v67, remove_v68
 
 
 class StorageMigrationTests(unittest.TestCase):
@@ -524,6 +525,63 @@ class StorageMigrationTests(unittest.TestCase):
         reopened = self.open_runtime()
         self.assertEqual(reopened.read_one(
             "SELECT count(*) AS n FROM laya_decision_events", ())["n"], 2)
+
+    def test_v67_upgrade_preserves_data_and_enforces_one_daily_run_per_role_date(self):
+        runtime = self.open_runtime()
+        runtime.close()
+        with closing(sqlite3.connect(self.database)) as connection:
+            remove_v68(connection)
+            connection.execute("UPDATE runtime_metadata SET value = ? WHERE key = 'schema_version'",
+                               (SCHEMA_VERSION_V67,))
+            connection.commit()
+        upgraded = self.open_runtime()
+        migration = upgraded.read_one("SELECT * FROM schema_migrations WHERE migration_id = ?",
+                                      (MIGRATION_V67_TO_V68_ID,))
+        self.assertEqual((migration["from_version"], migration["to_version"], migration["fingerprint"]),
+                         (SCHEMA_VERSION_V67, SCHEMA_VERSION_V68, MIGRATION_V67_TO_V68_FINGERPRINT))
+        self.assertEqual(upgraded.read_one("SELECT payload_hash FROM inbox WHERE event_id = ?",
+                                          ("existing-event",))["payload_hash"], "existing-hash")
+        insert = """INSERT INTO role_daily_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+        row = ("run-1", "role-a", "window-a", "2026-11-01", "Asia/Shanghai", "prepared",
+               '{}', '{"day":"2026-11-02"}', None, None, None, "2026-11-01T15:50:00+00:00",
+               "2026-11-01T15:50:00+00:00")
+        with upgraded.transaction() as connection:
+            connection.execute(insert, row)
+        with self.assertRaises(sqlite3.IntegrityError), upgraded.transaction() as connection:
+            connection.execute(insert, ("run-duplicate", *row[1:]))
+        with self.assertRaises(sqlite3.IntegrityError), upgraded.transaction() as connection:
+            connection.execute("UPDATE role_daily_runs SET state = 'sent' WHERE run_id = 'run-1'")
+        with upgraded.transaction() as connection:
+            connection.execute("UPDATE role_daily_runs SET state = 'received', output_json = ? WHERE run_id = ?",
+                               ('{"diary":null,"day_plan":null,"memory":null}', "run-1"))
+        upgraded.close()
+        reopened = self.open_runtime()
+        self.assertEqual(reopened.read_one("SELECT state FROM role_daily_runs WHERE run_id = ?",
+                                           ("run-1",))["state"], "received")
+
+    def test_v68_migration_rolls_back_and_checks_its_saved_fingerprint(self):
+        runtime = self.open_runtime()
+        runtime.close()
+        with closing(sqlite3.connect(self.database)) as connection:
+            remove_v68(connection)
+            connection.execute("UPDATE runtime_metadata SET value = ? WHERE key = 'schema_version'",
+                               (SCHEMA_VERSION_V67,))
+            connection.commit()
+        with patch("companion_v2.storage.runtime.V68_MIGRATION_STATEMENTS",
+                   V68_MIGRATION_STATEMENTS + ("INVALID UPGRADE",)):
+            with self.assertRaises(StorageOpenError):
+                self.open_runtime()
+        self.assertEqual(self.version(), SCHEMA_VERSION_V67)
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertIsNone(connection.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'role_daily_runs'").fetchone())
+            self.assertIsNone(connection.execute("SELECT 1 FROM schema_migrations WHERE migration_id = ?",
+                                                  (MIGRATION_V67_TO_V68_ID,)).fetchone())
+        self.open_runtime().close()
+        self.mutate("UPDATE schema_migrations SET fingerprint = 'changed' WHERE migration_id = ?",
+                    (MIGRATION_V67_TO_V68_ID,))
+        with self.assertRaisesRegex(StorageOpenError, "untrusted v68"):
+            self.open_runtime()
 
     def test_v52_upgrade_adds_response_diagnostics_and_rolls_back_on_failure(self):
         runtime = self.open_runtime()
