@@ -44,6 +44,7 @@ from companion_v2.role_work.state.maintenance import state_profile
 from companion_v2.agenda.planning import planning_profile
 from companion_v2.role_work.growth.progress import growth_progress_profile
 from companion_v2.role_work.journal.self_review_service import self_review_profile
+from companion_v2.role_work.daily.service import daily_profile
 from companion_v2.expression.style_service import expression_learning_profile
 from companion_v2.expression.review import expression_review_profile
 from companion_v2.screen.interpretation import screen_interpretation_profile
@@ -304,6 +305,7 @@ class AstrBotStagingSession:
                     contact_profile(profile.provider_id, max_output_tokens=profile.max_output_tokens),
                     persona_judge_profile(profile.provider_id, max_output_tokens=profile.max_output_tokens),
                     reflection_profile(profile.provider_id, max_output_tokens=profile.max_output_tokens),
+                    daily_profile(profile.provider_id, max_output_tokens=profile.max_output_tokens),
                     state_profile(profile.provider_id, max_output_tokens=profile.max_output_tokens),
                     planning_profile(profile.provider_id, max_output_tokens=profile.max_output_tokens),
                     growth_progress_profile(profile.provider_id, max_output_tokens=profile.max_output_tokens),

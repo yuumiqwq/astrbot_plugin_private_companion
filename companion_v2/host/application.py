@@ -152,6 +152,7 @@ from companion_v2.role_work.life import rest_gate
 from companion_v2.role_work.journal.self_review_evidence import SelfReviewEvidenceCatalog
 from companion_v2.role_work.journal.self_review_service import SelfReviewService
 from companion_v2.role_work.journal.self_review_management import SelfReviewManagement
+from companion_v2.role_work.daily.service import RoleDailyReview
 from companion_v2.relationships.service import RelationshipMemoryService
 from companion_v2.memory.service import MemoryService
 from companion_v2.memory.provider import CAPABILITY as MEMORY_QUERY_CAPABILITY, make_provider as make_memory_query_provider
@@ -303,6 +304,7 @@ class CompanionApplication:
         self.role_journal = RoleJournalService(runtime, now=self.now)
         self.journal_writer = RoleJournalWriter(self.role_journal, memory_push=memory_push)
         self.memory_reflection = MemoryReflection(runtime)
+        self.daily_review = RoleDailyReview(runtime)
         self.role_reader = RoleReader(self.role_life)
         self.state_maintenance = StateMaintenance(runtime)
         self.calendar_planning = CalendarPlanning(runtime, weather_port=weather_port)
@@ -339,6 +341,7 @@ class CompanionApplication:
                 max_attempts=1, concurrency=self.worker_limit), lambda spec, at: self.delivery.validate(spec, at)),
         ) + self.poke_reply_model.registrations + self.journal_writer.registrations + self.memory_reflection.registrations + self.role_reader.registrations + self.state_maintenance.registrations + self.calendar_planning.registrations + self.growth_progress.registrations + self.self_review.registrations + self.expression_style.registrations + self.proactive.registrations + self.outbound.registrations + self.image_review_service.registrations + self.context_image_caption.registrations + self.image_narration.registrations + self.video_narration.registrations + self.screen_interpretation.registrations + self.screen_peek.registrations + self.authoring.registrations + (external.registrations if external is not None else ())
         registrations += self.expression_draft_review.registrations
+        registrations += self.daily_review.registrations
         self.tasks = TaskSupervisor(runtime, registrations, limits=limits, now=self.now)
         # Reference material shares this runtime and the supervisor that owns it, so
         # it is constructed here rather than with the other settings readers above.
@@ -496,6 +499,7 @@ class CompanionApplication:
         self.memory_schedule = MemorySchedule(self.memory_reflection, notify=self.notify)
         self.life_runtime = RoleLifeCoordinator(self)
         self.journal_schedule.invoke = self.life_runtime.scheduled_diary
+        self.daily_review.attach(self)
         self.diagnostics = DiagnosticService(self.configuration, now=self.now, tasks=self.tasks,
                                              models=self.gateway, messages=self.messages)
         if external is not None:
@@ -929,6 +933,10 @@ class CompanionApplication:
                 if memory_deadline is not None:
                     deadline = min(deadline, memory_deadline) if deadline else memory_deadline
                 self.life_runtime.advance()
+                self.daily_review.advance()
+                daily_deadline = self.daily_review.next_wake()
+                if daily_deadline is not None:
+                    deadline = min(deadline, daily_deadline) if deadline else daily_deadline
                 await asyncio.sleep(0)
                 self.state_maintenance.advance()
                 await asyncio.sleep(0)
@@ -998,6 +1006,7 @@ class CompanionApplication:
                 worker.cancel()
             self.journal_schedule.cancel_running()
             self.memory_schedule.cancel_running()
+            self.daily_review.cancel_running()
             self.journal_triggers.cancel_running()
             self.life_runtime.cancel_running()
             self.state_maintenance.cancel_running()
@@ -1021,6 +1030,7 @@ class CompanionApplication:
     @property
     def active_handles(self):
         return ((self.semantics.active_handles if self.semantics else ()) + self.runner.active_handles + self.journal_writer.active_handles + self.memory_reflection.active_handles
+                + self.daily_review.active_handles
                 + self.role_reader.active_handles + self.life_runtime.active_handles
                 + self.state_maintenance.active_handles + self.calendar_planning.active_handles
                 + self.growth_progress.active_handles
@@ -1069,6 +1079,7 @@ class CompanionApplication:
             await self.poke_reply_model.close()
             await self.authoring.close()
             await self.background.close(grace_seconds=grace_seconds)
+            await self.daily_review.close()
             await self.life_runtime.close()
             await self.state_maintenance.close()
             await self.calendar_planning.close()

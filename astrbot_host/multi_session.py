@@ -62,6 +62,7 @@ from companion_v2.agenda.planning import planning_profile
 from .weather_settings import configured_weather_ports
 from companion_v2.role_work.growth.progress import growth_progress_profile
 from companion_v2.role_work.journal.self_review_service import self_review_profile
+from companion_v2.role_work.daily.service import daily_profile
 from companion_v2.expression.style_service import expression_learning_profile
 from companion_v2.expression.review import expression_review_profile
 from companion_v2.conversation.relay_settings import configuration_fields as relay_configuration_fields
@@ -457,6 +458,7 @@ class MultiHostSession:
                     contact_profile(common.provider_id, max_output_tokens=common.max_output_tokens),
                     persona_judge_profile(common.provider_id, max_output_tokens=common.max_output_tokens),
                     reflection_profile(common.provider_id, max_output_tokens=common.max_output_tokens),
+                    daily_profile(common.provider_id, max_output_tokens=common.max_output_tokens),
                     state_profile(common.provider_id, max_output_tokens=common.max_output_tokens),
                     planning_profile(common.provider_id, max_output_tokens=common.max_output_tokens),
                     growth_progress_profile(common.provider_id, max_output_tokens=common.max_output_tokens),
