@@ -66,8 +66,8 @@ window.CompanionSetup = (() => {
     },
     proactive_test: {
       tag: "第 8 步 · 约 1 分钟",
-      body: "最后向已绑定的管理员私聊发一条主动测试消息，把主动联系模型、策略检查与真实投递完整跑通一次；只有你勾选同意后才会发送。",
-      checks: ["勾选同意后向管理员私聊发送一次测试消息", "核对模型生成、策略检查与平台投递回执", "收到后即可进入陪伴小屋日常使用"],
+      body: "",
+      checks: [],
     },
   };
   const stepMeta = step => STEP_META[step] || STEP_META.binding;
@@ -223,7 +223,6 @@ window.CompanionSetup = (() => {
   let profileSupplement = {role_profile: "", relationship_profile: ""};
   let profileOverwrite = false;
   let profileNotes = [];
-  let proactiveOptIn = false;
   let proactiveWatcher = null;
   let legacyTargetId = "";
   let legacyBotKey = "";
@@ -3000,7 +2999,7 @@ window.CompanionSetup = (() => {
     authorization: "管理授权", binding: "核心窗口绑定", runtime: "运行实例",
     settings: "主动联系设置", purpose: "联系目的", trusted_candidate: "测试机会",
     model_route: "模型路由", model_generation: "模型生成", persona_review: "人格复核",
-    delivery: "平台投递", receipt: "投递回执",
+    output_parsing: "输出格式", segmentation: "消息分段", delivery: "平台投递", receipt: "投递回执",
   };
   const PROACTIVE_TEST_FAILURE_SUGGESTIONS = {
     setup_contact_generation_failed: "生成任务已结束，请检查模型路由与该任务的失败原因。",
@@ -3031,7 +3030,7 @@ window.CompanionSetup = (() => {
         <p class="setup-kicker">首次连接</p><h3>首次设置已完成</h3>
         <p>核心管理员窗口、模型与初始资料已记录。之后直接使用陪伴小屋和聊天窗口，不需要重新走向导。</p>
         <p class="setup-test-receipt setup-connection-state ${accepting ? "" : "is-stopped"}">${accepting ? "当前版本正在接收消息" : "首次设置已保留，当前运行实例尚未接收消息"}</p>
-        <p class="setup-test-receipt">${test?.state === "received" ? "你已确认收到测试消息" : "平台已确认发送测试消息"} · ${escape(test?.confirmed_at || test?.finished_at || "")}</p>
+        <p class="setup-test-receipt">${test?.state === "simulated" ? "消息模拟已通过" : test?.state === "received" ? "你已确认收到测试消息" : "平台已确认发送测试消息"} · ${escape(test?.confirmed_at || test?.finished_at || "")}</p>
         <div class="setup-actions">${accepting ? "" : button("reconnect-host", "重新连接", {primary: true})}${homeButton("进入陪伴小屋", !accepting)}</div>
       </section>`;
     }
@@ -3051,14 +3050,12 @@ window.CompanionSetup = (() => {
       </section>`;
     }
     if (test?.state === "failed") {
-      return `<section class="setup-stage"><p class="setup-kicker">第 8 步 · 验证使用</p><h3>主动联系没有送达</h3>${proactiveTestProgressMarkup()}${noticeMarkup()}<label class="setup-opt-in"><input type="checkbox" data-setup-proactive-opt-in ${proactiveOptIn ? "checked" : ""} ${busy ? "disabled" : ""}><span>我同意当前版本向已绑定的管理员私聊发送一次主动联系测试</span></label><div class="setup-actions">${button("proactive-test", "重新运行主动联系", {primary: true, disabled: !proactiveOptIn})}${button("refresh", "刷新状态")}${homeButton("进入陪伴小屋")}</div></section>`;
+      return `<section class="setup-stage"><p class="setup-kicker">第 8 步 · 验证使用</p><h3>测试未完成</h3>${proactiveTestProgressMarkup()}${noticeMarkup()}<div class="setup-actions">${button("proactive-test", "运行消息模拟", {primary: true})}${button("refresh", "刷新状态")}${homeButton("进入陪伴小屋")}</div></section>`;
     }
     return `<section class="setup-stage">
-      <p class="setup-kicker">第 8 步 · 约 1 分钟</p><h3>测试主动消息</h3>
-      <p>当前版本会为当前角色发起一次主动联系，完整经过主动联系模型、策略检查与真实投递。只有勾选同意后才会发送；若平台回执未知，不会重复补发。</p>
-      <label class="setup-opt-in"><input type="checkbox" data-setup-proactive-opt-in ${proactiveOptIn ? "checked" : ""} ${busy ? "disabled" : ""}><span>我同意当前版本向已绑定的管理员私聊发送一次主动联系测试</span></label>
+      <p class="setup-kicker">第 8 步 · 约 1 分钟</p><h3>消息模拟</h3>
       ${noticeMarkup()}
-      <div class="setup-actions">${button("proactive-test", "运行主动联系测试", {primary: true, disabled: !proactiveOptIn})}</div>
+      <div class="setup-actions">${button("proactive-test", "运行消息模拟", {primary: true})}</div>
     </section>`;
   }
 
@@ -3404,7 +3401,6 @@ window.CompanionSetup = (() => {
         render();
         const current = result?.proactive_test?.state;
         if (result?.ready || current !== "started") {
-          if (current === "failed") proactiveOptIn = false;
           notice = current === "delivered" || current === "received" ? "当前版本主动联系已完成，收到真实投递回执。"
             : current === "failed" ? "主动联系链路明确失败，可以检查配置后重试。"
             : "投递结果未知；请核对目标私聊，不要再次发送。";
@@ -3834,14 +3830,17 @@ window.CompanionSetup = (() => {
       } else if (action === "complete-step" || action === "skip-step") {
         await api("POST", "/complete", {step: state.step, skipped: action === "skip-step"});
       } else if (action === "proactive-test") {
-        const result = await api("POST", "/proactive-test", {enable_proactive: true});
+        const result = await product().request("POST", PREFIX + "/proactive-diagnostic", {
+          purpose: "chat", synthetic_event: true, simulation: true, confirm_delivery: false,
+        }, {timeoutMs: 300000});
         if (mountGeneration !== activeGeneration) return;
-        state = {...state, ready: result.ready, proactive_test: {...state?.proactive_test,
-          state: result.state, ...(result.attempt_id ? {attempt_id: result.attempt_id} : {})}};
-        proactiveOptIn = false;
-        notice = "主动联系已启动，正在等待模型生成、策略检查和投递回执。";
+        proactiveWatcher = null;
+        state = {...state, ready: Boolean(result.ready), ...(result.ready ? {step: "complete"} : {}),
+          proactive_test: result.ready ? result.proactive_test : {
+            ...result, state: "failed", error_code: result.code || result.error_code || "",
+          }};
+        notice = "";
         render();
-        if (!result.ready && result.state === "started") void watchProactive();
         return;
       } else if (action === "confirm-test-received") {
         const result = await api("POST", "/proactive-test/confirm", {attempt_id: state.proactive_test.attempt_id});
@@ -4639,10 +4638,6 @@ window.CompanionSetup = (() => {
       profileOverwrite = Boolean(input.checked);
       render();
     }
-    if (input?.dataset?.setupProactiveOptIn !== undefined) {
-      proactiveOptIn = Boolean(input.checked);
-      render();
-    }
   }
 
   function mount(node, {migration = false, onState: stateListener = null} = {}) {
@@ -4674,7 +4669,6 @@ window.CompanionSetup = (() => {
     profileSupplement = {role_profile: "", relationship_profile: ""};
     profileOverwrite = false;
     profileNotes = [];
-    proactiveOptIn = false;
     advancedOpen = false;
     advancedBlock = "understanding";
     legacyTargetId = legacyBotKey = legacyRoleId = legacyApi = "";

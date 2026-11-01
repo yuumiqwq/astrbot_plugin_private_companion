@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from astrbot_host.setup_state import SCHEMA_VERSION, SetupStateStore, SetupStepsIncomplete
+from astrbot_host.setup_state import SCHEMA_VERSION, SETUP_STEPS, SetupStateStore, SetupStepsIncomplete
 
 
 class SetupStateTests(unittest.TestCase):
@@ -84,6 +84,58 @@ class SetupStateTests(unittest.TestCase):
             self.store.begin_proactive_test(attempt_id="attempt-c", started_at="2026-10-05T00:00:00+00:00")
         self.assertNotIsInstance(replay.exception, SetupStepsIncomplete)
         self.assertIn("cannot be replayed", str(replay.exception))
+
+    def simulation_result(self, *, decision="send"):
+        return {"state": "passed" if decision == "send" else "skipped", "simulation": True,
+            "decision": decision, "attempt_id": "preview-attempt", "task_id": "preview-task",
+            "call_id": "actual-model-call", "started_at": "2026-11-01T00:00:00Z",
+            "finished_at": "2026-11-01T00:00:01Z", "stages": [
+                {"stage": stage, "state": "passed"} for stage in
+                ("model_generation", "output_parsing", "segmentation")]}
+
+    def test_successful_simulation_completes_setup_and_keeps_the_legacy_receipt(self):
+        for step in SETUP_STEPS:
+            self.store.complete(step, skipped=step != "model")
+        self.store.begin_proactive_test(attempt_id="old-test", started_at="2026-10-01T00:00:00Z")
+        old = self.store.finish_proactive_test(outcome="failed", finished_at="2026-10-01T00:00:01Z",
+                                              error_code="contact_diagnostic_source_required")["proactive_test"]
+        state = self.store.complete_simulation(self.simulation_result())
+        self.assertTrue(state["ready"])
+        self.assertEqual(state["proactive_test"]["state"], "simulated")
+        self.assertEqual(state["proactive_test"]["previous_receipt"], old)
+        self.assertEqual(state["proactive_test"]["delivery_state"], "not_requested")
+        self.assertEqual(self.store.read(), state)
+
+    def test_valid_skip_is_successful_schema_validation_without_delivery(self):
+        for step in SETUP_STEPS:
+            self.store.complete(step)
+        state = self.store.complete_simulation(self.simulation_result(decision="skip"))
+        self.assertTrue(state["ready"])
+        self.assertEqual(state["proactive_test"]["decision"], "skip")
+        self.assertEqual(self.store.read(), state)
+
+    def test_preview_does_not_skip_unfinished_setup_sections(self):
+        self.store.complete("model")
+        before = self.store.read()
+        self.assertEqual(self.store.complete_simulation(self.simulation_result()), before)
+        self.assertEqual(self.store.read(), before)
+
+    def test_failed_or_unverified_simulation_cannot_complete_setup(self):
+        for step in SETUP_STEPS:
+            self.store.complete(step)
+        for patch in ({"state": "failed"}, {"simulation": False}, {"call_id": ""}, {"stages": []}):
+            with self.subTest(patch=patch):
+                result = {**self.simulation_result(), **patch}
+                self.assertFalse(self.store.complete_simulation(result)["ready"])
+                self.assertFalse(self.store.read()["ready"])
+
+    def test_existing_completed_receipt_is_not_replaced_by_later_simulations(self):
+        for step in SETUP_STEPS:
+            self.store.complete(step)
+        self.store.begin_proactive_test(attempt_id="old-test", started_at="2026-10-01T00:00:00Z")
+        before = self.store.finish_proactive_test(outcome="delivered", finished_at="2026-10-01T00:00:01Z")
+        self.assertEqual(self.store.complete_simulation(self.simulation_result()), before)
+        self.assertEqual(self.store.read(), before)
 
 
 

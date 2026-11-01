@@ -156,17 +156,20 @@ class AstrBotSetupFlowTests(unittest.IsolatedAsyncioTestCase):
         api.controller=NS(session=session,last_session=None,runtime=object(),now=lambda:NOW,
                           start=AsyncMock(return_value=Outcome.success({})))
         api._test_lock=asyncio.Lock()
+        api.progress=self.api.progress
         api._setup_context=AsyncMock(return_value=(session,context,"role instructions"))
         api._binding=lambda:{"bound":True,"pending":False}
         api.simulation_status={"purposes":{"environment":{"allowed":True,"reason":None}}}
         return api,app,context,candidate
 
-    async def call_simulation_fixture(self, api, fields, *, raw=False, simulation_error=None):
+    async def call_simulation_fixture(self, api, fields, *, raw=False, simulation_error=None, preview_result=None):
         payload=fields if raw else {"simulation":True,"confirm_delivery":False,**fields}
         request=NS(username="administrator",query={},body=AsyncMock(return_value=json.dumps(payload).encode()))
         manager=NS(status=lambda operator:Outcome.success(api.simulation_status))
-        preview={"state":"passed","decision":"send","simulation":True,"parts":["第一句","第二句"],
-                 "stages":[{"stage":"output_parsing","state":"passed"}]}
+        preview=preview_result or {"state":"passed","decision":"send","simulation":True,
+                 "parts":["第一句","第二句"], "task_id":"simulation-task", "call_id":"model-call",
+                 "stages":[{"stage":stage,"state":"passed"} for stage in
+                           ("model_generation","output_parsing","segmentation")]}
         simulator=AsyncMock(return_value=preview, side_effect=simulation_error)
         with patch("astrbot_host.setup_api.request",request), \
              patch("astrbot_host.setup_api.ContactManagement",return_value=manager), \
@@ -224,6 +227,37 @@ class AstrBotSetupFlowTests(unittest.IsolatedAsyncioTestCase):
         app.contact_schedule.synthetic_diagnostic_candidate.assert_awaited_once()
         app.contact_schedule.diagnostic_candidate.assert_not_awaited()
         simulator.assert_awaited_once()
+        app.proactive.contact.assert_not_awaited()
+
+    async def test_message_simulation_finishes_setup_using_its_single_existing_model_result(self):
+        from astrbot_host.setup_state import SETUP_STEPS
+        for step in SETUP_STEPS:
+            self.api.progress.complete(step)
+        old = self.seed_legacy_test(outcome="failed")
+        api, app, _, _ = self.simulation_api_fixture()
+        api.simulation_status = {"purposes": {"chat": {"allowed": True, "reason": None}}}
+        response, simulator = await self.call_simulation_fixture(api, {"purpose": "chat", "synthetic_event": True})
+        result = response["data"]
+        self.assertTrue(result["ready"], result)
+        self.assertEqual(result["proactive_test"]["state"], "simulated")
+        self.assertEqual(result["proactive_test"]["previous_receipt"], old)
+        self.assertEqual(result["proactive_test"]["call_id"], result["call_id"])
+        self.assertEqual(api.progress.read()["proactive_test"], result["proactive_test"])
+        simulator.assert_awaited_once()
+        app.proactive.contact.assert_not_awaited()
+        self.assertFalse(self.message_calls())
+
+    async def test_message_simulation_failure_preserves_unfinished_setup(self):
+        from astrbot_host.setup_state import SETUP_STEPS
+        for step in SETUP_STEPS:
+            self.api.progress.complete(step)
+        self.seed_legacy_test(outcome="failed")
+        before = self.api.progress.read()
+        api, app, _, _ = self.simulation_api_fixture()
+        response, _ = await self.call_simulation_fixture(api, {"purpose": "environment"},
+            simulation_error=TaskError("simulation_output_invalid", "invalid response"))
+        self.assertEqual(response["data"]["state"], "failed")
+        self.assertEqual(api.progress.read(), before)
         app.proactive.contact.assert_not_awaited()
 
 

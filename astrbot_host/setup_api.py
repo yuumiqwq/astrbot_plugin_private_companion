@@ -1057,7 +1057,7 @@ class SetupWebAPI:
                 stages.append({"stage": "trusted_candidate", "state": "passed"})
                 preview = await simulate_contact(session.application, context, candidate,
                     attempt_id=attempt_id, diagnostic_image=diagnostic_image)
-                return self._response(Outcome.success({**preview,
+                result = {**preview,
                     "purpose": purpose, "purpose_label": PURPOSES[purpose],
                     "route": candidate["route"], "variant": candidate["route"],
                     "event_mode": "synthetic_event" if synthetic_event else "source_backed",
@@ -1065,7 +1065,10 @@ class SetupWebAPI:
                     "delivery_state": "not_requested", "receipt_ref": None,
                     "usage_summary": self._diagnostic_usage_summary(session, context),
                     "started_at": started, "finished_at": datetime.now(timezone.utc).isoformat(),
-                    "stages": [*stages, *preview["stages"]], "replay_allowed": False}))
+                    "stages": [*stages, *preview["stages"]], "replay_allowed": False}
+                setup = self.progress.complete_simulation(result)
+                result.update(ready=setup["ready"], proactive_test=setup["proactive_test"])
+                return self._response(Outcome.success(result))
             except TaskError as error:
                 failure_stage = PROACTIVE_TEST_STAGE_BY_CODE.get(error.code, "execution")
                 if failure_stage == "output_parsing":

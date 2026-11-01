@@ -14,6 +14,16 @@ SCHEMA_VERSION = 3
 SETUP_STEPS = ("model", "knowledge", "relationships", "proactive", "life", "group")
 
 
+def _simulation_evidence(receipt: dict) -> bool:
+    passed = {item.get("stage") for item in receipt.get("stages", [])
+              if type(item) is dict and item.get("state") == "passed"}
+    return (receipt.get("simulation") is True
+            and receipt.get("decision") in ("send", "skip")
+            and all(type(receipt.get(key)) is str and 0 < len(receipt[key]) <= 256
+                    for key in ("task_id", "call_id"))
+            and {"model_generation", "output_parsing", "segmentation"} <= passed)
+
+
 class SetupStepsIncomplete(ValueError):
     """A guided section is still open, so the one-time test cannot start yet.
 
@@ -78,7 +88,7 @@ class SetupStateStore:
             raise ValueError("setup progress has an unsupported shape")
         test = document["proactive_test"]
         if test is not None:
-            if (type(test) is not dict or test.get("state") not in ("started", "failed", "unknown", "delivered", "received")
+            if (type(test) is not dict or test.get("state") not in ("started", "failed", "unknown", "delivered", "received", "simulated")
                     or type(test.get("attempt_id")) is not str
                     or type(test.get("started_at")) is not str):
                 raise ValueError("setup test receipt is invalid")
@@ -102,8 +112,10 @@ class SetupStateStore:
             for key in ("task_id", "delivery_state", "receipt_ref"):
                 if key in test and (type(test[key]) is not str or len(test[key]) > 256):
                     raise ValueError("setup test delivery receipt is invalid")
-            if test["state"] in ("failed", "unknown", "delivered") and type(test.get("finished_at")) is not str:
+            if test["state"] in ("failed", "unknown", "delivered", "simulated") and type(test.get("finished_at")) is not str:
                 raise ValueError("setup test receipt is invalid")
+            if test["state"] == "simulated" and not _simulation_evidence(test):
+                raise ValueError("setup simulation receipt is invalid")
             if ("error_code" in test and (type(test["error_code"]) is not str
                     or len(test["error_code"]) > 64
                     or any(not (char.islower() or char.isdigit() or char == "_") for char in test["error_code"]))):
@@ -112,7 +124,7 @@ class SetupStateStore:
                     type(test.get("confirmed_at")) is not str
                     or type(test.get("confirmed_by")) is not str or not test["confirmed_by"].strip()):
                 raise ValueError("setup test recipient confirmation is invalid")
-        if document["ready"] != bool(test and test.get("state") in ("delivered", "received")):
+        if document["ready"] != bool(test and test.get("state") in ("delivered", "received", "simulated")):
             raise ValueError("setup completion does not match the proactive test receipt")
         return document
 
@@ -143,6 +155,27 @@ class SetupStateStore:
             state[destination].append(step)
         if step in state[other]:
             state[other].remove(step)
+        self.write(state)
+        return state
+
+    def complete_simulation(self, result: dict) -> dict:
+        """Finish the guide using an already executed, parsed message preview."""
+        state = self.read()
+        if state["ready"] or any(step not in state["completed"] + state["skipped"]
+                                 for step in SETUP_STEPS):
+            return state
+        if (result.get("state") not in ("passed", "skipped") or not _simulation_evidence(result)
+                or any(type(result.get(key)) is not str or not result[key]
+                       for key in ("attempt_id", "started_at", "finished_at"))):
+            return state
+        receipt = {key: result[key] for key in ("attempt_id", "started_at", "finished_at",
+                   "simulation", "decision", "task_id", "call_id")}
+        receipt["stages"] = [item for item in result["stages"] if item.get("stage") in
+                             ("model_generation", "output_parsing", "segmentation")]
+        receipt.update(state="simulated", delivery_state="not_requested")
+        if state["proactive_test"] is not None:
+            receipt["previous_receipt"] = state["proactive_test"]
+        state.update(proactive_test=receipt, ready=True)
         self.write(state)
         return state
 

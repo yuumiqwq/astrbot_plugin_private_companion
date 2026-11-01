@@ -1343,27 +1343,46 @@ test('an unknown test can be confirmed as received without submitting another se
   assert.doesNotMatch(page.html, /平台已确认发送测试消息/);
 });
 
-test('the proactive test requires explicit consent and polls the real delivery result', async () => {
+test('the setup test uses the message simulation result without requesting delivery or another model run', async () => {
   const initial = {step: 'proactive_test', ready: false, proactive_test: null};
-  const started = {...initial, proactive_test: {state: 'started', attempt_id: 'attempt-1'}};
-  const delivered = readyStatus({proactive_test: {state: 'delivered', attempt_id: 'attempt-1',
+  const simulated = readyStatus({proactive_test: {state: 'simulated', attempt_id: 'attempt-1',
     finished_at: '2026-10-02T04:17:47Z'}});
   const page = harness({status: initial, responses: {
     'GET setup/status': initial,
-    'GET setup/proactive-test/status': delivered,
-    'POST setup/proactive-test': {state: 'started', attempt_id: 'attempt-1', ready: false},
+    'POST setup/proactive-diagnostic': {...simulated, state: 'passed', simulation: true, decision: 'send'},
   }});
   page.mount();
   await settle();
-  page.change('', '', {setupProactiveOptIn: ''}, {checked: true});
+  assert.match(page.html, /运行消息模拟/);
+  assert.doesNotMatch(page.html, /data-setup-proactive-opt-in|真实投递|发送一次测试消息/);
   page.click('proactive-test');
   await settle();
 
-  const call = page.calls.find(item => item.method === 'POST' && item.route === 'setup/proactive-test');
-  assert.deepEqual(JSON.parse(JSON.stringify(call.body)), {enable_proactive: true});
+  const call = page.calls.find(item => item.method === 'POST' && item.route === 'setup/proactive-diagnostic');
+  assert.deepEqual(JSON.parse(JSON.stringify(call.body)), {
+    purpose: 'chat', synthetic_event: true, simulation: true, confirm_delivery: false,
+  });
   assert.match(page.html, /首次设置已完成/);
-  assert.equal(page.calls.filter(item => item.method === 'POST' && item.route === 'setup/proactive-test').length, 1);
+  assert.match(page.html, /消息模拟已通过/);
+  assert.doesNotMatch(page.html, /平台已确认发送测试消息|你已确认收到测试消息/);
+  assert.equal(page.calls.filter(item => item.method === 'POST').length, 1);
+  assert.equal(page.calls.some(item => item.route === 'setup/proactive-test/status'), false);
   assert.equal(page.calls.filter(item => item.route === 'setup/status').length, 1);
+});
+
+test('a failed message simulation leaves the guide open for a later attempt', async () => {
+  const page = harness({status: {step: 'proactive_test', ready: false, proactive_test: null}, responses: {
+    'POST setup/proactive-diagnostic': {state: 'failed', code: 'simulation_output_invalid', simulation: true,
+      stages: [{stage: 'output_parsing', state: 'failed'}]},
+  }});
+  page.mount();
+  await settle();
+  page.click('proactive-test');
+  await settle();
+  assert.match(page.html, /输出格式：失败/);
+  assert.match(page.html, /simulation_output_invalid/);
+  assert.doesNotMatch(page.html, /首次设置已完成|平台已确认发送测试消息/);
+  assert.equal(page.calls.filter(item => item.method === 'POST').length, 1);
 });
 
 test('an in-flight test shows its real stage and stale polling cannot undo recipient confirmation', async () => {
