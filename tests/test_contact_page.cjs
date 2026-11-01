@@ -1688,6 +1688,66 @@ test('消息模拟仅提交禁止投递的请求，并逐条保留后台消息�
   assert.equal(h.localStore.size, 0);
 });
 
+test('每日整理一次模拟展示三个结果，执行中不新增其他请求', async () => {
+  const h = harness();
+  await boot(h);
+  h.element.dispatch('click', {target:{closest:sel => sel === '[data-view]' ? {dataset:{view:'tests'}} : null}});
+  const count = h.requests.length;
+  assert.equal((h.element.innerHTML.match(/data-test-prompt-select=/g) || []).length, 17);
+  h.element.dispatch('click', {target:{closest:sel => sel === '[data-daily-test-run]' ? {} : null}});
+  await h.settle();
+  const request = h.requests.at(-1);
+  assert.equal(h.requests.length, count + 1);
+  assert.equal(request.route, 'setup/daily-diagnostic');
+  assert.deepEqual(JSON.parse(JSON.stringify(request.values)), {simulation:true,confirm_delivery:false});
+  assert.equal(h.page.state.data.testBusy, 'daily_review');
+  h.element.dispatch('click', {target:{closest:sel => sel === '[data-daily-test-run]' ? {} : null}});
+  h.element.dispatch('click', {target:{closest:sel => sel === '[data-test-run]' ? {dataset:{testRun:'chat'}} : null}});
+  assert.equal(h.requests.length, count + 1);
+  h.reply(request, {simulation:true,state:'passed',local_date:'2026-11-01',timezone:'Asia/Shanghai',
+    parts_enabled:{diary:true,day_plan:true,memory:true},result:{
+      diary:{body:'<b>今天的日记</b>\n第二段',form:'diary'},
+      day_plan:{items:[{title:'复习生物',start:'2026-11-02T14:00:00+08:00',minutes:60,detail:'复习遗传题'}]},
+      memory:{proposals:[{action:'add',text:'喜欢完整的聊天示例'}]}},
+    stages:[{stage:'source_capture',state:'passed'},{stage:'model_generation',state:'passed'},
+      {stage:'output_validation',state:'passed'}]});
+  await h.settle();
+  assert.equal(h.page.state.data.testBusy, '');
+  assert.equal((h.element.innerHTML.match(/data-daily-part=/g) || []).length, 3);
+  assert.match(h.element.innerHTML, /&lt;b&gt;今天的日记&lt;\/b&gt;\n第二段/);
+  assert.match(h.element.innerHTML, /datetime="2026-11-02T14:00:00\+08:00"/);
+  assert.match(h.element.innerHTML, /11\/02 14:00<\/time> · 60 分钟/);
+  assert.match(h.element.innerHTML, /复习遗传题/);
+  assert.match(h.element.innerHTML, /喜欢完整的聊天示例/);
+  assert.doesNotMatch(h.element.innerHTML, /<b>今天的日记<\/b>|data-simulation-part=/);
+  assert.match(h.element.innerHTML, /结果校验/);
+  assert.equal(h.requests.length, count + 1);
+});
+
+test('每日整理保留关闭状态且显示失败阶段，不把旧投递响应当模拟', async () => {
+  const h = harness();
+  await boot(h);
+  h.element.dispatch('click', {target:{closest:sel => sel === '[data-view]' ? {dataset:{view:'tests'}} : null}});
+  const run = async result => {
+    h.element.dispatch('click', {target:{closest:sel => sel === '[data-daily-test-run]' ? {} : null}});
+    await h.settle();
+    h.reply(h.requests.at(-1), result);
+    await h.settle();
+  };
+  await run({simulation:true,state:'passed',parts_enabled:{diary:true,day_plan:false,memory:false},
+    result:{diary:{body:'保留日记'},day_plan:null,memory:null}});
+  assert.match(h.element.innerHTML, /data-daily-part="day_plan"><h4>次日日程<\/h4><p class="ct-daily-empty">未运行/);
+  assert.match(h.element.innerHTML, /data-daily-part="memory"><h4>记忆整理<\/h4><p class="ct-daily-empty">未运行/);
+  await run({simulation:true,state:'failed',code:'daily_output_invalid',error:'未通过结构校验',
+    stages:[{stage:'output_validation',state:'failed'}]});
+  assert.match(h.element.innerHTML, /未通过结构校验/);
+  assert.match(h.element.innerHTML, /结果校验<\/span>\s*<strong>失败/);
+  assert.doesNotMatch(h.element.innerHTML, /data-daily-part=/);
+  await run({state:'passed',delivery_state:'delivered'});
+  assert.equal(h.page.state.data.testResults.daily_review.state, 'unknown');
+  assert.doesNotMatch(h.element.innerHTML, /data-daily-part=/);
+});
+
 test('模型选择跳过时显示状态且不渲染空消息气泡', async () => {
   const h = harness();
   await boot(h);

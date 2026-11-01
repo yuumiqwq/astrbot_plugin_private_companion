@@ -1255,6 +1255,12 @@ window.CompanionContactPage = (() => {
     </article>`).join("");
     return `<div class="ct-tests">
       <div data-contact-prompts></div>
+      <section class="ct-daily-test" aria-label="每日整理测试">
+        <header><h3>每日整理</h3><button type="button" class="ct-btn is-primary" data-daily-test-run
+          ${data.testBusy ? " disabled" : ""}>${data.testBusy === "daily_review"
+            ? '<span class="ct-spinner" aria-hidden="true"></span><span>模拟中…</span>' : "测试每日整理"}</button></header>
+        ${dailyResultMarkup()}
+      </section>
       <div class="ct-test-overview">
         <div class="ct-test-coverage-summary" aria-label="生产器覆盖情况">
           <span><i class="is-ready"></i>生产器已接通 <strong>${counts.ready}</strong></span>
@@ -1296,6 +1302,7 @@ window.CompanionContactPage = (() => {
     delivery_budget:"本窗口今日实际联系额度",
     model_route:"主动联系模型路由", model_generation:"模型生成", persona_review:"人格复核",
     output_parsing:"输出格式解析", segmentation:"消息分段", simulation:"模拟结果", execution:"模拟执行",
+    source_capture:"整理资料", output_validation:"结果校验",
   };
   const TEST_STAGE_STATES = {
     passed:"通过", failed:"失败", pending:"待检查", skipped:"未执行", not_required:"无需复核",
@@ -1359,6 +1366,38 @@ window.CompanionContactPage = (() => {
       ${skipReason ? `<p class="ct-test-cause"><b>未发送原因</b>${e(skipReason)}${modelSkipReason ? `：${e(modelSkipReason)}` : ""}</p>` : ""}
       ${testMetricsMarkup(result)}${testStageMarkup(result)}
       ${result.suggestion ? `<p class="ct-test-next"><b>下一步</b>${e(result.suggestion)}</p>` : ""}${technical}
+    </section>`;
+  }
+  function dailyResultMarkup() {
+    const result = data.testResults.daily_review;
+    if (!result) return "";
+    const state = ["passed", "skipped", "failed", "unknown"].includes(result.state) ? result.state : "unknown";
+    const title = {passed:"模拟完成",skipped:"未运行",failed:"模拟未完成",unknown:"模拟结果未收到"}[state];
+    const planTime = value => {
+      try {
+        return new Intl.DateTimeFormat("zh-CN",{timeZone:result.timezone || "Asia/Shanghai",
+          month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}).format(new Date(value));
+      } catch { return value || ""; }
+    };
+    const sections = [["diary","当日日记"],["day_plan","次日日程"],["memory","记忆整理"]];
+    const content = ["passed", "skipped"].includes(state) ? `<div class="ct-daily-results">${sections.map(([key,label]) => {
+      const value = result.result?.[key];
+      let body = '<p class="ct-daily-empty">未生成内容</p>';
+      if (result.parts_enabled?.[key] === false) body = '<p class="ct-daily-empty">未运行</p>';
+      else if (value && key === "diary" && typeof value.body === "string") {
+        body = `<div class="ct-daily-text">${e(value.body)}</div><details><summary>完整结果</summary><pre>${e(JSON.stringify(value,null,2))}</pre></details>`;
+      } else if (value && key === "day_plan" && Array.isArray(value.items)) {
+        body = value.items.length ? `<ol class="ct-daily-plans">${value.items.map(item => `<li><h5>${e(item.title || "")}</h5>
+          <span><time datetime="${e(item.start || "")}" title="${e(item.start || "")}">${e(planTime(item.start))}</time>${item.minutes != null ? ` · ${e(item.minutes)} 分钟` : ""}</span>
+          ${item.detail ? `<div class="ct-daily-text">${e(item.detail)}</div>` : ""}</li>`).join("")}</ol>` : '<p class="ct-daily-empty">没有新增安排</p>';
+      } else if (value) body = `<pre>${e(JSON.stringify(value,null,2))}</pre>`;
+      return `<article data-daily-part="${key}"><h4>${label}</h4>${body}</article>`;
+    }).join("")}</div>` : "";
+    return `<section class="ct-test-result is-${state}" role="status" aria-live="polite"><strong>${title}</strong>
+      ${result.local_date ? `<p>${e(result.local_date)}${result.timezone ? ` · ${e(result.timezone)}` : ""}</p>` : ""}${content}
+      ${testMetricsMarkup(result)}${testStageMarkup(result)}
+      ${result.error || result.code ? `<details class="ct-test-technical"><summary>展开技术详情</summary>
+        ${result.code ? `<code>${e(result.code)}</code>` : ""}${result.error ? `<pre>${e(result.error)}</pre>` : ""}</details>` : ""}
     </section>`;
   }
   function testMatches(id) {
@@ -1991,6 +2030,10 @@ window.CompanionContactPage = (() => {
       if (data.testBusy) return;
       void runProactiveTest(testRun); return;
     }
+    if (event.target.closest("[data-daily-test-run]")) {
+      if (!data.testBusy) void runDailyTest();
+      return;
+    }
     const testCopy = event.target.closest("[data-test-copy]")?.dataset.testCopy;
     if (testCopy) { copyTestInstruction(testCopy); return; }
     const action = event.target.closest("[data-action]")?.dataset.action;
@@ -2162,6 +2205,35 @@ window.CompanionContactPage = (() => {
       data.testResults[id] = {simulation:true,state:error?.confirmed ? "failed" : "unknown",
         code:error?.code || "",error:error?.confirmed ? reason(error.code) : "尚未收到模拟结果。"};
       notice(error?.confirmed ? "模拟未完成，查看具体原因。" : "模拟结果未确认，请稍后重试。",true);
+    } finally {
+      if (live(ticket)) { data.testBusy = ""; render(); }
+    }
+  }
+  async function runDailyTest() {
+    if (data.testBusy) return;
+    const ticket = version;
+    data.testBusy = "daily_review";
+    data.testResults.daily_review = null;
+    notice("正在生成每日整理模拟…");
+    render();
+    try {
+      const result = await api("POST", "setup/daily-diagnostic",
+        {simulation:true,confirm_delivery:false}, 300000);
+      if (!live(ticket)) return;
+      const keys = ["diary", "day_plan", "memory"];
+      const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
+      if (result.simulation !== true || !["passed", "skipped", "failed"].includes(result.state)
+          || (["passed", "skipped"].includes(result.state) && (!object(result.result)
+            || !object(result.parts_enabled) || keys.some(key => typeof result.parts_enabled[key] !== "boolean"
+              || (result.result[key] !== null && !object(result.result[key])))))) throw problem("invalid_response");
+      data.testResults.daily_review = result;
+      notice(result.state === "passed" ? "每日整理模拟完成。" : result.state === "skipped"
+        ? "每日整理未运行。" : "每日整理模拟未完成。", result.state === "failed");
+    } catch (error) {
+      if (!live(ticket)) return;
+      data.testResults.daily_review = {simulation:true,state:error?.confirmed ? "failed" : "unknown",
+        code:error?.code || "",error:error?.confirmed ? reason(error.code) : "尚未收到模拟结果。"};
+      notice(error?.confirmed ? "每日整理模拟未完成。" : "每日整理模拟结果未确认。",true);
     } finally {
       if (live(ticket)) { data.testBusy = ""; render(); }
     }

@@ -23,8 +23,8 @@ window.CompanionModuleSwitches = (() => {
   cfg("quiet","免打扰时段","contact","proactive.contact","quiet_enabled",{global:true});
   cfg("morning","晨间流程","contact","proactive.contact","morning_chain_enabled",{global:true,parent:"contact"});
   cfg("contact-voice","主动语音","contact expression","proactive.contact","voice_action_enabled",{global:true,locked:"已停用",selector:'[data-field="voice_action_enabled"]'});
-  cfg("news-read","每日新闻读取","perception contact","proactive.contact","news_daily_hot_read_enabled",{global:true});
-  cfg("news-share","主动新闻分享","perception contact","proactive.contact","news_share_enabled",{global:true,parent:"contact"});
+  cfg("news-read","每日热榜读取","perception contact","proactive.contact","news_daily_hot_read_enabled",{global:true});
+  cfg("news-share","新闻分享源","perception contact","proactive.contact","news_share_enabled",{global:true,parent:"contact"});
   add("state","角色状态","state decision","state","enabled");
   add("mood","心情模拟","state","state","mood_enabled",{parent:"state"});
   add("calendar","角色日历","state","state","calendar_enabled");

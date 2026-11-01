@@ -1194,6 +1194,21 @@
    入场位移、涟漪、盘面变化、扫描、呼吸点全部归零，信息一条不丢。
    延迟也要一并归零：开页涟漪与问候弧的延迟最长到 ~312ms，
    只压时长的话会先空白一段再「啪」地出现——那不是减弱动效，是闪烁。 */
+.ct-daily-test{border:1px solid var(--t-line);border-radius:16px;padding:18px;min-width:0}
+.ct-daily-test>header{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.ct-daily-test h3,.ct-daily-test h4,.ct-daily-test h5{margin:0}
+.ct-daily-results{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:14px;margin-top:14px}
+.ct-daily-results>article{min-width:0;border:1px solid var(--t-line);border-radius:12px;padding:14px}
+.ct-daily-results h4{margin-bottom:12px}
+.ct-daily-results pre,.ct-daily-text{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;font:inherit;line-height:1.65}
+.ct-daily-results pre{margin:10px 0 0}
+.ct-daily-results details{margin-top:12px}
+.ct-daily-results summary{cursor:pointer}
+.ct-daily-empty{color:var(--t-text-faint)}
+.ct-daily-plans{margin:0;padding-left:20px}
+.ct-daily-plans li+li{margin-top:16px}
+.ct-daily-plans li>span{display:block;margin:5px 0;color:var(--t-text-faint);overflow-wrap:anywhere}
+@media(max-width:1000px){.ct-daily-results{grid-template-columns:1fr}}
 @media (prefers-reduced-motion:reduce){
   .ct-dial.is-entering,.ct-dial.is-scanning .ct-bar.is-on,
   .ct-dial.is-scanning .ct-cursor-dot,.ct-gate,.ct-verdict.is-open .ct-dot,
