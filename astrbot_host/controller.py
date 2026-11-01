@@ -545,6 +545,10 @@ class AstrBotStagingController:
                 runtime=self.session.application.runtime, origin_key=context.key, client_factory=LayaDecisionClient)
 
         self.session.application.attach_laya_decision(laya_for_context)
+        from .shared_context import AstrBotSharedContext
+        self.session.application.proactive.request_context = AstrBotSharedContext(
+            self.context, self.session.bridge, self.settings.provider_id)
+        self.session.application.proactive.output_segments = self.session.application.proactive.request_context.split_reply
         return self.session
 
     async def load_existing(self) -> Outcome[dict[str, Any]]:

@@ -724,6 +724,10 @@ class AstrBotMultiController:
                 runtime=self.session.application.runtime, origin_key=context.key, client_factory=LayaDecisionClient)
 
         self.session.application.attach_laya_decision(laya_for_context)
+        from .shared_context import AstrBotSharedContext
+        self.session.application.proactive.request_context = AstrBotSharedContext(
+            self.context, self.session.bridge, self.settings.common.provider_id)
+        self.session.application.proactive.output_segments = self.session.application.proactive.request_context.split_reply
 
     def _idle(self):
         if self.session is not None and self.session.application.state not in ("new", "stopped"):

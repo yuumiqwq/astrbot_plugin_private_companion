@@ -134,6 +134,8 @@ class ProactiveContacts:
         # contact exactly as it was, and a memory failure never withholds a
         # message the user may be waiting for.
         self.memory_context = None
+        self.request_context = None
+        self.output_segments = None
         self.role_state = self.life_context = None
         self.expression_context = self.expression_review = None
         self.persona_judge = PersonaJudge(self.runtime)
@@ -884,6 +886,8 @@ class ProactiveContacts:
                  or source_origin is not None and "news_event" in source_origin else "") if text)
             if extra_instruction:
                 request = replace(request, instruction=request.instruction + "\n" + extra_instruction)
+            if self.request_context is not None and not job.administrator_test:
+                request = await self.request_context(request)
             if not self._contact_request_fits(run, request):
                 # Optional memory and history are the first things a smaller
                 # context model must lose; the current event, source evidence
@@ -896,6 +900,12 @@ class ProactiveContacts:
                     role_state=None, recent_life=None)
                 if extra_instruction:
                     compact = replace(compact, instruction=compact.instruction + "\n" + extra_instruction)
+                shared_materials = tuple(item for item in request.context.materials
+                                         if item.owner == "astrbot.conversation")
+                if shared_materials:
+                    compact = replace(compact, role_instruction=request.role_instruction,
+                        role_guard_instruction=request.role_guard_instruction,
+                        context=replace(compact.context, materials=(*compact.context.materials, *shared_materials)))
                 if not self._contact_request_fits(run, compact):
                     raise TaskError(
                         "contact_model_profile_exceeded",
@@ -962,7 +972,8 @@ class ProactiveContacts:
                     raise TaskError("contact_news_unavailable", "news attribution is incomplete") from error
             segments = ()
             if body is not None:
-                segments = segmentation.parts(body)
+                host_segments = self.output_segments(job.context, body) if self.output_segments is not None else None
+                segments = segmentation.parts(body) if host_segments is None else host_segments
                 segments = tuple(trim_blank_edges(part)
                                  for part in presentation.clean_parts(segments, statements=statements))
                 segments = tuple(part for part in segments if part.strip())
