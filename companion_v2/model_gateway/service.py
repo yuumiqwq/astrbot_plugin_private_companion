@@ -367,6 +367,8 @@ class LocalModelGateway:
                         run.task.task_id, provider.binding.provider, phase,
                         diagnostics.parse_state if diagnostics is not None else "unavailable")
                     continue
+                if not prefix_committed and failure is ModelFailure.WIRE_DECODE and usage_known:
+                    raise TaskError("model_output_invalid", "provider output did not match the task's response contract")
                 raise TaskError("model_usage_unknown", "provider processing is unknown; no fallback was dispatched")
         raise TaskError("model_not_started", "configured providers confirmed they did not process the request")
 

@@ -68,6 +68,7 @@ class ProactivePromptModeTests(ContactFixture, unittest.IsolatedAsyncioTestCase)
         request = request_for(job, (record,), self.preferences(self.app),
             role_state={"mood": "calm"}, recent_life="A saved life event")
         self.assertEqual(request.proactive_mode, "simple")
+        self.assertEqual(request.response_format, "json_object")
         self.assertIn("unanswered=3", request.instruction)
         self.assertNotIn("{{", request.instruction)
         self.assertNotIn(INSTRUCTION, request.instruction)
@@ -91,6 +92,7 @@ class ProactivePromptModeTests(ContactFixture, unittest.IsolatedAsyncioTestCase)
         self.assertEqual(result.task.state, "succeeded")
         await self.delivery_state(self.app, result.task.task_id, "delivered")
         wire = build_wire(self.called[-1])
+        self.assertEqual(self.called[-1].original.response_format, "json_object")
         system = wire.messages[0]["content"]
         self.assertIn("这是原角色人格，保持自然。", system)
         self.assertIn("Our short prompt", system)
@@ -98,6 +100,12 @@ class ProactivePromptModeTests(ContactFixture, unittest.IsolatedAsyncioTestCase)
         self.assertNotIn(self.called[-1].task_prompt, system)
         self.assertNotIn("decision", system)
         self.assertEqual([item.text for item in self.sent], ["Simple message"])
+
+    async def test_companion_request_also_uses_provider_json_mode(self):
+        result = (await self.contact(self.app)).unwrap()
+        self.assertEqual(result.task.state, "succeeded")
+        self.assertEqual(self.called[-1].original.proactive_mode, "companion")
+        self.assertEqual(self.called[-1].original.response_format, "json_object")
 
     async def test_simple_skip_does_not_send_an_empty_message(self):
         self.patch_mode("simple").unwrap()

@@ -486,7 +486,7 @@ def request_for(job, records, preferences, history=(), *, last_reply=None, reply
                          if dedup_active else "") +
                          ("\n" + diagnostic_instruction if diagnostic_instruction else "") +
                          (rendered_prompt(preferences.values, "style_wrapper", style=style) if style else ""),
-                         context.role_binding, output_format="proactive_contact",
+                         context.role_binding, output_format="proactive_contact", response_format="json_object",
                          prompt_overrides=tuple((key, effective_prompt(preferences.values, section)) for key, section in
                              (("output_contract", "output"), ("terminal_prompt_guard", "terminal"),
                               ("capability_instruction", "capability"))))

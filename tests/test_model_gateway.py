@@ -274,6 +274,18 @@ class ModelGatewayTests(ModelFixture, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raised.exception.code, "model_usage_unknown")
         self.assertEqual([name for name, _ in self.called], ["primary"])
 
+    async def test_contract_failure_with_known_usage_and_no_fallback_is_an_output_error(self):
+        self.patch_model(fallback="")
+        self.responses["primary"] = ProviderResponse("unknown", usage=Amount(12, 30),
+            failure=ModelFailure.WIRE_DECODE, receipt_ref="primary:bad-json")
+        with self.assertRaises(TaskError) as raised:
+            await self.gateway.generate(self.model_run(), self.request())
+        self.assertEqual(raised.exception.code, "model_output_invalid")
+        self.assertEqual([name for name, _ in self.called], ["primary"])
+        observed = self.gateway.observe(self.context, "task-1").unwrap()["calls"][0]
+        self.assertEqual(observed["usage_state"], "settled")
+        self.assertEqual(observed["actual_tokens"], 12)
+
     async def test_configured_refusal_terms_do_not_intercept_when_disabled(self):
         self.patch_model(refusal_terms="cannot help with that")
         self.responses["primary"] = ProviderResponse(

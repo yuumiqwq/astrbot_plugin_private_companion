@@ -162,6 +162,7 @@ PROACTIVE_TEST_STAGE_ORDER = (
 PROACTIVE_TEST_STAGE_BY_CODE = {
     "simulation_output_missing": "model_generation",
     "simulation_output_invalid": "output_parsing",
+    "model_output_invalid": "output_parsing",
     "dashboard_identity_required": "authorization",
     "unbound_identity": "authorization",
     "binding_revoked": "authorization",

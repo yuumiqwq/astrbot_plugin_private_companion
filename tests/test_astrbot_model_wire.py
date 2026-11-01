@@ -193,6 +193,22 @@ class NativeModelTests(NativeFixture, unittest.IsolatedAsyncioTestCase):
         payload, _ = self.native.provider.client.state.calls[-1]
         self.assertEqual(payload["response_format"], {"type": "json_object"})
 
+    async def test_proactive_modes_transmit_json_mode_and_keep_their_output_schema(self):
+        envelope = await self.envelope()
+        for mode, raw in (("companion", '{"decision":"send","text":"One\\nTwo"}'),
+                          ("simple", '{"send":true,"message":"One\\nTwo"}')):
+            with self.subTest(mode=mode):
+                request = replace(envelope.original, output_format="proactive_contact",
+                    proactive_mode=mode, response_format="json_object", instruction="Return JSON.")
+                async def respond(*_, text=raw):
+                    return completion(text)
+                self.native.provider.client.state.behavior = respond
+                result = await self.native_model.generate(replace(envelope, original=request))
+                self.assertEqual(result.status, "generated")
+                self.assertEqual(result.draft.text, raw)
+                payload, _ = self.native.provider.client.state.calls[-1]
+                self.assertEqual(payload["response_format"], {"type": "json_object"})
+
     async def test_model_wire_records_the_final_prompt_when_a_snapshot_sink_is_attached(self):
         envelope = await self.envelope()
         snapshots = []
