@@ -70,7 +70,7 @@ window.CompanionStateMaintenance = (() => {
        概率控制“这一轮情绪到底动没动”，步长控制“一次最多动多少”，
        半衰期控制“多久回归基线”。*/
     mood_enabled:{label:"启用心情模拟",type:"boolean"},
-    mood_update_probability:{label:"每次状态维护更新心情的概率",type:"probability"},
+    mood_update_probability:{label:"每轮更新心情的概率",type:"probability"},
     mood_update_max_delta:{label:"单轮最大变化幅度",type:"number",min:1,max:4},
     mood_decay_half_life_minutes:{label:"回归基线半衰期（分钟）",type:"number",min:5,max:1440},
     /* 每日巡视：V1 的日检节奏与保留天数，V2 由 humanized.py 消费。*/
@@ -588,8 +588,8 @@ window.CompanionStateMaintenance = (() => {
         </fieldset>`)}${configGroup(2,"整体表达偏好","所有阶段共用的柔性提示，不会覆盖角色原人格。",configField("cycle_expression_prompt",values,e,{help:"最多 2048 字，可留空使用默认表达。"}))}</div>`;
       return `${viewTabs}<div id="state-cycle-view-panel" class="state-cycle-view-panel" role="tabpanel" tabindex="0" aria-labelledby="state-cycle-view-${selectedCycleView}">${selectedCycleView==="expression"?expressionView:planView}</div>`;
     }
-    if(draft.kind==="mood")return configGroup(1,"心情动力学","在后台状态维护时，按设定概率决定是否调整心情数值。",
-      configField("mood_enabled",values,e)+configField("mood_update_probability",values,e,{help:"取值 0–1；例如 0.35 表示 35%。"})+configField("mood_update_max_delta",values,e,{help:"取值 1–4；控制一次后台状态维护的最大变化。"})+configField("mood_decay_half_life_minutes",values,e,{help:"取值 5–1440 分钟；半衰期越短，越快回归基线。"}));
+    if(draft.kind==="mood")return configGroup(1,"心情动力学","概率决定这一轮情绪是否变化，幅度决定一次最多变化多少，半衰期决定多久回归基线。",
+      configField("mood_enabled",values,e)+configField("mood_update_probability",values,e,{help:"取值 0–1；例如 0.35 表示 35%。"})+configField("mood_update_max_delta",values,e,{help:"取值 1–4；控制单轮的最大变化。"})+configField("mood_decay_half_life_minutes",values,e,{help:"取值 5–1440 分钟；半衰期越短，越快回归基线。"}));
     if(draft.kind==="patrol")return configGroup(1,"每日状态巡视","只查看并记录，不推进数值（推进见「后台状态维护」）；使用角色本地时区，超过保留天数的报告会清除。",
       configField("daily_state_patrol_enabled",values,e)+configField("daily_state_patrol_time",values,e,{title:"巡视时刻",help:"按角色本地时区执行；建议在对话最少的时段运行。"})+configField("daily_state_patrol_retention_days",values,e,{title:"报告保留天数",stepper:true,help:"超过天数自动清除，取值范围 3–180 天。"}));
     const base=draft.base,current=base.timeline,dayEnabled=values.applicability==="applicable";
