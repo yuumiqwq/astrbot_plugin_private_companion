@@ -440,6 +440,7 @@ class ModelSession:
                 ("role_instruction", (request.role_instruction, original.role_instruction)),
                 ("host_role_instruction", (request.host_role_instruction, original.host_role_instruction)),
                 ("prompt_overrides", (request.prompt_overrides, original.prompt_overrides)),
+                ("proactive_mode", (request.proactive_mode, original.proactive_mode)),
                 ("context.deferred", (request.context.deferred, original.context.deferred)),
                 ("context.unavailable", (request.context.unavailable, original.context.unavailable)),
                 ("output_format", (request.output_format, original.output_format)),

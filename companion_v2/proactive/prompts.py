@@ -462,7 +462,7 @@ def request_for(job, records, preferences, history=(), *, last_reply=None, reply
     rhythm_instruction = effective_prompt(preferences.values, "rhythm") if rhythm_snapshot is not None and not administrator_test else ""
     if getattr(job, "diagnostic_image_intent", None):
         diagnostic_instruction += "\n" + effective_prompt(preferences.values, "diagnostic_image")
-    return PromptRequest(trigger, job.role_instruction, SealedForegroundContext(tuple(materials), (), ()),
+    request = PromptRequest(trigger, job.role_instruction, SealedForegroundContext(tuple(materials), (), ()),
                           effective_prompt(preferences.values, "business") + "\n" + effective_prompt(preferences.values, "topic_continuity") + "\n" + rhythm_instruction + "\n" +
                           effective_template(preferences.values, "expression_prompt") +
                           ("\n" + effective_prompt(preferences.values, "official_alert") if official_alert else "") +
@@ -490,6 +490,10 @@ def request_for(job, records, preferences, history=(), *, last_reply=None, reply
                          prompt_overrides=tuple((key, effective_prompt(preferences.values, section)) for key, section in
                              (("output_contract", "output"), ("terminal_prompt_guard", "terminal"),
                               ("capability_instruction", "capability"))))
+    if preferences.values.get("prompt_mode", "companion") == "simple":
+        from .simple_prompts import simple_request
+        return simple_request(request, job, preferences)
+    return request
 
 
 def _recent_timing(dialogue, history, last_reply, now):

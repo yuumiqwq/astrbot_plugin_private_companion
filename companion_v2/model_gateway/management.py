@@ -435,7 +435,13 @@ class ModelManagement:
                 "apply_mode": current.apply_mode.value, "revision": current.revision}
         if profile.kind == "proactive.compose":
             from companion_v2.proactive.prompt_catalog import assembly
-            result["prompt_assembly"] = assembly()
+            mode_section = next(item for item in profile.prompt_sections if item.key == "simple")
+            mode_current, mode_inherited = self._section_snapshots(operator, mode_section, layer)
+            mode_field = mode_section.config_group + ".prompt_mode"
+            mode = _field(mode_current.fields[mode_field], mode_inherited.fields[mode_field])
+            mode.update(edit_token=mode_current.edit_token, configuration_layer=mode_current.target.layer.value)
+            result["prompt_assembly"] = assembly(mode["value"])
+            result["prompt_assembly"]["mode"] = mode
             for item in result["prompt_layers"]:
                 if item["key"] in {"request_instruction", "output_contract", "capability_instruction", "terminal_prompt_guard"}:
                     item["editable"] = True
@@ -839,6 +845,8 @@ class ModelManagement:
             self._authorize(operator, write=True)
             profile = self._profile(kind)
             if "section" in data:
+                if profile.kind == "proactive.compose" and data["section"] == "mode":
+                    return self._configure_proactive_mode(operator, profile, data, selected_layer)
                 return self._configure_section(operator, profile, data, selected_layer)
             current, inherited, _ = self._snapshots(operator, profile, selected_layer)
             changes, reset = self._changes(profile, data, current, inherited)
@@ -851,6 +859,26 @@ class ModelManagement:
                 observed_at=self.app.now()))
             return {"replayed": receipt.replayed, "operation_id": op_id,
                     "task": self._project(operator, profile, selected_layer)}
+
+    def _configure_proactive_mode(self, operator, profile, data, layer):
+        changes, reset = data["changes"], data["reset"]
+        if not (type(changes) is dict and type(reset) is list
+                and ((set(changes) == {"mode"} and not reset and changes["mode"] in ("companion", "simple"))
+                     or (not changes and reset == ["mode"]))):
+            raise TaskError("model_configuration_invalid", "select one proactive prompt mode or inherit it")
+        section = next(item for item in profile.prompt_sections if item.key == "simple")
+        current, _ = self._section_snapshots(operator, section, layer)
+        field_id = section.config_group + ".prompt_mode"
+        op_id = "model-prompt-mode:" + digest([operator.subject, current.target.key,
+                                             profile.kind, data["operation_key"]])
+        receipt = require(self.app.configuration.patch(operator,
+            target=current.target, group_id=section.config_group,
+            operation=OperationRef(op_id, section.config_group, current.target.authorization_scope,
+                                   VersionRef(op_id, 1), op_id),
+            expected_edit_token=data["edit_token"], changes={field_id: changes["mode"]} if changes else {},
+            reset_to_inherit=(field_id,) if reset else (), observed_at=self.app.now()))
+        return {"replayed": receipt.replayed, "operation_id": op_id,
+                "task": self._project(operator, profile, layer)}
 
     def _configure_section(self, operator, profile, data, layer):
         section = next((item for item in profile.prompt_sections if item.key == data["section"]), None)

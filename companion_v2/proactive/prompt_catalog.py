@@ -20,6 +20,7 @@ def sections():
     from companion_v2.model_gateway.models import PromptSection
     from .configuration import GROUP
     from . import prompts as p
+    from .simple_prompts import SIMPLE_PROMPT, SIMPLE_OUTPUT, SIMPLE_TERMINAL
 
     items = list(p._base_prompt_sections())
     items.extend(PromptSection(*item) for item in (
@@ -50,12 +51,16 @@ def sections():
         ("presentation_guidance", "表达设置的模式引导", "提示词风格参考（只影响表达，不改变任务、事实、来源或授权）：{instruction}",
          "表达设置使用约束或引导模式时"),
         ("capability", "能力补充", "", "仅追加到主动联系请求"),
+        ("simple", "简洁主动提示词", SIMPLE_PROMPT, "简洁模式"),
+        ("simple_output", "简洁输出格式", SIMPLE_OUTPUT, "简洁模式"),
+        ("simple_terminal", "简洁末尾格式", SIMPLE_TERMINAL, "简洁模式"),
     ))
     variables = {"voice_parameters": ("language", "chars"), "voice_preference": ("extra",),
                  "dedup_parameters": ("sent_window", "reply_window", "anchors", "overlap"),
                  "style_wrapper": ("style",), "presentation": ("instruction",),
                  "humanized_wrapper": ("instruction",), "presentation_style": ("style",),
-                 "presentation_guidance": ("instruction",)}
+                 "presentation_guidance": ("instruction",),
+                 "simple": ("current_time", "unanswered_count")}
     return tuple(replace(item, config_group=GROUP, field=field_for(item.key),
                          variables=variables.get(item.key, item.variables)) for item in items)
 
@@ -114,7 +119,17 @@ def segmentation_instruction(preferences, policy):
     return re.sub(r"\{\{\s*split_marker\s*\}\}", lambda _: LLM_SEGMENT_MARKER, instruction, flags=re.IGNORECASE)
 
 
-def assembly():
+def presentation_instructions(preferences, segmentation, presentation, *, news=False):
+    if preferences.values.get("prompt_mode", "companion") == "simple":
+        return ""
+    from .prompts import news_presentation_instruction
+
+    return "\n".join(text for text in (
+        segmentation_instruction(preferences, segmentation), presentation_instruction(preferences, presentation),
+        news_presentation_instruction(segmentation, preferences.values) if news else "") if text)
+
+
+def assembly(mode="companion"):
     from .configuration import PURPOSES
 
     common = ["business", "topic_continuity", "expression", "history", "output", "terminal"]
@@ -125,10 +140,12 @@ def assembly():
                      "voice_preference", "poke", "memory", "learned_style", "dialogue", "length", "news_length",
                      "history", "dedup", "dedup_parameters", "diagnostic_synthetic", "diagnostic_source",
                      "diagnostic_plain", "diagnostic_presentation", "diagnostic_image", "style", "style_wrapper"]
-    return {"purpose_count": len(PURPOSES), "purpose_sections": {key: "purpose." + key for key in PURPOSES},
+    simple_sections = ["simple", "simple_output", "simple_terminal"]
+    result = {"purpose_count": len(PURPOSES), "purpose_sections": {key: "purpose." + key for key in PURPOSES},
+            "current_mode": mode, "simple_sections": simple_sections,
             "common_sections": common,
             "conditional_sections": [item.key for item in sections()
-                                     if item.key not in common and not item.key.startswith("purpose.")],
+                                     if item.key not in common + simple_sections and not item.key.startswith("purpose.")],
             "diagnostic_variants": {
                 "mobile_location": {"purpose": "environment", "sections": ["origin.reality_location_event", "diagnostic_source"]},
                 "reaction_image": {"purpose": "chat", "sections": ["diagnostic_image"]}},
@@ -144,3 +161,13 @@ def assembly():
                 {"key": "terminal_prompt_guard", "label": "末尾约束", "sections": ["terminal"]},
                 {"key": "materials", "label": "会话历史与本轮资料", "sections": []}],
             "configuration_layers": ["role", "window"], "default_layer": "window"}
+    result["companion_order"] = result["order"]
+    result["simple_order"] = [
+        {"key": "role_instruction", "label": "当前人格与预设", "sections": []},
+        {"key": "request_instruction", "label": "简洁主动提示词", "sections": ["simple"]},
+        {"key": "output_contract", "label": "简洁输出格式", "sections": ["simple_output"]},
+        {"key": "terminal_prompt_guard", "label": "简洁末尾格式", "sections": ["simple_terminal"]},
+        {"key": "materials", "label": "会话历史与本轮资料", "sections": []}]
+    if mode == "simple":
+        result["order"] = result["simple_order"]
+    return result

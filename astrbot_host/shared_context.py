@@ -9,7 +9,7 @@ from companion_v2.conversation.foreground import PromptMaterial
 from companion_v2.foundation.refs import ScopeKind
 
 
-def native_newline_reply_instruction(context, umo, *, structured=False):
+def native_newline_reply_instruction(context, umo, *, structured=False, proactive_mode="companion"):
     """Describe the same newline boundary that the opted-in host will send."""
     if not isinstance(umo, str) or ":FriendMessage:" not in umo:
         return ""
@@ -27,6 +27,11 @@ def native_newline_reply_instruction(context, umo, *, structured=False):
         "正文的每个非空行会分别发送为一条消息，空行不发送。"
         "希望放在同一条消息里的句子写在同一行，另发一条时换行；不使用特殊分段标记或分段数组。"
     )
+    if structured and proactive_mode == "simple":
+        return instruction + (
+            "按本轮 JSON 输出格式返回，正文写在 message 字符串中，换行正确转义为 \\n；"
+            "程序先解析 JSON，再按正文换行发送。send 为 false 时 message 为空，不产生消息。"
+        )
     return instruction + (
         "仍按本轮 JSON 输出格式返回，正文写在 text 字符串中，换行正确转义为 \\n；"
         "程序先解析 JSON，再按正文换行发送。decision 为 skip 时 text 为空，不产生消息。"
@@ -140,7 +145,8 @@ class AstrBotSharedContext:
         )
         instruction = request.instruction
         if getattr(request, "output_format", None) == "proactive_contact":
-            newline_instruction = native_newline_reply_instruction(self.context, umo, structured=True)
+            newline_instruction = native_newline_reply_instruction(self.context, umo, structured=True,
+                proactive_mode=getattr(request, "proactive_mode", "companion"))
             if newline_instruction:
                 instruction += "\n" + newline_instruction
         await prepare(

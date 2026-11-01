@@ -309,6 +309,7 @@ class PromptRequest:
     # the native role guard still compares the host window, not the self page.
     role_guard_instruction: str | None = None
     prompt_overrides: tuple[tuple[str, str], ...] = ()
+    proactive_mode: str = "companion"
     user_input_image_sources: tuple[SourceRef, ...] = ()
 
     @property
@@ -319,10 +320,13 @@ class PromptRequest:
         if (type(self.prompt_overrides) is not tuple
                 or self.prompt_overrides and self.output_format != "proactive_contact"
                 or any(type(item) is not tuple or len(item) != 2
-                       or item[0] not in {"output_contract", "terminal_prompt_guard", "capability_instruction"}
+                       or item[0] not in {"task_prompt", "output_contract", "terminal_prompt_guard", "capability_instruction"}
                        or type(item[1]) is not str or len(item[1]) > 8000 for item in self.prompt_overrides)
                 or len({item[0] for item in self.prompt_overrides}) != len(self.prompt_overrides)):
             raise ReferenceValidationError("prompt overrides belong to the proactive request")
+        if (self.proactive_mode not in ("companion", "simple")
+                or self.proactive_mode == "simple" and self.output_format != "proactive_contact"):
+            raise ReferenceValidationError("proactive prompt mode belongs to a contact request")
         if self.streaming_mode not in ("buffered", "incremental"):
             raise ReferenceValidationError("stream delivery requires a declared mode")
         if self.role_guard_instruction is not None and (

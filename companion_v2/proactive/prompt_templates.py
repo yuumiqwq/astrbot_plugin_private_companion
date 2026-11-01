@@ -34,6 +34,8 @@ def checked_template(field, value):
 
     if type(value) is not str or len(value) > 8000:
         raise ValueError("prompt templates require text within 8000 characters")
+    if field == "template_simple":
+        return value.replace("\r\n", "\n").replace("\r", "\n")
     section = next((item for item in sections() if item.field == field), None)
     allowed = section.variables if section else ()
     if allowed:

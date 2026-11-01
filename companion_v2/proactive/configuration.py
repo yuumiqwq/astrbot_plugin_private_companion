@@ -183,6 +183,8 @@ class ContactField(FieldDefinition):
                 local_time(value)
             if self.field_id.endswith(".proactive_intensity_preset"):
                 return intensity_preset(value)
+            if self.field_id.endswith(".prompt_mode") and value not in ("companion", "simple"):
+                raise ValueError("unknown proactive prompt mode")
             if self.field_id.endswith(".proactive_hour_activity_curve"):
                 return curve_text(value)
             if self.field_id.endswith(tuple(".greeting_" + name + "_window" for name in ANCHOR_WINDOW_NAMES)):
@@ -226,7 +228,7 @@ class ContactField(FieldDefinition):
 
 
 def configuration_fields():
-    defaults = {"enabled": False, "pause_until": "", "note": "", "style_prompt": "", "quiet_enabled": False,
+    defaults = {"enabled": False, "prompt_mode": "companion", "pause_until": "", "note": "", "style_prompt": "", "quiet_enabled": False,
                 "quiet_start": "23:00", "quiet_end": "07:00", "quiet_timezone": "Asia/Shanghai",
                 "meal_checkin_enabled": False, "meal_lunch_time": "12:00", "meal_dinner_time": "18:00",
                 "date_checkin_enabled": False, "date_checkin_time": "09:00", "important_dates": "[]",

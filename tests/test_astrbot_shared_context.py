@@ -21,6 +21,7 @@ class Request:
     instruction: str = "Return the contact decision."
     response_schema_json: str = '{"type":"object"}'
     output_format: str = ""
+    proactive_mode: str = "companion"
 
 
 class SharedHistoryTests(unittest.IsolatedAsyncioTestCase):
@@ -127,6 +128,24 @@ class SharedHistoryTests(unittest.IsolatedAsyncioTestCase):
         settings["enable"] = True
         settings["regex"] = r".+"
         self.assertEqual(native_newline_reply_instruction(self.native, "qq:FriendMessage:peer"), "")
+
+    async def test_simple_json_keeps_shared_history_and_uses_message_send_schema(self):
+        from companion_v2.proactive.simple_prompts import parse_contact_output
+
+        settings = {"enable": True, "split_mode": "regex", "regex": r"[^\r\n]+"}
+        self.native.get_config = Mock(return_value={"platform_settings": {"segmented_reply": settings}})
+        request = replace(self.request, output_format="proactive_contact", proactive_mode="simple",
+                          instruction="Short contact task.")
+        result = await self.loader(request)
+        self.assertIn("message 字符串", result.instruction)
+        self.assertIn("send 为 false", result.instruction)
+        self.assertNotIn("decision 为 skip", result.instruction)
+        self.assertNotIn("text 字符串", result.instruction)
+        history = next(item for item in result.context.materials if item.owner == "astrbot.conversation")
+        self.assertEqual(json.loads(history.payload), self.history)
+        data, body, _ = parse_contact_output('{"send":true,"message":"First\\n\\nSecond"}', mode="simple")
+        self.assertEqual(self.loader.split_reply(request.event, body), ("First", "Second"))
+        self.assertEqual(data["decision"], "send")
 
     async def test_host_history_has_no_plugin_round_or_character_cap(self):
         result = await self.loader(self.request)

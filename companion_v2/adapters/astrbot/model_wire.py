@@ -180,7 +180,7 @@ def build_wire(envelope, *, model_name=""):
     contract = overrides.get("output_contract", contract)
     perception = overrides.get("capability_instruction", capability_instruction(envelope, model_name=model_name))
     composition = compose_prompt(role_instruction=request.role_instruction,
-        request_instruction=request.instruction, task_prompt=envelope.task_prompt,
+        request_instruction=request.instruction, task_prompt=overrides.get("task_prompt", envelope.task_prompt),
         output_contract=contract, capability_instruction=perception,
         terminal_prompt_guard=overrides.get("terminal_prompt_guard"),
         terminal_output_instruction=(

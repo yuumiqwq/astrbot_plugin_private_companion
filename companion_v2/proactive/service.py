@@ -50,9 +50,9 @@ from .platform_circuit import ProactivePlatformCircuit
 from .news_events import SOURCE_OWNER as NEWS_SOURCE_OWNER, news_provenance
 from .planner import ProactivePlanner
 from .preferences import ProactivePreferences
-from .prompts import (contact_output, history_round_groups, news_presentation_instruction,
-                      prompt_sections, request_for)
-from .prompt_catalog import presentation_instruction, segmentation_instruction
+from .prompts import history_round_groups, prompt_sections, request_for
+from .prompt_catalog import presentation_instructions
+from .simple_prompts import parse_contact_output
 from .official_alert_events import SOURCE_OWNER as OFFICIAL_ALERT_SOURCE_OWNER, attribution_suffix
 
 
@@ -881,10 +881,8 @@ class ProactiveContacts:
                 voice_available=voice_available, poke_available=poke_available,
                 memory=memory_materials, expression=expression_materials,
                 rhythm_snapshot=rhythm_snapshot, role_state=role_state, recent_life=recent_life)
-            extra_instruction = "\n".join(text for text in
-                (segmentation_instruction(preferences, segmentation), presentation_instruction(preferences, presentation),
-                 news_presentation_instruction(segmentation, preferences.values) if job.intent.purpose == "news"
-                 or source_origin is not None and "news_event" in source_origin else "") if text)
+            extra_instruction = presentation_instructions(preferences, segmentation, presentation,
+                news=job.intent.purpose == "news" or source_origin is not None and "news_event" in source_origin)
             if extra_instruction:
                 request = replace(request, instruction=request.instruction + "\n" + extra_instruction)
             if self.request_context is not None:
@@ -922,12 +920,12 @@ class ProactiveContacts:
             if source_origin is not None and "official_alert_event" in source_origin and len(alert_records) != 1:
                 raise TaskError("contact_official_alert_invalid", "official alert attribution source is unavailable")
             alert_material = json.loads(alert_records[0].payload) if alert_records else None
-            body, reaction_intent = contact_output(completion.draft.text, official_alert=alert_material)
+            decision_data, body, reaction_intent = parse_contact_output(completion.draft.text,
+                mode=request.proactive_mode, official_alert=alert_material)
             if body is not None and job.diagnostic_image_intent is not None:
                 reaction_intent = job.diagnostic_image_intent
             if body is not None:
                 body = strip_voice_markup(strip_internal_expression_protocol(body))
-            decision_data = json.loads(completion.draft.text)
             model_skip_reason = decision_data.get("skip_reason") if decision_data["decision"] == "skip" else None
             decision_confidence = float(decision_data.get("decision_confidence", 1.0))
             confidence_skip = body is not None and decision_confidence < preferences.values["silence_min_confidence"]
