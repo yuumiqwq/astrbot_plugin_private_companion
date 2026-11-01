@@ -276,6 +276,34 @@ class AstrBotSetupFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("delivery", {item["stage"] for item in result["stages"]})
         app.proactive.contact.assert_not_awaited()
 
+    async def test_daily_diagnostic_calls_only_the_preview_owner(self):
+        api, app, context, _ = self.simulation_api_fixture()
+        request = NS(username="administrator", query={}, body=AsyncMock(return_value=json.dumps(
+            {"simulation": True, "confirm_delivery": False}).encode()))
+        manager = NS(authorize=Mock())
+        simulator = AsyncMock(return_value={"state": "passed", "simulation": True,
+            "result": {"diary": None, "day_plan": None, "memory": None}})
+        with patch("astrbot_host.setup_api.request", request), \
+             patch("astrbot_host.setup_api.dashboard_operator", return_value=object()), \
+             patch("companion_v2.role_work.life.management.RoleLifeManagement", return_value=manager), \
+             patch("companion_v2.role_work.daily.simulation.simulate_daily_review", simulator):
+            result = await api.daily_diagnostic()
+        self.assertEqual(result["data"]["state"], "passed")
+        self.assertEqual(simulator.await_args.args, (app, context, "role instructions"))
+        manager.authorize.assert_called_once()
+        app.proactive.contact.assert_not_awaited()
+
+    async def test_daily_diagnostic_rejects_delivery_before_starting_the_host(self):
+        for fields in ({"simulation": True, "confirm_delivery": True},
+                       {"simulation": False, "confirm_delivery": False}):
+            api, app, _, _ = self.simulation_api_fixture()
+            request = NS(username="administrator", query={}, body=AsyncMock(return_value=json.dumps(fields).encode()))
+            with patch("astrbot_host.setup_api.request", request):
+                result = await api.daily_diagnostic()
+            self.assertEqual(result["data"]["code"], "daily_simulation_required")
+            api.controller.start.assert_not_awaited()
+            app.proactive.contact.assert_not_awaited()
+
 
     async def bind_core_window(self, persona_id="original"):
         write_binding(self.controller.binding_root,

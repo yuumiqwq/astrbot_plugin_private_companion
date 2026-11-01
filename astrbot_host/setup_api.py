@@ -225,6 +225,7 @@ class SetupWebAPI:
             (PREFIX + "/proactive-test", self.proactive_test, ["POST"], "Retired real-send test endpoint"),
             (PREFIX + "/proactive-test/status", self.proactive_test_status, ["GET"], "Read the existing proactive test receipt without host discovery"),
             (PREFIX + "/proactive-diagnostic", self.proactive_diagnostic, ["POST"], "Simulate a purpose-specific message without platform delivery"),
+            (PREFIX + "/daily-diagnostic", self.daily_diagnostic, ["POST"], "Simulate daily outputs without saving diary, calendar or memory"),
             (PREFIX + "/proactive-test/confirm", self.confirm_proactive_test, ["POST"], "Record administrator confirmation of the existing test message"),
         ]
 
@@ -1080,6 +1081,47 @@ class SetupWebAPI:
                 return self._response(Outcome.success(self._diagnostic_failure(
                     data.get("purpose") if "data" in locals() and isinstance(data, dict) else None,
                     None, "execution", "proactive_test_failed", f"{type(error).__name__}: {error}")))
+
+    async def daily_diagnostic(self):
+        async with self._test_lock:
+            stage = "authorization"
+            try:
+                username = self._admin()
+                data = await self._body({"simulation", "confirm_delivery"})
+                if data["simulation"] is not True or data["confirm_delivery"] is not False:
+                    raise TaskError("daily_simulation_required", "daily tests require simulation with delivery disabled")
+                stage = "binding"
+                target = await self._proactive_diagnostic_target()
+                existing = self.controller.session or self.controller.last_session
+                if existing is None or existing.application.state != "running":
+                    active = await self.controller.start()
+                    if active.failure is not None and active.failure.code != "host_already_started":
+                        raise TaskError(active.failure.code, active.failure.reason)
+                session, context, instruction = await self._proactive_diagnostic_context(target)
+                operator = dashboard_operator(self.controller.runtime, username, at=self.controller.now())
+                from companion_v2.role_work.life.management import RoleLifeManagement
+                RoleLifeManagement(session.application, context).authorize(operator)
+                stage = "source_capture"
+                from companion_v2.role_work.daily.simulation import simulate_daily_review
+                result = await simulate_daily_review(session.application, context, instruction,
+                                                     attempt_id=uuid4().hex)
+                return self._response(Outcome.success(result))
+            except TaskError as error:
+                if error.code.startswith("model_"):
+                    stage = "model_generation"
+                elif error.code in {"daily_output_invalid", "daily_output_incomplete", "daily_plan_invalid",
+                                    "daily_memory_invalid", "daily_disabled_part"}:
+                    stage = "output_validation"
+                return self._response(Outcome.success({"simulation": True, "state": "failed",
+                    "result": None, "stage": stage, "code": error.code, "error": redact_text(str(error)),
+                    "delivery_state": "not_requested", "receipt_ref": None,
+                    "stages": [{"stage": stage, "state": "failed"}]}))
+            except Exception as error:
+                return self._response(Outcome.success({"simulation": True, "state": "failed",
+                    "result": None, "stage": stage, "code": "daily_simulation_failed",
+                    "error": redact_text(f"{type(error).__name__}: {error}"),
+                    "delivery_state": "not_requested", "receipt_ref": None,
+                    "stages": [{"stage": stage, "state": "failed"}]}))
 
     @staticmethod
     def _diagnostic_attempt_usage(session, context, code):
