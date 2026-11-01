@@ -335,7 +335,7 @@ window.CompanionStatePage = (() => {
     const location=window.CompanionStateMaintenance?.weatherLocationParts(settings.planning_weather_location)?.name;
     const cards=[
       {name:"presentation",label:"QQ 状态",icon:"radio-tower",value:`${[settings.typing_enabled,settings.presence_enabled,settings.online_status_enabled].filter(Boolean).length} 项已开启`,help:"正在输入提示 · 在线状态 · 自定义短状态"},
-      {name:"planning",label:"日程配置",icon:"calendar-days",value:settings.calendar_enabled?(settings.schedule_simulation_mode==="continuous"?"连续日程":"日程编排"):"日程已关闭",help:"规划方式 · 安排与公开文案"},
+      {name:"planning",label:"日程配置",icon:"calendar-days",value:settings.calendar_enabled?(settings.schedule_simulation_mode==="continuous"?"连续日程":settings.schedule_simulation_mode==="expanded"?"过去 7 天至未来 1 个月":"日程编排"):"日程已关闭",help:"规划方式 · 安排与公开文案"},
       {name:"weather",label:"天气",icon:"cloud-sun",value:settings.planning_weather_enabled?(location||"地点待配置"):"天气感知已关闭",help:"角色所在地 · 实况信息时效"},
       {name:"datetime",label:"时间与日期",icon:"calendar-clock",value:local({hour:"2-digit",minute:"2-digit",hourCycle:"h23"})+" · "+local({month:"long",day:"numeric",weekday:"long"}),help:zone+" · 日期背景"},
     ];
@@ -365,7 +365,7 @@ window.CompanionStatePage = (() => {
     else if(feature==="planning") {
       const plan=status.planning,continuous=settings.schedule_simulation_mode==="continuous";
       const running=!settings.calendar_enabled?"角色日程已关闭":continuous?"对话时接续现有计划":!settings.planning_enabled?"自动规划已关闭":plan?.running?"正在规划":plan?"等待下次检查":"运行状态尚未提供";
-      body=overviewMarkup(feature,"当前运行",running,"日程配置对同一角色的所有私聊生效，各私聊安排仍相互隔离。",[["所选模式",continuous?"连续日程（HDSI）":"日程编排"],["安排节奏",continuous?"接续已接受的计划；自动编排暂停":`每天安排 · 每周补充长期节点 · 提前 ${settings.planning_refine_minutes??"未提供"} 分钟细化`],["规划范围",`${settings.planning_horizon_days??"未提供"} 天 · 每次最多 ${settings.planning_max_items??"未提供"} 项`],["下次检查",plan?.next_check?when(plan.next_check):"尚未排程"]]);
+      body=overviewMarkup(feature,"当前运行",running,"日程配置对同一角色的所有私聊生效，各私聊安排仍相互隔离。",[["所选模式",continuous?"连续日程（HDSI）":settings.schedule_simulation_mode==="expanded"?"过去 7 天至未来 1 个月":"日程编排"],["安排节奏",continuous?"接续已接受的计划；自动编排暂停":`每天安排 · 每周补充长期节点 · 提前 ${settings.planning_refine_minutes??"未提供"} 分钟细化`],["规划范围",`${settings.planning_horizon_days??"未提供"} 天 · 每次最多 ${settings.planning_max_items??"未提供"} 项`],["下次检查",plan?.next_check?when(plan.next_check):"尚未排程"]]);
       body+=(editor?.markup({feature,related:relatedSettings([["天气感知","长期安排会参考所在地天气；前往调整开关、地点与信息时效。","cloud-sun","data-state-open-weather"]])})||"")+(editor?.plansMarkup?.()||"");
       body+=`<details class="state-config-diagnostics"><summary>查看规划运行记录</summary>${window.CompanionStateMaintenance?.planningSummary(status,e)||""}</details>`;
     } else if(feature==="weather") {

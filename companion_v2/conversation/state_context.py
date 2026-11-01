@@ -3,8 +3,10 @@
 from datetime import datetime, timedelta
 import json
 
-from companion_v2.agenda.calendar_prompt import schedule_instruction, continuous_schedule_projection
-from companion_v2.agenda.planning_config import SCHEDULE_MODE_CONTINUOUS, SCHEDULE_MODE_ORCHESTRATED
+from companion_v2.agenda.calendar_prompt import (schedule_instruction, continuous_schedule_projection,
+                                                expanded_schedule_window, MAX_EXPANDED_ITEMS)
+from companion_v2.agenda.planning_config import (SCHEDULE_MODE_CONTINUOUS, SCHEDULE_MODE_ORCHESTRATED,
+                                                SCHEDULE_MODE_EXPANDED, SCHEDULE_MODES)
 from companion_v2.conversation.foreground import ContextContribution, ContributionState
 from companion_v2.execution.models import TaskError, digest, encode, require, stamp
 from companion_v2.foundation.refs import SourceRef, VersionRef
@@ -37,12 +39,13 @@ class ConversationStateContext:
                 # Continuous mode projects the next day.  Orchestrated mode only
                 # needs the current/next slot so a chat turn cannot claim the
                 # role is free while its accepted programme says otherwise.
-                if schedule_mode == SCHEDULE_MODE_CONTINUOUS:
-                    start, end = at, at + timedelta(days=1)
-                else:
-                    start, end = at - timedelta(hours=2), at + timedelta(hours=4)
                 try:
-                    calendar = self.calendar.occurrences(context, start=start, end=end)
+                    if schedule_mode == SCHEDULE_MODE_EXPANDED:
+                        calendar = self._expanded_calendar(context, at, settings["planning_timezone"])
+                    else:
+                        start, end = ((at, at + timedelta(days=1)) if schedule_mode == SCHEDULE_MODE_CONTINUOUS
+                                      else (at - timedelta(hours=2), at + timedelta(hours=4)))
+                        calendar = self.calendar.occurrences(context, start=start, end=end)
                 except TaskError:
                     calendar = {"items": [], "partial": True, "skipped": 0}
             if schedule_mode == SCHEDULE_MODE_CONTINUOUS or calendar.get("items"):
@@ -79,6 +82,21 @@ class ConversationStateContext:
         except TaskError:
             return None
 
+    def _expanded_calendar(self, context, at, timezone_name):
+        start, end = expanded_schedule_window(at, timezone_name)
+        items, partial, skipped = {}, False, 0
+        while start < end:
+            page_end = min(start + timedelta(days=7), end)
+            page = self.calendar.occurrences(context, start=start, end=page_end, kinds=("role_plan",))
+            partial = partial or page["partial"]
+            skipped += page["skipped"]
+            for item in page["items"]:
+                if item["state"] == "accepted":
+                    items[(item["id"], item["sequence"])] = item
+            start = page_end
+        return {"items": sorted(items.values(), key=lambda item: (item["start"], item["id"], item["sequence"])),
+                "partial": partial, "skipped": skipped}
+
     def _intensity(self, context):
         """Seal the expression dial with the state it applies to, so a replay is
         byte-identical and a later configuration edit cannot rewrite an old turn."""
@@ -101,7 +119,7 @@ class ConversationStateContext:
             self._validate_calendar_snapshot(snapshot)
             if snapshot["projection_version"] != 4:
                 raise TaskError("state_snapshot_invalid", "invalid schedule reference")
-            calendar_items = self._calendar_items(snapshot["calendar"])
+            calendar_items = self._calendar_items(snapshot["calendar"], mode=snapshot["schedule_simulation_mode"])
             if calendar_items:
                 self._authorize_calendar_items(calendar_items, context, at)
             material = self._schedule_contribution(snapshot, context, at, fallback_source=fallback_source)
@@ -123,8 +141,8 @@ class ConversationStateContext:
                 or snapshot.get("projection_version") == 3 and snapshot.get("storage") not in ("role", "window")
                 or "storage" in snapshot and snapshot.get("projection_version") != 3
                 or has_schedule and (snapshot.get("schedule_simulation_mode") not in
-                    (SCHEDULE_MODE_CONTINUOUS, SCHEDULE_MODE_ORCHESTRATED)
-                    or self._invalid_calendar_snapshot(snapshot.get("calendar")))):
+                    SCHEDULE_MODES
+                    or self._invalid_calendar_snapshot(snapshot.get("calendar"), mode=snapshot["schedule_simulation_mode"]))):
             raise TaskError("state_snapshot_invalid", "invalid role state reference")
         if historical and "captured_at" in snapshot:
             state = self.service.read_revision(context, snapshot["revision"],
@@ -152,7 +170,7 @@ class ConversationStateContext:
         activity_sources = tuple(dict.fromkeys(source_ref(ref) for item in activities["items"] for ref in item["sources"]))
         schedule_mode = snapshot.get("schedule_simulation_mode", SCHEDULE_MODE_ORCHESTRATED)
         calendar = snapshot.get("calendar", {"items": [], "partial": False, "skipped": 0})
-        calendar_items = self._calendar_items(calendar)
+        calendar_items = self._calendar_items(calendar, mode=schedule_mode)
         if calendar_items:
             self._authorize_calendar_items(calendar_items, context, at)
         result = (ContextContribution("role-state", "role.state", "role_state", ContributionState.READY,
@@ -174,9 +192,10 @@ class ConversationStateContext:
         return result
 
     @staticmethod
-    def _invalid_calendar_snapshot(calendar):
+    def _invalid_calendar_snapshot(calendar, *, mode=SCHEDULE_MODE_CONTINUOUS):
         return (type(calendar) is not dict or set(calendar) != {"items", "partial", "skipped"}
-            or type(calendar.get("items")) is not list or len(calendar["items"]) > 64
+            or type(calendar.get("items")) is not list
+            or len(calendar["items"]) > (MAX_EXPANDED_ITEMS if mode == SCHEDULE_MODE_EXPANDED else 64)
             or type(calendar.get("partial")) is not bool or type(calendar.get("skipped")) is not int
             or calendar["skipped"] < 0
             or any(type(item) is not dict or not {"kind", "state", "sources"} <= set(item)
@@ -184,19 +203,20 @@ class ConversationStateContext:
                    for item in calendar["items"]))
 
     @staticmethod
-    def _calendar_items(calendar):
+    def _calendar_items(calendar, *, mode=SCHEDULE_MODE_CONTINUOUS):
         return [item for item in calendar.get("items", ()) if type(item) is dict
-                and item.get("kind") == "role_plan" and item.get("state") == "accepted"][:16]
+                and item.get("kind") == "role_plan" and item.get("state") == "accepted"][
+                    :MAX_EXPANDED_ITEMS if mode == SCHEDULE_MODE_EXPANDED else 16]
 
     def _publish_schedule_projection(self, context, calendar, at, *, mode=SCHEDULE_MODE_CONTINUOUS):
         material = {"schedule_simulation_mode": mode,
-                    "calendar": continuous_schedule_projection(calendar)}
+                    "calendar": continuous_schedule_projection(calendar, mode=mode)}
         payload = encode(material)
         identifier = "role-calendar-view-" + digest([context.key, at, payload])
         reference = SourceRef(identifier, "role.calendar.projection", context.scope,
                               VersionRef(identifier, 1), at)
         dependencies = tuple(dict.fromkeys(source_ref(source)
-            for item in self._calendar_items(calendar) for source in item["sources"]))
+            for item in self._calendar_items(calendar, mode=mode) for source in item["sources"]))
         with self.service.runtime.transaction():
             require(self.sources.publish(SourceRecord(reference, context.audience, digest(payload), payload), observed_at=at))
             link(self.service.runtime, reference, dependencies, at)
@@ -205,7 +225,7 @@ class ConversationStateContext:
     def _schedule_contribution(self, snapshot, context, at, *, fallback_source=None):
         mode = snapshot.get("schedule_simulation_mode", SCHEDULE_MODE_CONTINUOUS)
         payload = encode({"schedule_simulation_mode": mode,
-                          "calendar": continuous_schedule_projection(snapshot["calendar"])})
+                          "calendar": continuous_schedule_projection(snapshot["calendar"], mode=mode)})
         raw_source = snapshot.get("schedule_source")
         if raw_source is None:
             source = fallback_source
@@ -235,8 +255,8 @@ class ConversationStateContext:
         if (type(snapshot.get("projection_version")) is not int or parsed_at is None
                 or parsed_at.utcoffset() is None
                 or snapshot.get("schedule_simulation_mode") not in
-                    (SCHEDULE_MODE_CONTINUOUS, SCHEDULE_MODE_ORCHESTRATED)
-                or cls._invalid_calendar_snapshot(snapshot.get("calendar"))):
+                    SCHEDULE_MODES
+                or cls._invalid_calendar_snapshot(snapshot.get("calendar"), mode=snapshot["schedule_simulation_mode"])):
             raise TaskError("state_snapshot_invalid", "invalid schedule reference")
         if schedule_source is None or schedule_source.owner != "role.calendar.projection":
             raise TaskError("state_snapshot_invalid", "schedule source is invalid")

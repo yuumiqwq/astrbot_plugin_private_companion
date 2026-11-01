@@ -165,7 +165,7 @@ test("健康和饥饿分别暴露自己的配置字段",()=>{
   assert.doesNotMatch(hunger,/模拟健康感受|health_expression_prompt/);
 });
 
-test("日程设置明确提供连续 HDSI 与日程编排两种模式",()=>{
+test("日程设置提供原有模式与过去一周至未来一月模式",()=>{
   const m=load();
   assert.equal(m.label("schedule_simulation_mode"),"日程模式");
   assert.equal(m.label("calendar_enabled"),"启用角色日程");
@@ -174,6 +174,7 @@ test("日程设置明确提供连续 HDSI 与日程编排两种模式",()=>{
   assert.ok(m.fields("planning").includes("schedule_simulation_mode"));
   assert.equal(m.validField("schedule_simulation_mode","continuous"),true);
   assert.equal(m.validField("schedule_simulation_mode","orchestrated"),true);
+  assert.equal(m.validField("schedule_simulation_mode","expanded"),true);
   assert.equal(m.validField("schedule_simulation_mode","unsupported"),false);
   assert.ok(m.fields("planning").includes("planning_annual_calendars"));
   assert.deepEqual([...m.fields("weather")],["planning_weather_enabled","planning_weather_location","planning_weather_max_age_minutes"]);
@@ -201,7 +202,15 @@ test("日程设置明确提供连续 HDSI 与日程编排两种模式",()=>{
     planning:{enabled:true,calendar_enabled:true,running:false}},String);
   assert.match(orchestrated,/等待下次检查/);
   const form=m.form({kind:"planning",values:{...settings,schedule_simulation_mode:"continuous"}},String);
-  assert.equal((form.match(/type="radio" name="schedule_simulation_mode"/g)||[]).length,2);
+  assert.equal((form.match(/type="radio" name="schedule_simulation_mode"/g)||[]).length,3);
+  assert.match(form,/过去 7 天至未来 1 个月/);
+  const expanded=m.planningSummary({settings:{...settings,schedule_simulation_mode:"expanded"},
+    planning:{enabled:true,calendar_enabled:true,running:false}},String);
+  assert.match(expanded,/过去 7 天至未来 1 个月/);
+  assert.match(expanded,/等待下次检查/);
+  assert.doesNotMatch(expanded,/自动编排暂停/);
+  const expandedForm=m.form({kind:"planning",values:{...settings,schedule_simulation_mode:"expanded"}},String);
+  assert.match(expandedForm,/value="expanded" checked/);
   assert.match(form,/围绕已接受的角色计划自然回应/);
   assert.match(form,/每天规划安排，每周补充长期节点/);
   assert.match(form,/编排范围/);

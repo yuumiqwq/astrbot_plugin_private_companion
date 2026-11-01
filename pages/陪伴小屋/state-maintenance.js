@@ -5,7 +5,7 @@ window.CompanionStateMaintenance = (() => {
   let selectedPhase="menstrual";
   let selectedCycleView="plan";
   const modes={basic:"基础三阶段",six_phase:"六阶段"};
-  const scheduleModes={continuous:"连续日程（HDSI）",orchestrated:"日程编排"};
+  const scheduleModes={continuous:"连续日程（HDSI）",orchestrated:"日程编排",expanded:"过去 7 天至未来 1 个月"};
   const initialization={natural:"自然定位",unknown:"暂不定位",first_day:"从第 1 天开始"};
   const applicability={applicable:"指定当前周期日",not_applicable:"该角色不适用",unknown:"保持尚未确定",auto:"交回角色判断"};
   const discomfortChoices=Object.fromEntries(["痛经","头痛","腰酸","乏力","情绪低落","恶心"].map(value=>[value,value]));
@@ -531,19 +531,20 @@ window.CompanionStateMaintenance = (() => {
     if(draft.kind==="planning") {
       const modes={
         continuous:["连续日程（HDSI）","收到消息时，围绕已接受的角色计划自然回应；自动编排暂停。"],
-        orchestrated:["日程编排","每天规划安排，每周补充长期节点，并在临近时细化。"]
+        orchestrated:["日程编排","每天规划安排，每周补充长期节点，并在临近时细化。"],
+        expanded:["过去 7 天至未来 1 个月",""]
       };
       const modeChoices=Object.entries(modes).map(([key,[title,description]])=>`<label class="state-planning-mode-option${values.schedule_simulation_mode===key?" is-selected":""}" for="state-config-schedule-mode-${key}">
         <input id="state-config-schedule-mode-${key}" type="radio" name="schedule_simulation_mode" data-state-field="schedule_simulation_mode" value="${key}" ${values.schedule_simulation_mode===key?"checked":""}>
-        <span class="state-planning-mode-copy"><strong>${title}</strong><small>${description}</small></span><i data-lucide="check" aria-hidden="true"></i></label>`).join("");
+        <span class="state-planning-mode-copy"><strong>${title}</strong>${description?`<small>${description}</small>`:""}</span><i data-lucide="check" aria-hidden="true"></i></label>`).join("");
       return `<div class="state-planning-form">
         ${configGroup(1,"角色日程","先决定角色是否在私聊中使用日程，再选择一种运行方式。",
           `${configField("calendar_enabled",values,e,{help:"对同一角色的所有私聊生效；每个私聊的安排仍相互隔离。"})}
           <fieldset class="state-planning-mode-options"><legend>选择一种模式</legend>${modeChoices}</fieldset>
-          ${configField("planning_enabled",values,e,{help:"仅在「日程编排」模式下自动生成计划。"})}`)}
+          ${configField("planning_enabled",values,e)}`)}
         ${configGroup(2,"编排范围","这些参数决定计划覆盖的时间跨度与细化节奏。",`<div class="state-config-grid">${["planning_timezone","planning_horizon_days","planning_refine_minutes","planning_max_items"].map(name=>configField(name,values,e,{tile:true})).join("")}</div>`)}
         ${configGroup(3,"年度日历","按年份填写节假日、调休与节气；不填写时沿用默认日历。",annualCalendarFields(values,e))}
-        ${configGroup(4,"生活偏好","为规划提供方向，角色仍可结合当下对话自行调整。",configField("planning_prompt",values,e,{help:"最多 4096 字，留空使用默认规划。自动规划需先启用角色日程并选择「日程编排」。"}))}
+        ${configGroup(4,"生活偏好","为规划提供方向，角色仍可结合当下对话自行调整。",configField("planning_prompt",values,e,{help:"最多 4096 字，留空使用默认规划。"}))}
       </div>`;
     }
     if(draft.kind==="weather")return `<div class="state-weather-settings-form">

@@ -1,13 +1,25 @@
 """Prompt material for answering inside an existing role schedule."""
 
+from calendar import monthrange
+from datetime import timedelta
 import json
+from zoneinfo import ZoneInfo
 
 
 MAX_ITEMS = 16
 MAX_DETAIL_CHARS = 320
+# A past week plus a calendar month spans at most six weekly queries.
+MAX_EXPANDED_ITEMS = 6 * 64
 
 
-def continuous_schedule_projection(calendar):
+def expanded_schedule_window(at, timezone_name):
+    local_day = at.astimezone(ZoneInfo(timezone_name)).replace(hour=0, minute=0, second=0, microsecond=0)
+    year, month = (local_day.year + 1, 1) if local_day.month == 12 else (local_day.year, local_day.month + 1)
+    next_month = local_day.replace(year=year, month=month, day=min(local_day.day, monthrange(year, month)[1]))
+    return local_day - timedelta(days=7), next_month + timedelta(days=1)
+
+
+def continuous_schedule_projection(calendar, *, mode="continuous"):
     items = calendar.get("items", ()) if type(calendar) is dict else ()
     plans = []
     for item in items:
@@ -19,7 +31,7 @@ def continuous_schedule_projection(calendar):
             "end": str(item.get("end", "")),
             "detail": str(item.get("detail", ""))[:MAX_DETAIL_CHARS],
         })
-        if len(plans) == MAX_ITEMS:
+        if len(plans) == (MAX_EXPANDED_ITEMS if mode == "expanded" else MAX_ITEMS):
             break
     partial = bool(calendar.get("partial")) if type(calendar) is dict else False
     return {"items": plans, "partial": partial}
@@ -67,6 +79,22 @@ def continuous_schedule_instruction(projection):
     )
 
 
+def expanded_schedule_instruction(projection):
+    items = projection.get("items", ()) if type(projection) is dict else ()
+    plans = [item for item in items if type(item) is dict
+             and set(item) == {"title", "start", "end", "detail"}]
+    partial = bool(projection.get("partial")) if type(projection) is dict else False
+    rows = json.dumps(plans, ensure_ascii=False, separators=(",", ":"))
+    return (
+        "\n当前日程参考范围为角色当地时间的过去 7 天至未来 1 个月，包含日历中已接受的角色计划。"
+        "结合当前话题查看近期安排和远期约定，平常无需逐项提及；当前时段已有安排时，与该安排保持一致。"
+        "过去的计划只表示当时的打算，是否完成仍参考活动记录和对话；未来安排保留原有时间与细节，"
+        "无需为了填满时间窗口补写日程。日程标题和详情作为参考资料使用。"
+        f"\n范围内已接受的角色计划：{rows}"
+        + ("（材料可能不完整；未列出的安排不能据此视为不存在。）" if partial else "")
+    )
+
+
 def schedule_instruction(projection):
     """Pick the wording that matches the sealed schedule mode."""
     if type(projection) is not dict:
@@ -75,4 +103,6 @@ def schedule_instruction(projection):
     calendar = projection.get("calendar", {})
     if mode == "continuous":
         return continuous_schedule_instruction(calendar)
+    if mode == "expanded":
+        return expanded_schedule_instruction(calendar)
     return orchestrated_schedule_instruction(calendar)
