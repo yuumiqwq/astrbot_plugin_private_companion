@@ -53,7 +53,7 @@ class DailyPromptEditorTests(StateFixture, unittest.IsolatedAsyncioTestCase):
         self.assertIn(encode(DAILY_SCHEMA), sections["output_contract"]["prompt"])
         self.assertEqual(self.patch("output_contract", "changed").failure.code, "model_prompt_section_readonly")
         self.assertEqual(task["prompt_assembly"]["order"][2]["sections"],
-                         ["diary", "diary_style", "day_plan", "memory"])
+                         ["diary", "diary_style", "day_plan", "memory", "expression"])
         self.assertEqual(self.daily_calls(), [])
 
     async def test_edits_apply_to_preview_and_scheduled_call_without_schema_changes(self):
@@ -70,7 +70,10 @@ class DailyPromptEditorTests(StateFixture, unittest.IsolatedAsyncioTestCase):
         formal_request = self.daily_calls()[-1].original
         self.assertEqual(preview_request.instruction, formal_request.instruction)
         for key in prompts.DEFAULTS:
-            self.assertIn("自定义每日任务：" + key, formal_request.instruction)
+            if key == "expression":
+                self.assertNotIn("自定义每日任务：" + key, formal_request.instruction)
+            else:
+                self.assertIn("自定义每日任务：" + key, formal_request.instruction)
         self.assertIn("使用轻快的私人笔记口吻。", formal_request.instruction)
         self.assertEqual(formal_request.response_schema_json, encode(DAILY_SCHEMA))
         self.assertIn(encode(DAILY_SCHEMA), formal_request.instruction)
