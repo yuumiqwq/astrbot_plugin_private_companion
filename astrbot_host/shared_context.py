@@ -101,6 +101,27 @@ class AstrBotSharedContext:
         """
         return await self.for_task(request, None)
 
+    async def expression_learning_source(self, context):
+        """Read approved presets and the shared QQ history for one role.
+
+        Args:
+            context: Bound private conversation being reviewed.
+
+        Returns:
+            Approved dialogue and source messages with stable QQ sequence numbers.
+        """
+        scope = context.scope
+        if not self.supports(scope):
+            raise ValueError("Expression comparison needs a shared private conversation")
+        persona = await self.bridge.verified_persona(scope, context.role_binding)
+        manager = self.context.conversation_manager
+        umo = f"{scope.platform}:FriendMessage:{scope.native_scope_id}"
+        conversation_id = await manager.get_curr_conversation_id(umo)
+        conversation = await manager.get_conversation(umo, conversation_id) if conversation_id else None
+        return {"source_key": umo, "conversation_id": conversation_id,
+                "approved_dialogue": list(persona.get("begin_dialogs", ())),
+                "dialogue": json.loads(conversation.history or "[]") if conversation else []}
+
     async def for_task(self, request, task_context):
         scope = request.event.scope
         if not self.supports(scope):
@@ -118,6 +139,15 @@ class AstrBotSharedContext:
         if conversation_id and conversation is None:
             raise ValueError("The selected AstrBot conversation is unavailable")
         dialogue = json.loads(conversation.history or "[]") if conversation else []
+        comparison = next((json.loads(item.payload) for item in request.context.materials
+                           if item.purpose == "expression_comparison"), None)
+        preset_dialogue = persona.get("begin_dialogs", ())
+        if comparison is not None:
+            preset_dialogue = [{"role": item["role"], "content": item["content"]}
+                               for item in comparison["approved_dialogue"]]
+            dialogue = [item for item in dialogue
+                        if comparison["after_sequence"] < int(item.get("_qq_sequence") or 0)
+                        <= comparison["through_sequence"]]
         provider_id = self.provider_id
         selected_provider = getattr(self.context, "get_current_chat_provider_id", None)
         if callable(selected_provider):
@@ -154,7 +184,7 @@ class AstrBotSharedContext:
             prompt=request.instruction if simple else task,
             system_prompt=persona.get("system_prompt", persona["prompt"]),
             contexts=[
-                *persona.get("begin_dialogs", ()),
+                *preset_dialogue,
                 *dialogue,
             ],
         )

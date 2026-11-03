@@ -40,7 +40,7 @@ REPLY_CONTRACT = (
 )
 
 BACKGROUND_OUTPUT_NOTES = {
-    "role_daily_review": "本轮是每日整理。只输出 diary、day_plan、memory 三个字段的完整 JSON；按各部分的开关和原格式生成，关闭项为 null，不写聊天回复或额外说明。",
+    "role_daily_review": "本轮是每日整理。只输出 diary、day_plan、memory、expression 四个字段的完整 JSON；按各部分的开关和原格式生成，关闭项为 null，不写聊天回复或额外说明。",
     "role_state": "本轮是后台状态维护。只输出包含 energy、hunger、health、sleep、busy、mood、location、cycle、presence、online_mode、conditions 的完整 JSON 对象；字段类型遵循本轮状态协议，不写聊天回复。",
     "calendar_planning": "本轮是后台日程规划。仅输出本轮模式要求的 JSON 对象：daily/horizon 使用 items，refine 使用 detail，intervention 使用 changes；不写聊天回复或额外说明。",
     "role_self_review": (

@@ -90,11 +90,11 @@ class ExpressionStyleManagement:
             raise TaskError("expression_sample_changed", "stored style samples are invalid") from None
         required = {"opened_at", "closed_at", "handles", "characters"}
         if (type(window) is not dict or not required <= set(window)
-                or set(window) - required - {"context_key", "source_kind", "legacy"}
+                or set(window) - required - {"context_key", "source_kind", "legacy", "comparison"}
                 or ("context_key" in window and (type(window["context_key"]) is not str
                     or len(window["context_key"]) != 64))
                 or window.get("source_kind", "confirmed_reply") not in
-                   ("confirmed_reply", "conversation_input", SHARE_PACK_SOURCE, "legacy_expression")
+                   ("confirmed_reply", "conversation_input", SHARE_PACK_SOURCE, "legacy_expression", "preset_comparison")
                 or type(window.get("handles")) is not list
                 or type(window.get("characters")) is not int or window["characters"] < 0
                 or type(handles) is not list
@@ -141,6 +141,9 @@ class ExpressionStyleManagement:
         opened_at, closed_at = self._window(window, at)
         if window.get("source_kind") == SHARE_PACK_SOURCE:
             return []
+        if window.get("source_kind") == "preset_comparison":
+            from companion_v2.role_work.daily.expression import evidence
+            return evidence(window, handles)
         if window.get("source_kind") == "legacy_expression":
             from .legacy_import import evidence
             return evidence(window, handles)
@@ -213,6 +216,9 @@ class ExpressionStyleManagement:
                         if source_kind == "legacy_expression":
                             from .legacy_import import evidence as legacy_evidence
                             evidence = legacy_evidence(window, handles)
+                        elif source_kind == "preset_comparison":
+                            from companion_v2.role_work.daily.expression import evidence as comparison_evidence
+                            evidence = comparison_evidence(window, handles)
                         elif source_kind != SHARE_PACK_SOURCE:
                             if source_kind == "conversation_input" and not self.samples.reviews.allows_handles(context, handles):
                                 raise TaskError("expression_sample_changed", "sample approval was revoked")

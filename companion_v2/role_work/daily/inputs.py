@@ -20,6 +20,7 @@ from companion_v2.role_work.journal.writing import _CollectedJob
 from companion_v2.memory.reflection_output import REFLECTION_SCHEMA
 from companion_v2.sources.models import SourceRecord
 from . import prompts
+from . import expression
 
 
 def configuration(app, context):
@@ -30,7 +31,8 @@ def configuration(app, context):
         "parts": {"diary": life["enabled"] and life["diary_enabled"],
                   "day_plan": state["calendar_enabled"] and state["planning_enabled"]
                       and state["schedule_simulation_mode"] in AUTOMATIC_SCHEDULE_MODES,
-                  "memory": memory["memory.enabled"] and memory["memory.reflection_enabled"]},
+                  "memory": memory["memory.enabled"] and memory["memory.reflection_enabled"],
+                  "expression": expression.enabled(app, context)},
         "diary_style": life["diary_style_prompt"], "memory_token": memory_token}
 
 
@@ -43,14 +45,18 @@ def event_for(app, context, run_id, at):
                                     source, "role.journal.write", digest(text), at)
 
 
-async def capture(service, context, instruction, local_date, zone_name, run_id, *, preview=False):
+async def capture(service, context, instruction, local_date, zone_name, run_id, *, preview=False,
+                  expression_only=False, expression_snapshot=None):
     app, at = service.app, service.tasks.now()
     settings = configuration(app, context)
     prompt_values = prompts.read(app, context)
     if settings["timezone"] != zone_name:
         raise TaskError("daily_settings_changed", "daily timezone changed before preparation")
     selected = dict(settings["parts"])
-    if preview:
+    if expression_only:
+        selected = {name: name == "expression" and expression.enabled(app, context, automatic=False)
+                    for name in selected}
+    if preview and not expression_only:
         # A preview can inspect tomorrow while automatic planning is paused.
         # The calendar's module switch and all access checks still apply.
         selected["day_plan"] = planning_values(app.role_state.settings(context)[0])["calendar_enabled"]
@@ -61,7 +67,17 @@ async def capture(service, context, instruction, local_date, zone_name, run_id, 
     inputs = {"settings": settings, "instruction": instruction, "parts": selected,
               "local_date": local_date, "timezone": zone_name, "at": at,
               "diary": None, "plan": None, "memory_batch": None, "preview": preview,
-              "prompts": prompt_values}
+              "prompts": prompt_values, "expression": None}
+    if selected.get("expression"):
+        snapshot = expression_snapshot
+        if snapshot is None and not preview:
+            snapshot = await expression.capture(service, context, automatic=not expression_only)
+        if snapshot is None:
+            selected["expression"] = False
+        else:
+            inputs["expression"] = snapshot
+            materials.append(PromptMaterial("role.daily", "expression_comparison", encode(snapshot)))
+            instructions.append("表达对照部分：\n" + prompt_values["expression"])
     if selected["diary"]:
         target = app.journal_triggers.target(context, JournalKind.DIARY, local_date, zone_name)
         head = app.role_journal.head(target.key)
@@ -167,7 +183,7 @@ def diary_job(app, context, inputs, material_ids):
                          0, selected, sources, activities, diary["recent"])
 
 
-DAILY_SCHEMA = {"type": "object", "required": ["diary", "day_plan", "memory"], "additionalProperties": False,
+DAILY_SCHEMA = {"type": "object", "required": ["diary", "day_plan", "memory", "expression"], "additionalProperties": False,
     "properties": {
         "diary": {"anyOf": [{"type": "null"}, {"type": "object", "additionalProperties": False,
             "required": ["body", "form", "recall", "afterglow", "material_ids"], "properties": {
@@ -181,4 +197,5 @@ DAILY_SCHEMA = {"type": "object", "required": ["diary", "day_plan", "memory"], "
                 "properties": {"title": {"type": "string"}, "start": {"type": "string"},
                     "minutes": {"type": "integer", "minimum": 1}, "detail": {"type": "string"},
                     "goal_id": {"type": ["string", "null"]}, "parent_id": {"type": ["string", "null"]}}}}}}]},
-        "memory": {"anyOf": [{"type": "null"}, REFLECTION_SCHEMA]}}}
+        "memory": {"anyOf": [{"type": "null"}, REFLECTION_SCHEMA]},
+        "expression": {"anyOf": [{"type": "null"}, expression.learning.schema(3)]}}}

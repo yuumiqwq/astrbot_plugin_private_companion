@@ -1251,7 +1251,8 @@ window.CompanionContactPage = (() => {
     const daily = `<section class="ct-daily-test" aria-label="每日整理测试">
       <header><h3>每日整理</h3><div class="ct-daily-actions"><button type="button" class="ct-btn" data-daily-prompt-toggle aria-expanded="${data.dailyPromptOpen}">${data.dailyPromptOpen ? "收起提示词" : "编辑提示词"}</button><button type="button" class="ct-btn is-primary" data-daily-test-run
         ${data.testBusy ? " disabled" : ""}>${data.testBusy === "daily_review"
-          ? '<span class="ct-spinner" aria-hidden="true"></span><span>模拟中…</span>' : "测试每日整理"}</button></div></header>
+          ? '<span class="ct-spinner" aria-hidden="true"></span><span>模拟中…</span>' : "测试每日整理"}</button>
+        <button type="button" class="ct-btn" data-expression-learn ${data.testBusy ? " disabled" : ""}>${data.testBusy === "expression_learning" ? "学习中…" : "立即对照学习"}</button></div></header>
       ${data.dailyPromptOpen ? '<div data-daily-prompts></div>' : ""}
       ${dailyResultMarkup()}
     </section>`;
@@ -1411,8 +1412,12 @@ window.CompanionContactPage = (() => {
       : "";
   }
   function dailyResultMarkup() {
+    const learning = data.testResults.expression_learning;
+    const manual = learning ? `<section class="ct-test-result is-${learning.state === "complete" ? "passed" : "failed"}" role="status"><strong>${learning.state === "complete" ? learning.receipts?.empty ? "暂无新增回复" : "对照学习完成" : "对照学习未完成"}</strong>
+      ${learning.receipts?.expression ? `<p>待审核规则 ${Number(learning.receipts.expression.pending_rules || 0)} 条 · 消息 ${Number(learning.receipts.expression.after_sequence || 0) + 1}—${Number(learning.receipts.expression.through_sequence || 0)}</p>` : ""}
+      ${learning.error || learning.code || learning.receipts?.code ? `<p>${e(learning.error || learning.code || learning.receipts.code)}</p>` : ""}</section>` : "";
     const result = data.testResults.daily_review;
-    if (!result) return "";
+    if (!result) return manual;
     const state = ["passed", "skipped", "failed", "unknown"].includes(result.state) ? result.state : "unknown";
     const title = {passed:"模拟完成",skipped:"未运行",failed:"模拟未完成",unknown:"模拟结果未收到"}[state];
     const planTime = value => {
@@ -1422,6 +1427,7 @@ window.CompanionContactPage = (() => {
       } catch { return value || ""; }
     };
     const sections = [["diary","当日日记"],["day_plan","次日日程"],["memory","记忆整理"]];
+    if (typeof result.parts_enabled?.expression === "boolean") sections.push(["expression","表达对照"]);
     const content = ["passed", "skipped"].includes(state) ? `<div class="ct-daily-results">${sections.map(([key,label]) => {
       const value = result.result?.[key];
       let body = '<p class="ct-daily-empty">未生成内容</p>';
@@ -1435,7 +1441,7 @@ window.CompanionContactPage = (() => {
       } else if (value) body = `<pre>${e(JSON.stringify(value,null,2))}</pre>`;
       return `<article data-daily-part="${key}"><h4>${label}</h4>${body}</article>`;
     }).join("")}</div>` : "";
-    return `<section class="ct-test-result is-${state}" role="status" aria-live="polite"><strong>${title}</strong>
+    return manual + `<section class="ct-test-result is-${state}" role="status" aria-live="polite"><strong>${title}</strong>
       ${result.local_date ? `<p>${e(result.local_date)}${result.timezone ? ` · ${e(result.timezone)}` : ""}</p>` : ""}${content}
       ${testMetricsMarkup(result)}${testStageMarkup(result)}
       ${result.error || result.code ? `<details class="ct-test-technical"><summary>展开技术详情</summary>
@@ -2088,6 +2094,10 @@ window.CompanionContactPage = (() => {
       if (!data.testBusy) void runDailyTest();
       return;
     }
+    if (event.target.closest("[data-expression-learn]")) {
+      if (!data.testBusy) void runDailyTest(true);
+      return;
+    }
     const testCopy = event.target.closest("[data-test-copy]")?.dataset.testCopy;
     if (testCopy) { copyTestInstruction(testCopy); return; }
     const action = event.target.closest("[data-action]")?.dataset.action;
@@ -2286,18 +2296,26 @@ window.CompanionContactPage = (() => {
       if (live(ticket)) { data.testBusy = ""; render(); }
     }
   }
-  async function runDailyTest() {
+  async function runDailyTest(expressionOnly = false) {
     if (data.testBusy) return;
     const ticket = version;
-    data.testBusy = "daily_review";
-    data.testResults.daily_review = null;
-    notice("正在生成每日整理模拟…");
+    data.testBusy = expressionOnly ? "expression_learning" : "daily_review";
+    data.testResults[data.testBusy] = null;
+    notice(expressionOnly ? "正在对照预设整理新增回复…" : "正在生成每日整理模拟…");
     render();
     try {
       const result = await api("POST", "setup/daily-diagnostic",
-        {simulation:true,confirm_delivery:false}, 300000);
+        expressionOnly ? {simulation:false,confirm_delivery:false,mode:"expression",operation_key:"expression-" + Date.now() + "-" + Math.random().toString(36).slice(2,10)}
+          : {simulation:true,confirm_delivery:false}, 300000);
       if (!live(ticket)) return;
-      const keys = ["diary", "day_plan", "memory"];
+      if (expressionOnly) {
+        if (result.simulation !== false || typeof result.state !== "string") throw problem("invalid_response");
+        data.testResults.expression_learning = result;
+        notice(result.state === "complete" ? result.receipts?.empty ? "暂无新增回复。" : "对照学习完成。" : "对照学习未完成。", result.state !== "complete");
+        window.dispatchEvent?.(new CustomEvent("companion-expression-updated"));
+        return;
+      }
+      const keys = ["diary", "day_plan", "memory", ...(typeof result.parts_enabled?.expression === "boolean" ? ["expression"] : [])];
       const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
       if (result.simulation !== true || !["passed", "skipped", "failed"].includes(result.state)
           || (["passed", "skipped"].includes(result.state) && (!object(result.result)
@@ -2308,9 +2326,9 @@ window.CompanionContactPage = (() => {
         ? "每日整理未运行。" : "每日整理模拟未完成。", result.state === "failed");
     } catch (error) {
       if (!live(ticket)) return;
-      data.testResults.daily_review = {simulation:true,state:error?.confirmed ? "failed" : "unknown",
+      data.testResults[expressionOnly ? "expression_learning" : "daily_review"] = {simulation:!expressionOnly,state:error?.confirmed ? "failed" : "unknown",
         code:error?.code || "",error:error?.confirmed ? reason(error.code) : "尚未收到模拟结果。"};
-      notice(error?.confirmed ? "每日整理模拟未完成。" : "每日整理模拟结果未确认。",true);
+      notice(expressionOnly ? "对照学习未完成。" : error?.confirmed ? "每日整理模拟未完成。" : "每日整理模拟结果未确认。",true);
     } finally {
       if (live(ticket)) { data.testBusy = ""; render(); }
     }

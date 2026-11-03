@@ -12,6 +12,7 @@ from companion_v2.storage.repositories import OperationRepository
 
 from . import inputs as daily_inputs
 from . import output
+from . import expression
 from .service import KIND
 
 
@@ -31,6 +32,7 @@ async def simulate_daily_review(app, context, instruction, *, attempt_id):
     local_date = now.astimezone(ZoneInfo(zone_name)).date().isoformat()
     run_id = "daily-simulation-" + digest([context.key, attempt_id])
     task_id = run_id + ":generate"
+    expression_snapshot = await expression.capture(service, context)
     # Preview capture performs only synchronous work. Its temporary diary source,
     # memory selection and source index remain within this savepoint, with no
     # network await or model request while the transaction is held.
@@ -38,7 +40,8 @@ async def simulate_daily_review(app, context, instruction, *, attempt_id):
         connection.execute("SAVEPOINT daily_simulation_capture")
         try:
             inputs = await daily_inputs.capture(service, context, instruction, local_date,
-                                                zone_name, run_id, preview=True)
+                                                zone_name, run_id, preview=True,
+                                                expression_snapshot=expression_snapshot)
         finally:
             connection.execute("ROLLBACK TO SAVEPOINT daily_simulation_capture")
             connection.execute("RELEASE SAVEPOINT daily_simulation_capture")
@@ -47,7 +50,7 @@ async def simulate_daily_review(app, context, instruction, *, attempt_id):
             "parts_enabled": inputs["parts"], "attempt_id": attempt_id,
             "delivery_state": "not_requested", "receipt_ref": None}
     if not any(inputs["parts"].values()):
-        return {**base, "state": "skipped", "result": {"diary": None, "day_plan": None, "memory": None},
+        return {**base, "state": "skipped", "result": {name: None for name in inputs["parts"]},
                 "raw_response": "", "task_id": None, "call_id": None,
                 "stages": [{"stage": "source_capture", "state": "passed"}]}
     result, completion_call = None, None
@@ -71,6 +74,7 @@ async def simulate_daily_review(app, context, instruction, *, attempt_id):
         try:
             output.parse(service, context, inputs, text)
             result["result"] = object_output(text)
+            result["result"].setdefault("expression", None)
             result["stages"].append({"stage": "output_validation", "state": "passed"})
         except (TaskError, ValueError, TypeError, KeyError) as error:
             result.update(state="failed", stage="output_validation",

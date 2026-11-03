@@ -6,13 +6,14 @@ from companion_v2.execution.models import encode, require
 from companion_v2.memory.prompts import REFLECTION_INSTRUCTION
 from companion_v2.model_gateway.models import PromptSection
 from companion_v2.role_work.journal.prompts import COMMON, DIARY
+from .expression import INSTRUCTION as EXPRESSION_TASK
 
 GROUP = "model.role.daily_review"
 GLOBAL = (
     "每日整理：用同一人格、预设对话与会话历史，总结 local_date 当天的日记和记忆，安排次日活动。"
     "本轮只调用一次模型。启用的各部分遵守下述资料与格式，关闭或已存在的部分严格输出 null。"
-    "只返回 JSON 对象 {\"diary\":对象或null,\"day_plan\":对象或null,\"memory\":对象或null}。"
-    "在总输出预算内简明完整地写完三个字段。日记通常简短，记忆只保留值得长期记住的少量变化。\n"
+    "只返回 JSON 对象 {\"diary\":对象或null,\"day_plan\":对象或null,\"memory\":对象或null,\"expression\":对象或null}。"
+    "在总输出预算内简明完整地写完各字段。表达对照仅分析新增未选入预设的回复，以完整认可预设为目标。\n"
 )
 DIARY_TASK = (COMMON + DIARY.split("仅输出", 1)[0]
     + "diary 对象包含 body、form、recall:null、afterglow:\"\" 和 material_ids。"
@@ -23,7 +24,8 @@ PLAN_TASK = (PLAN_INSTRUCTION.split("daily/horizon 输出", 1)[0]
       "\"goal_id\":null,\"parent_id\":null}]}；通常安排一两件事，无新安排用空数组。")
 MEMORY_TASK = (REFLECTION_INSTRUCTION
     + "\n上述记忆结果放入外层 memory 字段，使用本轮原始 evidence_handles；无可保存事项时保留空候选数组。")
-DEFAULTS = {"global": GLOBAL, "diary": DIARY_TASK, "day_plan": PLAN_TASK, "memory": MEMORY_TASK}
+DEFAULTS = {"global": GLOBAL, "diary": DIARY_TASK, "day_plan": PLAN_TASK, "memory": MEMORY_TASK,
+            "expression": EXPRESSION_TASK}
 
 
 def output_contract():
@@ -37,7 +39,7 @@ def sections():
     from companion_v2.adapters.astrbot.model_wire import BACKGROUND_OUTPUT_NOTES
 
     titles = {"global": "每日整理全局提示词", "diary": "日记提示词",
-              "day_plan": "次日日程提示词", "memory": "记忆整理提示词"}
+              "day_plan": "次日日程提示词", "memory": "记忆整理提示词", "expression": "表达对照提示词"}
     items = tuple(PromptSection(key, titles[key], text, "每次每日整理" if key == "global" else "对应任务启用时",
         config_group=GROUP, field="template_" + key) for key, text in DEFAULTS.items())
     return (*items,
@@ -67,7 +69,7 @@ def assembly():
     return {"configuration_layers": ["role", "window"], "default_layer": "window", "order": [
         {"key": "role_instruction", "label": "系统消息 · 当前人格", "sections": []},
         {"key": "global", "label": "每日整理全局", "sections": ["global"]},
-        {"key": "task_parts", "label": "已启用任务", "sections": ["diary", "diary_style", "day_plan", "memory"]},
+        {"key": "task_parts", "label": "已启用任务", "sections": ["diary", "diary_style", "day_plan", "memory", "expression"]},
         {"key": "schema", "label": "输出 Schema", "sections": ["output_contract"]},
         {"key": "task_prompt", "label": "模型任务提示", "sections": ["task_prompt"]},
         {"key": "output_contract", "label": "输出格式约束", "sections": ["wire_contract"]},

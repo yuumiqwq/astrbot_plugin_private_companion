@@ -72,6 +72,29 @@ class SharedHistoryTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
+    async def test_expression_source_preserves_approved_roles_and_qq_sequences(self):
+        approved = [{"role": "user", "content": "context"}, {"role": "assistant", "content": "approved"}]
+        self.bridge.verified_persona.return_value["begin_dialogs"] = approved
+        self.history[0]["_qq_sequence"] = 101
+        self.manager.get_conversation.return_value.history = json.dumps(self.history)
+        context = NS(scope=self.request.event.scope, role_binding=self.request.role_binding)
+        source = await self.loader.expression_learning_source(context)
+        self.assertEqual(source["approved_dialogue"], approved)
+        self.assertEqual(source["dialogue"][0]["_qq_sequence"], 101)
+        self.assertEqual(source["source_key"], "qq:FriendMessage:peer")
+
+    async def test_comparison_wire_uses_its_incremental_window_and_captured_presets(self):
+        self.history = [{"role": "assistant", "content": str(i), "_qq_sequence": i} for i in range(1, 7)]
+        self.manager.get_conversation.return_value.history = json.dumps(self.history)
+        snapshot = {"after_sequence": 3, "through_sequence": 5,
+                    "approved_dialogue": [{"role": "assistant", "content": "approved", "handle": "preset:1"}]}
+        request = replace(self.request, output_format="role_daily_review",
+            context=SealedForegroundContext((PromptMaterial("role.daily", "expression_comparison", json.dumps(snapshot)),), (), ()))
+        await self.loader(request)
+        wire = self.native.prepare_session_request.call_args.args[2].contexts
+        self.assertEqual([item["content"] for item in wire], ["approved", "4", "5"])
+        self.assertNotIn("handle", wire[0])
+
     def test_host_paragraphs_are_shared_without_splitting_short_sentences(self):
         settings = {
             "enable": True,

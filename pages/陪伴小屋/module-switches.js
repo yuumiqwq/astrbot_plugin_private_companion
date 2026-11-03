@@ -9,7 +9,7 @@ window.CompanionModuleSwitches = (() => {
   add("humanized","表达调整","expression","reply","enable_humanized_expression",{locked:"已停用",selector:'#replyWorkspace [data-wb-field="enable_humanized_expression"]'});
   add("voice","语音回复","expression","reply","voice_enabled",{locked:"已停用",selector:'#replyWorkspace [data-wb-field="voice_enabled"]'});
   add("reactions","表情图片","expression","semantic","reactions_enabled",{locked:"已停用",selector:'#semanticExpressionWorkspace [name="reactions_enabled"]'});
-  cfg("learning","表达学习","learning","expression.learning","enabled",{locked:"使用已审核的预设对话"});
+  cfg("learning","表达学习","learning","expression.learning","enabled");
   cfg("style-review","表达复核","learning expression","expression.learning","style_review_enabled",{locked:"已停用"});
   cfg("skills","技能成长","learning","role.growth.skills");
   cfg("profile","小屋角色档案","governance","role_profile","enabled",{locked:"沿用 AstrBot 人格"});

@@ -101,7 +101,7 @@ class ConversationExpressionStyleContext:
             try:
                 window = json.loads(row["sample_json"])
                 if context.scope.kind.value == "private":
-                    if window.get("source_kind") in ("shared_pack", "legacy_expression"):
+                    if window.get("source_kind") in ("shared_pack", "legacy_expression", "preset_comparison"):
                         eligible = row["scope_key"] == scope_key
                     else:
                         source = self.catalog.evidence_context(window, context)
@@ -218,7 +218,13 @@ class ConversationExpressionStyleContext:
                 or closed_at.tzinfo is None or closed_at.utcoffset() is None
                 or opened_at > closed_at or closed_at > at):
             raise TaskError("expression_style_context_changed", "stored style window is invalid")
-        if source_kind == "legacy_expression":
+        if source_kind == "preset_comparison":
+            from companion_v2.role_work.daily.expression import evidence
+            if row["scope_key"] != digest(context.scope):
+                raise TaskError("expression_sample_changed", "comparison belongs to another window")
+            evidence(window, handles)
+            basis = "adopted_preset_comparison"
+        elif source_kind == "legacy_expression":
             from companion_v2.expression.legacy_import import evidence
             if row["scope_key"] != digest(context.scope):
                 raise TaskError("expression_style_context_changed", "legacy style belongs to another scope")

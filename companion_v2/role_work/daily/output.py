@@ -8,6 +8,7 @@ from companion_v2.execution.models import TaskError, digest, encode, require, st
 from companion_v2.memory.reflection_output import parse_output as parse_memory, validate_output as validate_memory
 from companion_v2.role_work.journal.writing_output import draft_output, object_output
 from .inputs import configuration, diary_job
+from . import expression
 
 
 def validate_inputs(service, context, inputs, *, committed=False):
@@ -20,6 +21,8 @@ def validate_inputs(service, context, inputs, *, committed=False):
         raise TaskError("daily_role_changed", "the original role was rebound")
     if committed:
         return
+    if inputs.get("expression"):
+        expression.validate(service.runtime, context, inputs["expression"])
     if inputs["plan"]:
         validate_plan(service.app.calendar_planning, inputs["plan"], service.tasks.now())
     if inputs["memory_batch"]:
@@ -36,9 +39,11 @@ def validate_inputs(service, context, inputs, *, committed=False):
 
 def parse(service, context, inputs, raw):
     value = object_output(raw)
-    if set(value) != {"diary", "day_plan", "memory"}:
-        raise TaskError("daily_output_invalid", "daily output needs exactly its three named parts")
-    parsed = {"diary": None, "day_plan": None, "memory": None}
+    if not inputs["parts"].get("expression") and set(value) == {"diary", "day_plan", "memory"}:
+        value["expression"] = None
+    if set(value) != {"diary", "day_plan", "memory", "expression"}:
+        raise TaskError("daily_output_invalid", "daily output needs exactly its four named parts")
+    parsed = {"diary": None, "day_plan": None, "memory": None, "expression": None}
     for name, enabled in inputs["parts"].items():
         if not enabled:
             if value[name] is not None:
@@ -69,12 +74,14 @@ def parse(service, context, inputs, raw):
         if result.get("rejected") or result.get("issues"):
             raise TaskError("daily_memory_invalid", "memory candidates failed their original evidence checks")
         parsed["memory"] = result
+    if inputs["parts"].get("expression"):
+        parsed["expression"] = expression.parse(value["expression"], inputs["expression"])
     return parsed
 
 
 def commit(service, context, inputs, run_id, parsed, *, run=None, effect_started=False):
     app, runtime = service.app, service.runtime
-    receipts = {"diary": None, "day_plan": None, "memory": None}
+    receipts = {"diary": None, "day_plan": None, "memory": None, "expression": None}
     with runtime.transaction() as connection:
         # The checkpoint predates this transaction; a rollback leaves it available
         # for local recovery without issuing another model request.
@@ -107,8 +114,10 @@ def commit(service, context, inputs, run_id, parsed, *, run=None, effect_started
             if result["state"] != "complete":
                 raise TaskError("daily_memory_commit_failed", "memory writes must finish in the daily transaction")
             receipts["memory"] = {"batch_id": batch_id, "state": result["state"]}
-        connection.execute("UPDATE role_daily_runs SET state='complete', receipt_json=?, updated_at=? WHERE run_id=?",
-                           (encode(receipts), stamp(service.tasks.now()), run_id))
+        if parsed.get("expression") is not None:
+            receipts["expression"] = expression.commit(service, context, inputs["expression"],
+                                                       parsed["expression"], run_id, connection)
+        service.update(run_id, state="complete", receipt_json=encode(receipts), updated_at=stamp(service.tasks.now()))
         service.committed.add(run_id)
         if run is not None:
             run.record_operation(run_id)

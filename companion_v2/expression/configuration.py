@@ -50,6 +50,7 @@ LIMITS = {
 }
 DEFAULTS = {
     "enabled": True,
+    "daily_comparison_enabled": False,
     "private_learning_enabled": True,
     "group_learning_enabled": False,
     "window_hours": 720,
@@ -86,7 +87,7 @@ ROLE_SCOPE_DEFAULTS = {
 }
 SCOPED_FIELDS = frozenset(("group_member_mode", "group_member_ids"))
 ROLE_DEFAULTS = {name: value for name, value in DEFAULTS.items() if name not in SCOPED_FIELDS}
-BOOLEAN_FIELDS = ("enabled", "private_learning_enabled", "group_learning_enabled", "private_application_enabled",
+BOOLEAN_FIELDS = ("enabled", "daily_comparison_enabled", "private_learning_enabled", "group_learning_enabled", "private_application_enabled",
                   "group_application_enabled", "sample_review_enabled", "style_review_enabled")
 ROLE_BOOLEAN_FIELDS = tuple(name for name in BOOLEAN_FIELDS if name not in SCOPED_FIELDS)
 TEXT_FIELDS = {"learning_mode": 16}
@@ -384,6 +385,7 @@ class ExpressionLearningSettings:
     group_member_mode: str = "all"
     group_member_ids: str = ""
     enabled: bool = True
+    daily_comparison_enabled: bool = False
 
     def __post_init__(self):
         if any(type(getattr(self, name)) is not bool for name in BOOLEAN_FIELDS):

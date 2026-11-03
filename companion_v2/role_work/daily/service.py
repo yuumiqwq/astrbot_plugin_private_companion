@@ -23,7 +23,7 @@ OWNER = "role.daily"
 
 def daily_profile(provider, *, max_output_tokens=2048):
     return ModelTaskProfile(KIND, Lane.BACKGROUND, provider,
-        "沿用当前人格和对话，完成本次每日整理；只返回约定的三个结果。",
+        "沿用当前人格和对话，完成本次每日整理；只返回约定的各项结果。",
         max_output_tokens=max_output_tokens, prompt_sections=prompts.sections())
 
 
@@ -58,7 +58,28 @@ class RoleDailyReview:
         return "role-daily-" + digest([self.app.calendar.records.role_key(context), local_date, zone_name])
 
     def _row(self, run_id):
+        if run_id.startswith("role-expression-manual-"):
+            row = self.runtime.read_one("SELECT value FROM runtime_metadata WHERE key=?", (run_id,))
+            return json.loads(row["value"]) if row else None
         return self.runtime.read_one("SELECT * FROM role_daily_runs WHERE run_id=?", (run_id,))
+
+    def update(self, run_id, **changes):
+        """Persist daily progress or a separately identified manual learning run.
+
+        Args:
+            run_id: Daily identity or explicit manual operation identity.
+            **changes: Internal checkpoint fields to update.
+        """
+        with self.runtime.transaction() as connection:
+            if run_id.startswith("role-expression-manual-"):
+                row = self._row(run_id) or {"run_id": run_id, "task_id": None, "receipt_json": None}
+                row.update(changes)
+                connection.execute("INSERT INTO runtime_metadata(key,value) VALUES (?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (run_id, encode(row)))
+            else:
+                fields = ",".join(name + "=?" for name in changes)
+                connection.execute("UPDATE role_daily_runs SET " + fields + " WHERE run_id=?",
+                                   (*changes.values(), run_id))
 
     def status(self, run_id):
         row = self._row(run_id)
@@ -66,7 +87,8 @@ class RoleDailyReview:
                 "timezone": row["timezone"], "task_id": row["task_id"],
                 "receipts": json.loads(row["receipt_json"]) if row["receipt_json"] else None}
 
-    async def run(self, context, instruction, *, local_date=None, zone_name=None):
+    async def run(self, context, instruction, *, local_date=None, zone_name=None,
+                  expression_only=False, operation_key=None):
         self.app.require_running()
         if not self.handles(context):
             raise TaskError("daily_context_unavailable", "daily review needs its configured shared private context")
@@ -74,22 +96,33 @@ class RoleDailyReview:
         zone_name = zone_name or settings["timezone"]
         local_date = local_date or self.tasks.now().astimezone(ZoneInfo(zone_name)).date().isoformat()
         run_id = self.identifier(context, local_date, zone_name)
+        if expression_only:
+            if type(operation_key) is not str or not operation_key or len(operation_key) > 128:
+                raise TaskError("expression_operation_required", "manual learning needs an operation identity")
+            run_id = "role-expression-manual-" + digest([context.key, operation_key])
         lock = self.locks.setdefault(run_id, asyncio.Lock())
         async with lock:
             row = self._row(run_id)
             if row is None:
-                if not any(settings["parts"].values()):
+                if not any(settings["parts"].values()) and not expression_only:
                     return {"state": "disabled", "date": local_date, "run_id": run_id}
                 binding = self.app.state_maintenance.bindings.get(context.key)
                 if binding is None or binding[:2] != (context, instruction):
                     raise TaskError("daily_role_changed", "daily preparation needs its original binding")
                 await self.app.calendar_planning.guard(context, instruction)
-                captured = await daily_inputs.capture(self, context, instruction, local_date, zone_name, run_id)
+                captured = await daily_inputs.capture(self, context, instruction, local_date, zone_name, run_id,
+                                                     expression_only=expression_only)
                 now = stamp(self.tasks.now())
                 with self.runtime.transaction() as connection:
-                    connection.execute("INSERT OR IGNORE INTO role_daily_runs VALUES (?,?,?,?,?,?,?,?,NULL,NULL,NULL,?,?)",
-                        (run_id, self.app.calendar.records.role_key(context), context.key, local_date, zone_name,
-                         "prepared", encode(context), encode(captured), now, now))
+                    if expression_only:
+                        self.update(run_id, owner_key=self.app.calendar.records.role_key(context),
+                            origin_key=context.key, local_date=local_date, timezone=zone_name,
+                            state="prepared", context_json=encode(context), inputs_json=encode(captured),
+                            output_json=None, created_at=now, updated_at=now)
+                    else:
+                        connection.execute("INSERT OR IGNORE INTO role_daily_runs VALUES (?,?,?,?,?,?,?,?,NULL,NULL,NULL,?,?)",
+                            (run_id, self.app.calendar.records.role_key(context), context.key, local_date, zone_name,
+                             "prepared", encode(context), encode(captured), now, now))
                 row = self._row(run_id)
             original = TaskContext.restore(json.loads(row["context_json"]))
             if original.key != context.key:
@@ -109,16 +142,15 @@ class RoleDailyReview:
                 # An interrupted request has no replay permission. Durable output
                 # would have advanced the row to received before any domain save.
                 with self.runtime.transaction() as connection:
-                    connection.execute("UPDATE role_daily_runs SET state='unknown',updated_at=? WHERE run_id=?",
-                                       (stamp(self.tasks.now()), run_id))
+                    self.update(run_id, state="unknown", updated_at=stamp(self.tasks.now()))
                 return self.status(run_id)
             inputs = daily_inputs.restore(context, row["inputs_json"])
             self.pending[run_id] = (context, inputs)
             try:
                 if not any(inputs["parts"].values()):
                     with self.runtime.transaction() as connection:
-                        connection.execute("UPDATE role_daily_runs SET state='complete',receipt_json=?,updated_at=? WHERE run_id=?",
-                            (encode({"empty": True}), stamp(self.tasks.now()), run_id))
+                        self.update(run_id, state="complete", receipt_json=encode({"empty": True}),
+                                    updated_at=stamp(self.tasks.now()))
                     return self.status(run_id)
                 if row["state"] == "received":
                     # No model is involved in recovery. A new task lease fences
@@ -131,15 +163,14 @@ class RoleDailyReview:
                 prior = self.runtime.read_one("SELECT state FROM execution_tasks WHERE task_id=?", (task_id,))
                 if prior and prior["state"] in TERMINAL:
                     with self.runtime.transaction() as connection:
-                        connection.execute("UPDATE role_daily_runs SET state='failed',receipt_json=?,updated_at=? WHERE run_id=?",
-                            (encode({"code": "daily_preparation_interrupted"}), stamp(now), run_id))
+                        self.update(run_id, state="failed", receipt_json=encode({"code": "daily_preparation_interrupted"}),
+                                    updated_at=stamp(now))
                     return self.status(run_id)
                 if prior is None:
                     spec = TaskSpec(task_id, context, KIND, run_id, task_id, now, now + timedelta(seconds=600))
                     require(self.tasks.submit(spec))
                 with self.runtime.transaction() as connection:
-                    connection.execute("UPDATE role_daily_runs SET task_id=?,updated_at=? WHERE run_id=?",
-                                       (task_id, stamp(now), run_id))
+                    self.update(run_id, task_id=task_id, updated_at=stamp(now))
                 result = require(await self.runner.run(context, task_id))
                 if result.stop_code:
                     current = self._row(run_id)
@@ -150,13 +181,14 @@ class RoleDailyReview:
                         dispatched = self.runtime.read_one("SELECT 1 FROM model_calls WHERE task_id=? AND state IN ('dispatched','unknown')", (task_id,))
                         state = "unknown" if dispatched and not permanent else "failed"
                         with self.runtime.transaction() as connection:
-                            connection.execute("UPDATE role_daily_runs SET state=?,receipt_json=?,updated_at=? WHERE run_id=?",
-                                (state, encode({"code": result.stop_code}), stamp(self.tasks.now()), run_id))
+                            self.update(run_id, state=state, receipt_json=encode({"code": result.stop_code}),
+                                        updated_at=stamp(self.tasks.now()))
                 return self.status(run_id)
             except TaskError as error:
                 with self.runtime.transaction() as connection:
-                    connection.execute("UPDATE role_daily_runs SET state='failed',receipt_json=?,updated_at=? WHERE run_id=? AND state!='complete'",
-                        (encode({"code": error.code}), stamp(self.tasks.now()), run_id))
+                    if self._row(run_id)["state"] != "complete":
+                        self.update(run_id, state="failed", receipt_json=encode({"code": error.code}),
+                                    updated_at=stamp(self.tasks.now()))
                 return self.status(run_id)
             finally:
                 self.pending.pop(run_id, None)
@@ -193,8 +225,7 @@ class RoleDailyReview:
             request = self.request_for(context, inputs, run_id)
             with self.runtime.transaction() as connection:
                 run.validate()
-                connection.execute("UPDATE role_daily_runs SET state='running',updated_at=? WHERE run_id=?",
-                                   (stamp(self.tasks.now()), run_id))
+                self.update(run_id, state="running", updated_at=stamp(self.tasks.now()))
             completion = await self.gateway.generate(run, request)
             captured = completion.captured_output
             text = captured.text if captured is not None else completion.draft.text if completion.draft else ""
@@ -203,8 +234,7 @@ class RoleDailyReview:
             with self.runtime.transaction() as connection:
                 run.validate()
                 run.begin_effect()
-                connection.execute("UPDATE role_daily_runs SET state='received',output_json=?,updated_at=? WHERE run_id=?",
-                                   (encode(raw), stamp(self.tasks.now()), run_id))
+                self.update(run_id, state="received", output_json=encode(raw), updated_at=stamp(self.tasks.now()))
                 run.record_operation(run_id)
         if raw["finish_reason"] not in (None, "stop", "end_turn"):
             raise TaskError("daily_output_incomplete", "daily output must be complete before any domain write")
@@ -212,8 +242,8 @@ class RoleDailyReview:
             parsed = output.parse(self, context, inputs, raw["text"])
         except (TaskError, ValueError, TypeError, KeyError) as error:
             with self.runtime.transaction() as connection:
-                connection.execute("UPDATE role_daily_runs SET state='failed',receipt_json=?,updated_at=? WHERE run_id=?",
-                    (encode({"code": getattr(error, "code", "daily_output_invalid")}), stamp(self.tasks.now()), run_id))
+                self.update(run_id, state="failed", receipt_json=encode({"code": getattr(error, "code", "daily_output_invalid")}),
+                            updated_at=stamp(self.tasks.now()))
             raise
         output.commit(self, context, inputs, run_id, parsed, run=run, effect_started=row["state"] != "received")
         self.app.notify()

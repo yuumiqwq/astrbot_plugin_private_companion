@@ -1113,10 +1113,14 @@ class SetupWebAPI:
     async def daily_diagnostic(self):
         async with self._test_lock:
             stage = "authorization"
+            manual_requested = False
             try:
                 username = self._admin()
-                data = await self._body({"simulation", "confirm_delivery"})
-                if data["simulation"] is not True or data["confirm_delivery"] is not False:
+                data = await self._body({"simulation", "confirm_delivery"}, optional={"mode", "operation_key"})
+                learning = data.get("mode") == "expression"
+                manual_requested = learning and data["simulation"] is False
+                if (data["confirm_delivery"] is not False or type(data["simulation"]) is not bool
+                        or not learning and data["simulation"] is not True):
                     raise TaskError("daily_simulation_required", "daily tests require simulation with delivery disabled")
                 stage = "binding"
                 target = await self._proactive_diagnostic_target()
@@ -1130,6 +1134,11 @@ class SetupWebAPI:
                 from companion_v2.role_work.life.management import RoleLifeManagement
                 RoleLifeManagement(session.application, context).authorize(operator)
                 stage = "source_capture"
+                if learning and data["simulation"] is False:
+                    result = await session.application.daily_review.run(context, instruction,
+                        expression_only=True, operation_key=data.get("operation_key"))
+                    return self._response(Outcome.success({**result, "simulation": False,
+                        "delivery_state": "not_requested"}))
                 from companion_v2.role_work.daily.simulation import simulate_daily_review
                 result = await simulate_daily_review(session.application, context, instruction,
                                                      attempt_id=uuid4().hex)
@@ -1140,12 +1149,12 @@ class SetupWebAPI:
                 elif error.code in {"daily_output_invalid", "daily_output_incomplete", "daily_plan_invalid",
                                     "daily_memory_invalid", "daily_disabled_part"}:
                     stage = "output_validation"
-                return self._response(Outcome.success({"simulation": True, "state": "failed",
+                return self._response(Outcome.success({"simulation": not manual_requested, "state": "failed",
                     "result": None, "stage": stage, "code": error.code, "error": redact_text(str(error)),
                     "delivery_state": "not_requested", "receipt_ref": None,
                     "stages": [{"stage": stage, "state": "failed"}]}))
             except Exception as error:
-                return self._response(Outcome.success({"simulation": True, "state": "failed",
+                return self._response(Outcome.success({"simulation": not manual_requested, "state": "failed",
                     "result": None, "stage": stage, "code": "daily_simulation_failed",
                     "error": redact_text(f"{type(error).__name__}: {error}"),
                     "delivery_state": "not_requested", "receipt_ref": None,
