@@ -482,7 +482,7 @@ window.CompanionProduct = (() => {
     return value;
   }
   const DEFAULT_API_TIMEOUT_MS = 15000;
-  const MAX_API_TIMEOUT_MS = 300000;
+  const MAX_API_TIMEOUT_MS = 360000;
   const requestTimeout = options => Number.isInteger(options?.timeoutMs)
     && options.timeoutMs >= 1000
     ? Math.min(options.timeoutMs, MAX_API_TIMEOUT_MS) : DEFAULT_API_TIMEOUT_MS;

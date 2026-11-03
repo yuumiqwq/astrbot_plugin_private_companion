@@ -50,8 +50,8 @@ test("ordinary embedded requests keep their short default and timeout input is c
 
   const capped = harness();
   void capped.window.AstrBotPluginPage.apiGet("setup/plan", {}, {timeoutMs: 900000});
-  assert.equal(capped.messages[0].timeoutMs, 300000);
-  assert.equal(capped.timers[0].ms, 301000);
+  assert.equal(capped.messages[0].timeoutMs, 360000);
+  assert.equal(capped.timers[0].ms, 361000);
 });
 
 test("navigation failures reach the embedded workspace instead of failing silently", () => {

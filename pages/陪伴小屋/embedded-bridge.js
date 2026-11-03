@@ -2,7 +2,7 @@
 "use strict";
 (() => {
   const pending=new Map();let count=0,context=null,readyResolve;
-  const DEFAULT_REQUEST_TIMEOUT_MS=18000,MAX_REQUEST_TIMEOUT_MS=300000;
+  const DEFAULT_REQUEST_TIMEOUT_MS=18000,MAX_REQUEST_TIMEOUT_MS=360000;
   const ready=new Promise(resolve=>{readyResolve=resolve;});
   const send=payload=>parent.postMessage({channel:"companion-workspace",...payload},"*");
   /* 外观维度：主题沿用原有通道，另外四项按 name/value 应用。

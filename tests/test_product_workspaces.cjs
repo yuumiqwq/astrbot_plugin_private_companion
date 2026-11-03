@@ -341,7 +341,7 @@ test("request timeouts are configurable and timeout diagnostics omit target and 
 
   h.timers.length = 0;
   await h.product.request("GET", "host/status", {}, {timeoutMs: 900000});
-  assert.equal(h.timers.at(-1).ms, 300000, "custom limits cannot exceed the five-minute cap");
+  assert.equal(h.timers.at(-1).ms, 360000, "custom limits cannot exceed the six-minute cap");
 });
 
 test("workspace request timeout reaches the host request boundary", async () => {

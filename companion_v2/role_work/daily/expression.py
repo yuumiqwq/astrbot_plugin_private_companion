@@ -18,6 +18,8 @@ INSTRUCTION = (
     "每条候选至少引用一条 preset: 开头的认可 assistant 证据，可同时引用 unreviewed: 证据，"
     "说明规则适用的情境，保持认可示例中的自然变化，不把偶尔用法强制为每次使用。"
     "结果放在 expression 字段，使用本轮提供的规则 Schema；规则仅进入待审核列表。"
+    "applicability.channels 使用 private/proactive；relationship_stages 和 emotion_gates 无明确限制时填写 [\"any\"]。"
+    "any 单独使用，不与其他值并列；keywords 可为空数组。"
     "已经整理过的历史只作其他任务背景，不再作为本轮新的表达学习证据。"
     + learning.FORM_INSTRUCTION
 )

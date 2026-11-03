@@ -2306,7 +2306,7 @@ window.CompanionContactPage = (() => {
     try {
       const result = await api("POST", "setup/daily-diagnostic",
         expressionOnly ? {simulation:false,confirm_delivery:false,mode:"expression",operation_key:"expression-" + Date.now() + "-" + Math.random().toString(36).slice(2,10)}
-          : {simulation:true,confirm_delivery:false}, 300000);
+          : {simulation:true,confirm_delivery:false}, 360000);
       if (!live(ticket)) return;
       if (expressionOnly) {
         if (result.simulation !== false || typeof result.state !== "string") throw problem("invalid_response");
