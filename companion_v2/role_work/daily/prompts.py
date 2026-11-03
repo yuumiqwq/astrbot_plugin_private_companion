@@ -7,6 +7,7 @@ from companion_v2.memory.prompts import REFLECTION_INSTRUCTION
 from companion_v2.model_gateway.models import PromptSection
 from companion_v2.role_work.journal.prompts import COMMON, DIARY
 from .expression import INSTRUCTION as EXPRESSION_TASK
+from .expression import CONTRACT_INSTRUCTION as EXPRESSION_CONTRACT
 
 GROUP = "model.role.daily_review"
 GLOBAL = (
@@ -43,6 +44,7 @@ def sections():
     items = tuple(PromptSection(key, titles[key], text, "每次每日整理" if key == "global" else "对应任务启用时",
         config_group=GROUP, field="template_" + key) for key, text in DEFAULTS.items())
     return (*items,
+        PromptSection("expression_contract", "表达学习输出约定", EXPRESSION_CONTRACT, "手动表达学习时"),
         PromptSection("diary_style", "日记表达偏好", "", "日记任务启用且偏好非空时",
                       config_group="role.life", field="diary_style_prompt"),
         PromptSection("output_contract", "输出 Schema", output_contract(), "每次每日整理"),
@@ -69,7 +71,7 @@ def assembly():
     return {"configuration_layers": ["role", "window"], "default_layer": "window", "order": [
         {"key": "role_instruction", "label": "系统消息 · 当前人格", "sections": []},
         {"key": "global", "label": "每日整理全局", "sections": ["global"]},
-        {"key": "task_parts", "label": "已启用任务", "sections": ["diary", "diary_style", "day_plan", "memory", "expression"]},
+        {"key": "task_parts", "label": "已启用任务", "sections": ["diary", "diary_style", "day_plan", "memory", "expression", "expression_contract"]},
         {"key": "schema", "label": "输出 Schema", "sections": ["output_contract"]},
         {"key": "task_prompt", "label": "模型任务提示", "sections": ["task_prompt"]},
         {"key": "output_contract", "label": "输出格式约束", "sections": ["wire_contract"]},

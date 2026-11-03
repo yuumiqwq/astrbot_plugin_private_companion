@@ -53,7 +53,7 @@ class DailyPromptEditorTests(StateFixture, unittest.IsolatedAsyncioTestCase):
         self.assertIn(encode(DAILY_SCHEMA), sections["output_contract"]["prompt"])
         self.assertEqual(self.patch("output_contract", "changed").failure.code, "model_prompt_section_readonly")
         self.assertEqual(task["prompt_assembly"]["order"][2]["sections"],
-                         ["diary", "diary_style", "day_plan", "memory", "expression"])
+                         ["diary", "diary_style", "day_plan", "memory", "expression", "expression_contract"])
         self.assertEqual(self.daily_calls(), [])
 
     async def test_edits_apply_to_preview_and_scheduled_call_without_schema_changes(self):

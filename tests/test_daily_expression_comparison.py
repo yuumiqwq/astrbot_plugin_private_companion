@@ -1,6 +1,7 @@
 """Approved examples guide incremental, reviewable expression learning."""
 
 import json
+import unittest
 
 from companion_v2.execution.models import TaskError, encode
 from companion_v2.expression.configuration import (
@@ -52,11 +53,11 @@ class DailyExpressionTests(daily_tests.DailyReviewTests):
         if material is not None:
             snapshot = json.loads(material.payload)
             approved = next(key for key in snapshot["handles"] if key.startswith("preset:"))
-            unreviewed = next(key for key in snapshot["handles"] if key.startswith("unreviewed:"))
             result["expression"] = {"summary": "参考已认可示例的接话方式。", "signals": [{
                 "dimension": "sentence_rhythm", "observation": "先回应邀请，再补充下一步。",
                 "proposal": "回应共同活动时，先用简短应答接住，再接一句具体行动。",
-                "confidence": 0.7, "evidence_handles": [approved, unreviewed],
+                "confidence": 0.7, "evidence_handles": [approved],
+                "approved_quotes": [{"evidence_handle": approved, "quote": "可以呀。"}],
                 "expression": {"kind": "grammar", "situation": "回应共同活动邀请时",
                     "pattern": "先简短答应，再接一句具体行动", "avoid": "需要拒绝邀请时"},
                 "applicability": {"channels": ["private", "proactive"], "relationship_stages": ["any"],
@@ -66,7 +67,7 @@ class DailyExpressionTests(daily_tests.DailyReviewTests):
 
     async def test_comparison_joins_one_daily_call_and_waits_for_adoption(self):
         app, context = await self.comparison_ready()
-        result = await self.run_daily()
+        result = await app.daily_review.run(context, "原角色人格", expression_only=True, operation_key="manual-adoption")
         self.assertEqual(result["state"], "complete", result)
         self.assertEqual(len(self.daily_calls()), 1)
         self.assertEqual(result["receipts"]["expression"]["pending_rules"], 1)
@@ -90,7 +91,7 @@ class DailyExpressionTests(daily_tests.DailyReviewTests):
         self.assertEqual(first["state"], "complete", first)
         self.assertEqual(len(self.daily_calls()), 1)
         scheduled = await self.run_daily()
-        self.assertEqual(scheduled["state"], "complete", scheduled)
+        self.assertEqual(scheduled["state"], "disabled", scheduled)
         self.assertEqual(len(self.daily_calls()), 1)
         repeated = await app.daily_review.run(context, "原角色人格", expression_only=True, operation_key="manual-again")
         self.assertEqual(repeated["state"], "complete", repeated)
@@ -110,7 +111,7 @@ class DailyExpressionTests(daily_tests.DailyReviewTests):
     async def test_preview_does_not_consume_progress_or_write_rules(self):
         app, context = await self.comparison_ready(diary=False, plan=False, memory=False)
         before = app.runtime.read_one("SELECT value FROM runtime_metadata WHERE key=?", (expression.cursor_key(context),))
-        result = await simulate_daily_review(app, context, "原角色人格", attempt_id="comparison-preview")
+        result = await simulate_daily_review(app, context, "原角色人格", attempt_id="comparison-preview", expression_only=True)
         self.assertEqual(result["state"], "passed", result)
         self.assertIsNone(before)
         self.assertIsNone(app.runtime.read_one("SELECT value FROM runtime_metadata WHERE key=?", (expression.cursor_key(context),)))
@@ -135,7 +136,7 @@ class DailyExpressionTests(daily_tests.DailyReviewTests):
 
     async def test_source_cursor_survives_restart_and_stale_commit_is_rejected(self):
         app, context = await self.comparison_ready(diary=False, plan=False, memory=False)
-        old = await expression.capture(app.daily_review, context)
+        old = await expression.capture(app.daily_review, context, automatic=False)
         result = await app.daily_review.run(context, "原角色人格", expression_only=True, operation_key="before-restart")
         self.assertEqual(result["state"], "complete", result)
         with self.assertRaisesRegex(TaskError, "already processed"):
@@ -145,4 +146,54 @@ class DailyExpressionTests(daily_tests.DailyReviewTests):
         self.app = restarted.application
         self.app.gateway.request_context = self.source
         self.app.state_maintenance.bind(context, "原角色人格")
-        self.assertIsNone(await expression.capture(self.app.daily_review, context))
+        self.assertIsNone(await expression.capture(self.app.daily_review, context, automatic=False))
+
+    async def test_daily_never_learns_even_with_the_old_automatic_switch_enabled(self):
+        app, context = await self.comparison_ready()
+        result = await self.run_daily()
+        self.assertEqual(result["state"], "complete", result)
+        self.assertIsNone(result["receipts"]["expression"])
+        self.assertFalse(any(item.purpose == "expression_comparison"
+                             for item in self.daily_calls()[-1].original.context.materials))
+        self.assertIsNone(await expression.capture(app.daily_review, context))
+
+
+class ApprovedTargetParserTests(unittest.TestCase):
+    def setUp(self):
+        self.snapshot = {"handles": {
+            "preset:1": {"role": "assistant", "quality": "approved", "content": "我可以学呀！哼 我明明有一直在学（委屈"},
+            "unreviewed:2": {"role": "assistant", "quality": "unreviewed", "content": "（缩被窝)"}},
+            "unreviewed_dialogue": [{"role": "assistant", "content": "（缩被窝)"}]}
+        self.value = {"summary": "认可原文中的具体表达。", "signals": [{
+            "dimension": "formatting", "observation": "认可示例用未闭合括号表达委屈。",
+            "proposal": "在类似情境中自然使用认可示例里的括号表达。", "confidence": 0.7,
+            "evidence_handles": ["preset:1"],
+            "approved_quotes": [{"evidence_handle": "preset:1", "quote": "（委屈"}],
+            "expression": {"kind": "style", "situation": "表示委屈时", "pattern": "（委屈", "avoid": "正式说明时"},
+            "applicability": {"channels": ["private"], "relationship_stages": ["any"],
+                "emotion_gates": ["any"], "intent": "any", "keywords": []}}]}
+
+    def test_approved_exact_expression_is_accepted(self):
+        result = expression.parse(self.value, self.snapshot)
+        self.assertEqual(result.signals[0].evidence_handles, ("preset:1",))
+
+    def test_comparison_references_never_become_positive_learning_evidence(self):
+        self.value["signals"][0]["evidence_handles"].append("unreviewed:2")
+        result = expression.parse(self.value, self.snapshot)
+        self.assertEqual(result.signals[0].evidence_handles, ("preset:1",))
+
+    def test_unapproved_only_pattern_cannot_borrow_an_approved_reference(self):
+        self.value["signals"][0]["expression"]["pattern"] = "（缩被窝）"
+        with self.assertRaisesRegex(TaskError, "approved quotation"):
+            expression.parse(self.value, self.snapshot)
+
+    def test_unapproved_example_is_rejected_inside_a_grammar_rule(self):
+        self.value["signals"][0]["expression"].update(kind="grammar", pattern="在句末使用括号表达情绪")
+        self.value["signals"][0]["proposal"] = "句末可以补充“（缩被窝）”表达。"
+        with self.assertRaisesRegex(TaskError, "unreviewed-only expression"):
+            expression.parse(self.value, self.snapshot)
+
+    def test_a_quote_must_come_from_the_cited_approved_message(self):
+        self.value["signals"][0]["approved_quotes"][0]["quote"] = "（缩被窝)"
+        with self.assertRaisesRegex(TaskError, "exact quotations"):
+            expression.parse(self.value, self.snapshot)

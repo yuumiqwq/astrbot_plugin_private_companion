@@ -19,7 +19,7 @@ from .service import KIND
 RESULT_PREFIX = "daily.simulation.v1:"
 
 
-async def simulate_daily_review(app, context, instruction, *, attempt_id):
+async def simulate_daily_review(app, context, instruction, *, attempt_id, expression_only=False):
     app.require_running()
     service = app.daily_review
     if not service.handles(context):
@@ -32,7 +32,7 @@ async def simulate_daily_review(app, context, instruction, *, attempt_id):
     local_date = now.astimezone(ZoneInfo(zone_name)).date().isoformat()
     run_id = "daily-simulation-" + digest([context.key, attempt_id])
     task_id = run_id + ":generate"
-    expression_snapshot = await expression.capture(service, context)
+    expression_snapshot = await expression.capture(service, context, automatic=not expression_only)
     # Preview capture performs only synchronous work. Its temporary diary source,
     # memory selection and source index remain within this savepoint, with no
     # network await or model request while the transaction is held.
@@ -41,6 +41,7 @@ async def simulate_daily_review(app, context, instruction, *, attempt_id):
         try:
             inputs = await daily_inputs.capture(service, context, instruction, local_date,
                                                 zone_name, run_id, preview=True,
+                                                expression_only=expression_only,
                                                 expression_snapshot=expression_snapshot)
         finally:
             connection.execute("ROLLBACK TO SAVEPOINT daily_simulation_capture")

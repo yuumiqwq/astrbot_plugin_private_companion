@@ -1141,7 +1141,7 @@ class SetupWebAPI:
                         "delivery_state": "not_requested"}))
                 from companion_v2.role_work.daily.simulation import simulate_daily_review
                 result = await simulate_daily_review(session.application, context, instruction,
-                                                     attempt_id=uuid4().hex)
+                                                     attempt_id=uuid4().hex, expression_only=learning)
                 return self._response(Outcome.success(result))
             except TaskError as error:
                 if error.code.startswith("model_"):

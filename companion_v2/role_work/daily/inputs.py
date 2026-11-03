@@ -77,7 +77,7 @@ async def capture(service, context, instruction, local_date, zone_name, run_id, 
         else:
             inputs["expression"] = snapshot
             materials.append(PromptMaterial("role.daily", "expression_comparison", encode(snapshot)))
-            instructions.append("表达对照部分：\n" + prompt_values["expression"])
+            instructions.append("表达对照部分：\n" + prompt_values["expression"] + "\n" + expression.CONTRACT_INSTRUCTION)
     if selected["diary"]:
         target = app.journal_triggers.target(context, JournalKind.DIARY, local_date, zone_name)
         head = app.role_journal.head(target.key)
@@ -198,4 +198,4 @@ DAILY_SCHEMA = {"type": "object", "required": ["diary", "day_plan", "memory", "e
                     "minutes": {"type": "integer", "minimum": 1}, "detail": {"type": "string"},
                     "goal_id": {"type": ["string", "null"]}, "parent_id": {"type": ["string", "null"]}}}}}}]},
         "memory": {"anyOf": [{"type": "null"}, REFLECTION_SCHEMA]},
-        "expression": {"anyOf": [{"type": "null"}, expression.learning.schema(3)]}}}
+        "expression": {"anyOf": [{"type": "null"}, expression.schema()]}}}
