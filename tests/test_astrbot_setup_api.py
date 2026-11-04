@@ -349,6 +349,26 @@ class AstrBotSetupFlowTests(unittest.IsolatedAsyncioTestCase):
         manager.authorize.assert_called_once()
         app.proactive.contact.assert_not_awaited()
 
+    async def test_manual_learning_exposes_the_persisted_balance_failure(self):
+        api, app, _, _ = self.simulation_api_fixture()
+        app.daily_review = NS(run=AsyncMock(return_value={"state": "failed",
+            "receipts": {"code": "model_insufficient_balance"}}))
+        request = NS(username="administrator", query={}, body=AsyncMock(return_value=json.dumps(
+            {"simulation": False, "confirm_delivery": False, "mode": "expression",
+             "operation_key": "balance-failure"}).encode()))
+        with patch("astrbot_host.setup_api.request", request), \
+             patch("astrbot_host.setup_api.dashboard_operator", return_value=object()), \
+             patch("companion_v2.role_work.life.management.RoleLifeManagement", return_value=NS(authorize=Mock())):
+            result = await api.daily_diagnostic()
+
+        self.assertFalse(result["data"]["simulation"])
+        self.assertEqual(result["data"]["state"], "failed")
+        self.assertEqual(result["data"]["code"], "model_insufficient_balance")
+        self.assertEqual(result["data"]["stage"], "model_generation")
+        self.assertIn("余额不足", result["data"]["error"])
+        self.assertEqual(app.daily_review.run.await_count, 1)
+        app.proactive.contact.assert_not_awaited()
+
     async def test_daily_diagnostic_rejects_delivery_before_starting_the_host(self):
         for fields in ({"simulation": True, "confirm_delivery": True},
                        {"simulation": False, "confirm_delivery": False}):

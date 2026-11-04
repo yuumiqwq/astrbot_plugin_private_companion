@@ -18,6 +18,7 @@ window.CompanionExpressionSignalsPage = (() => {
   const ERRORS = {
     bridge_unavailable: "页面连接暂不可用，请重新读取。",
     bridge_timeout: "页面连接超时，请重新读取。",
+    model_insufficient_balance: "DeepSeek API 余额不足，请充值后重试。",
     expression_query_invalid: "规则筛选条件无效，请重新读取。",
     expression_revision_invalid: "请填写适用情境、具体说法或句式及使用方式。",
     expression_capacity_reached: "规则库已满，可先停用暂时不用的规则。",
@@ -43,6 +44,25 @@ window.CompanionExpressionSignalsPage = (() => {
   const relative = value => typeof value === "string" && value.startsWith(PREFIX) ? value.slice(PREFIX.length) : "";
   const errorCode = value => typeof value === "string" && /^[a-z][a-z0-9_]{2,80}$/.test(value) ? value : "";
   const reason = value => ERRORS[errorCode(value)] || "原始依据已不可读取。";
+  const learningCode = value => [value?.code, value?.receipts?.code, value?.error?.code,
+    value?.error, value?.message].map(errorCode).find(Boolean) || "";
+  const learningStage = value => [value?.stage, value?.receipts?.stage, value?.error?.stage]
+    .map(errorCode).find(Boolean) || "";
+  const LEARNING_STAGES = {authorization:"身份验证",binding:"会话绑定",runtime:"运行环境",
+    source_capture:"读取语料",model_generation:"模型生成",output_validation:"输出校验",
+    output_parsing:"输出解析",persistence:"保存规则",receipt:"结果确认"};
+  function learningNotice(value, label) {
+    const code=learningCode(value),stage=learningStage(value);
+    return [label,stage?`阶段：${LEARNING_STAGES[stage] || stage}`:"",
+      ERRORS[code] || (code?`错误码：${code}`:"")].filter(Boolean).join(" · ");
+  }
+  function responseError(value) {
+    const detail=value.data && typeof value.data==="object"?value.data:{};
+    const code=learningCode(detail) || learningCode(value);
+    return Object.assign(new Error(value.message || code || "request_failed"),
+      {code,stage:learningStage(detail) || learningStage(value)});
+  }
+
   const formatTime = value => typeof value === "string" && Number.isFinite(Date.parse(value))
     ? new Date(value).toLocaleString("zh-CN", {hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"})
     : "时间未知";
@@ -110,18 +130,12 @@ window.CompanionExpressionSignalsPage = (() => {
     const bridge = product?.bridgeNow?.() || await product?.bridgeFor?.();
     if (!bridge?.apiGet) throw Object.assign(new Error("bridge_unavailable"), {code: "bridge_unavailable"});
     const response = await bounded(method === "GET" ? bridge.apiGet(route, body, {timeoutMs}) : bridge.apiPost(route, body, {timeoutMs}), timeoutMs);
-    if (response?.status === "error") {
-      const detail = response.data && typeof response.data === "object" ? response.data : {};
-      throw Object.assign(new Error(response.message || detail.code || "request_failed"), {code: errorCode(detail.code || response.code || response.message)});
-    }
+    if (response?.status === "error") throw responseError(response);
     let value = response;
     if (response?.status === "ok" && response.data !== undefined) value = response.data;
     else if (response?.data !== undefined && response?.status === undefined) value = response.data;
     value = product?.unwrap ? product.unwrap(value) : value;
-    if (value?.status === "error") {
-      const detail = value.data && typeof value.data === "object" ? value.data : {};
-      throw Object.assign(new Error(value.message || detail.code || "request_failed"), {code: errorCode(detail.code || value.code || value.message)});
-    }
+    if (value?.status === "error") throw responseError(value);
     if (value?.status === "ok" && value.data !== undefined) value = value.data;
     if (!value || typeof value !== "object") throw Object.assign(new Error("invalid_response"), {code: "invalid_response"});
     return value;
@@ -371,14 +385,23 @@ window.CompanionExpressionSignalsPage = (() => {
       const result = await api("POST", "setup/daily-diagnostic", {
         simulation:false, confirm_delivery:false, mode:"expression", operation_key:operationKey("compare"),
       }, 360000);
-      if (result.simulation !== false || result.state !== "complete") {
-        status = "对照学习未完成。"; failed = true;
-      } else {
+      if (result.simulation !== false) {
+        status = learningNotice(result,"对照学习结果待确认"); failed = true;
+      } else if (result.state === "complete") {
         stateFilter = "pending";
-        status = result.receipts?.empty ? "暂无新增回复。" : "对照学习完成。";
+        status = result.receipts?.empty ? "暂无新增回复。"
+          : result.receipts?.expression?.pending_rules === 0 ? "对照学习完成，未生成新候选。" : "对照学习完成。";
+      } else if (result.state === "failed") {
+        status = learningNotice(result,"对照学习失败"); failed = true;
+      } else if (["prepared","running","received","pending","in_progress","in-progress","processing"].includes(result.state)) {
+        status = learningNotice(result,"对照学习处理中");
+      } else {
+        status = learningNotice(result,"对照学习结果待确认"); failed = true;
       }
     } catch (problem) {
-      status = ERRORS[errorCode(problem?.code)] || "尚未收到学习结果，请重新读取。";
+      const code=learningCode(problem);
+      const uncertain=!code || ["bridge_timeout","request_timeout","daily_result_unknown"].includes(code);
+      status = learningNotice(problem,uncertain?"对照学习结果待确认":"对照学习失败");
       failed = true;
     }
     if (!mounted(current)) return;

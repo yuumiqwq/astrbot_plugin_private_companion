@@ -186,6 +186,7 @@ class LocalModelGateway:
                 require(sources.validate_reference(reference, observed_at=self.tasks.now()))
 
         contract_fallback_used = False
+        insufficient_balance = False
         for provider_position, provider in enumerate(plan.providers):
             provider_envelope = replace(envelope,
                 model_override=envelope.model_override if provider_position == 0 else "",
@@ -293,6 +294,9 @@ class LocalModelGateway:
                 raise TaskError("model_transport_failed", "local provider failed; private details omitted") from error
             usage_known = self.ledger.settle(call_id, provider.binding, response, observed_at=self.tasks.now(),
                                             latency_ms=(perf_counter() - started) * 1000)
+            if (response.status == "not_started" and response.diagnostics is not None
+                    and response.diagnostics.status_code == 402):
+                insufficient_balance = True
             try:
                 with self.runtime.read_snapshot():
                     before_dispatch()
@@ -376,6 +380,8 @@ class LocalModelGateway:
                 if not prefix_committed and failure is ModelFailure.WIRE_DECODE and usage_known:
                     raise ModelOutputError(call_id, *rejected_output)
                 raise TaskError("model_usage_unknown", "provider processing is unknown; no fallback was dispatched")
+        if insufficient_balance:
+            raise TaskError("model_insufficient_balance", "provider rejected the request because the API balance is insufficient")
         raise TaskError("model_not_started", "configured providers confirmed they did not process the request")
 
     def _record_proactive_prompt_snapshot(self, task_id, call_id, provider_id, model_name, messages):

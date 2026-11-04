@@ -553,10 +553,14 @@ class NativeModelTests(NativeFixture, unittest.IsolatedAsyncioTestCase):
             raise Rejected("invalid request")
 
         self.native.provider.client.state.behavior = reject
-        result = await self.native_model.generate(envelope)
-        self.assertEqual(result.status, "not_started")
-        self.assertEqual(result.failure, ModelFailure.TRANSPORT)
-        self.assertEqual(result.usage, Amount(0, 0))
+        for status in (400, 402):
+            with self.subTest(status=status):
+                Rejected.status_code = status
+                result = await self.native_model.generate(envelope)
+                self.assertEqual(result.status, "not_started")
+                self.assertEqual(result.failure, ModelFailure.TRANSPORT)
+                self.assertEqual(result.usage, Amount(0, 0))
+                self.assertEqual(result.diagnostics.status_code, status)
 
     async def test_usage_does_not_require_an_optional_total_or_completion_id(self):
         usage = self.native_model._usage(NS(usage=NS(prompt_tokens=30, completion_tokens=10,

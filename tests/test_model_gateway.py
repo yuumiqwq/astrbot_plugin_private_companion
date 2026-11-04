@@ -20,6 +20,7 @@ from companion_v2.foundation.refs import SourceRef, SubjectKind, SubjectRef, Ver
 from companion_v2.identity_policy.personas import PersonaBinding, PersonaSelector, SelectorKind
 from companion_v2.model_gateway.budget import BudgetLedger
 from companion_v2.model_gateway.failures import ModelFailure
+from companion_v2.model_gateway.response_diagnostics import ResponseDiagnostics
 from companion_v2.model_gateway.models import (Amount, BudgetPolicy, CacheSignature, CapturedModelOutput,
     LocalProvider, ModelTaskProfile, ProviderResponse, is_released)
 from companion_v2.model_gateway.perception import capability_instruction
@@ -100,6 +101,28 @@ class ModelFixture(ExecutionFixture):
 
 
 class ModelGatewayTests(ModelFixture, unittest.IsolatedAsyncioTestCase):
+    async def test_insufficient_balance_preserves_cause_and_releases_reservations(self):
+        self.responses = {name: ProviderResponse("not_started", usage=Amount(0, 0),
+            receipt_ref=name + ":402", failure=ModelFailure.TRANSPORT,
+            diagnostics=ResponseDiagnostics(status_code=402)) for name in ("primary", "fallback")}
+
+        with self.assertRaises(TaskError) as raised:
+            await self.gateway.generate(self.model_run(), self.request())
+
+        self.assertEqual(raised.exception.code, "model_insufficient_balance")
+        self.assertEqual([name for name, _ in self.called], ["primary", "fallback"])
+        self.assertTrue(all(a["spent_tokens"] == a["held_tokens"] == 0 for a in self.accounts()))
+
+    async def test_balance_rejection_can_use_a_healthy_configured_fallback(self):
+        self.responses["primary"] = ProviderResponse("not_started", usage=Amount(0, 0),
+            receipt_ref="primary:402", failure=ModelFailure.TRANSPORT,
+            diagnostics=ResponseDiagnostics(status_code=402))
+
+        result = await self.gateway.generate(self.model_run(), self.request())
+
+        self.assertEqual(result.draft.text, "private draft")
+        self.assertEqual([name for name, _ in self.called], ["primary", "fallback"])
+
     async def test_captured_provider_overrides_and_independent_checks_keep_separate_rounds(self):
         ceiling = Amount(100_000, 1_000_000)
         self.ledger = BudgetLedger(self.runtime, BudgetPolicy(ceiling, ceiling, ceiling, ceiling, ceiling))

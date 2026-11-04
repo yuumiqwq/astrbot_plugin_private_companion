@@ -18,7 +18,7 @@ def definitely_not_sent(error):
     return False
 
 
-_HTTP_REJECTION_STATUSES = frozenset({400, 401, 403, 404, 405, 415, 422})
+_HTTP_REJECTION_STATUSES = frozenset({400, 401, 402, 403, 404, 405, 415, 422})
 
 
 def rejected_before_generation(error):

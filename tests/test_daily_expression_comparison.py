@@ -5,6 +5,9 @@ import unittest
 
 from companion_v2.configuration.management import ExpressionLearningManagement, RoleProfileManagement
 from companion_v2.execution.models import TaskError, encode
+from companion_v2.model_gateway.failures import ModelFailure
+from companion_v2.model_gateway.models import Amount, ProviderResponse
+from companion_v2.model_gateway.response_diagnostics import ResponseDiagnostics
 from companion_v2.expression.configuration import (
     GROUP, PUBLIC_FIELDS, RETIRED_PROFILE_SOURCE_FIELDS, ExpressionConfigurationOwner,
     configuration_fields, read_settings, target_for,
@@ -32,6 +35,23 @@ class ComparisonSource(daily_tests.SharedContext):
 
 
 class DailyExpressionTests(daily_tests.DailyReviewTests):
+    async def test_balance_failure_preserves_the_comparison_cursor_and_rules(self):
+        app, context = await self.comparison_ready(diary=False, plan=False, memory=False)
+
+        async def insufficient(_envelope):
+            return ProviderResponse("not_started", usage=Amount(0, 0), receipt_ref="balance:402",
+                failure=ModelFailure.TRANSPORT, diagnostics=ResponseDiagnostics(status_code=402))
+
+        self.model_behavior = insufficient
+        result = await app.daily_review.run(context, "原角色人格", expression_only=True,
+                                             operation_key="balance-failure")
+
+        self.assertEqual(result["state"], "failed", result)
+        self.assertEqual(result["receipts"]["code"], "model_insufficient_balance")
+        self.assertIsNone(app.runtime.read_one("SELECT value FROM runtime_metadata WHERE key=?",
+                                              (expression.cursor_key(context),)))
+        self.assertEqual(app.runtime.read_one("SELECT COUNT(*) n FROM expression_style_signals", ())["n"], 0)
+
     async def comparison_ready(self, **parts):
         app, context = await self.ready(**parts)
         self.source = ComparisonSource()

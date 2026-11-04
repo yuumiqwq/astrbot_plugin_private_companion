@@ -222,3 +222,88 @@ test("manual comparison and pending rules share one workspace without native sam
   assert.ok(calls.filter(c=>c.method==='GET').every(c=>c.route.endsWith('/style')));
   assert.match(root.innerHTML,/暂无新增回复/);page.unmount();
 });
+
+async function manualComparisonHarness(response, problem) {
+  const calls=[],listeners=new Map();let finish;
+  const settled=new Promise(resolve=>{finish=resolve;});
+  const bridge={
+    apiGet:async(route,query)=>{calls.push({method:"GET",route,query});return {status:"ok",data:{items:[],counts:{pending:0,adopted:0}}};},
+    apiPost:async(route,body)=>{calls.push({method:"POST",route,body});await settled;if(problem)throw problem;return response;},
+  };
+  const root={isConnected:true,innerHTML:"",addEventListener:(name,fn)=>listeners.set(name,fn),removeEventListener:name=>listeners.delete(name)};
+  const window={CompanionProduct:{bridgeNow:()=>bridge,unwrap:value=>value},lucide:{createIcons(){}}};
+  vm.runInContext(source,vm.createContext({window,setTimeout,clearTimeout,Date,Math,Number,Object,Array,String}));
+  const page=window.CompanionExpressionSignalsPage;
+  page.mount(root,{replyApi:`/${HOST}/targets/private/roles/persona/reply`,manual:true,stateFilter:"pending"});
+  for(let n=0;n<20&&page.state.busy;n++)await flush();
+  const click=()=>listeners.get("click")({target:{closest:selector=>selector==="[data-expression-learn]"?{}:null}});
+  click();click();
+  for(let n=0;n<20&&!calls.some(call=>call.method==="POST");n++)await flush();
+  assert.equal(calls.filter(call=>call.method==="POST").length,1);
+  assert.match(root.innerHTML,/学习中/);
+  finish();
+  for(let n=0;n<30&&page.state.busy;n++)await flush();
+  assert.equal(page.state.busy,false);
+  assert.equal(calls.filter(call=>call.method==="POST").length,1);
+  assert.equal(calls.filter(call=>call.method==="GET").length,2);
+  assert.ok(calls.filter(call=>call.method==="GET").every(call=>call.route.endsWith("/style")));
+  assert.ok(calls.filter(call=>call.method==="POST").every(call=>call.route==="setup/daily-diagnostic"));
+  return {page,root,calls};
+}
+
+test("manual comparison shows insufficient DeepSeek balance from result or receipt codes without retries",async()=>{
+  for(const result of [
+    {simulation:false,state:"failed",code:"model_insufficient_balance",stage:"model_generation",error:"redacted"},
+    {simulation:false,state:"failed",receipts:{code:"model_insufficient_balance",stage:"model_generation"}},
+  ]){
+    const h=await manualComparisonHarness({status:"ok",data:result});
+    assert.match(h.root.innerHTML,/对照学习失败/);
+    assert.match(h.root.innerHTML,/DeepSeek API 余额不足，请充值后重试。/);
+    assert.match(h.root.innerHTML,/阶段：模型生成/);
+    assert.match(h.root.innerHTML,/lh-inline-status is-error/);
+    assert.doesNotMatch(h.root.innerHTML,/对照学习完成|对照学习未完成/);
+    h.page.unmount();
+  }
+});
+
+test("manual comparison preserves diagnostic codes and stages from API and thrown exceptions",async()=>{
+  for(const [response,problem] of [
+    [{status:"error",data:{code:"model_insufficient_balance",stage:"model_generation"}},null],
+    [null,Object.assign(new Error("model_insufficient_balance"),{stage:"model_generation"})],
+    [{status:"ok",data:{status:"error",data:{receipts:{code:"future_provider_error",stage:"model_generation"}}}},null],
+  ]){
+    const h=await manualComparisonHarness(response,problem);
+    assert.match(h.root.innerHTML,/对照学习失败/);
+    assert.match(h.root.innerHTML,/阶段：模型生成/);
+    assert.match(h.root.innerHTML,/DeepSeek API 余额不足|错误码：future_provider_error/);
+    assert.doesNotMatch(h.root.innerHTML,/对照学习完成/);
+    h.page.unmount();
+  }
+});
+
+test("manual comparison distinguishes unknown and ongoing results from completion",async()=>{
+  for(const state of ["unknown","running","prepared","received","in_progress"]){
+    const h=await manualComparisonHarness({status:"ok",data:{simulation:false,state,stage:"model_generation"}});
+    assert.match(h.root.innerHTML,state==="unknown"?/对照学习结果待确认/:/对照学习处理中/);
+    assert.match(h.root.innerHTML,/阶段：模型生成/);
+    assert.doesNotMatch(h.root.innerHTML,/对照学习完成|对照学习失败/);
+    assert.equal(/lh-inline-status is-error/.test(h.root.innerHTML),state==="unknown");
+    h.page.unmount();
+  }
+  const h=await manualComparisonHarness(null,Object.assign(new Error("timeout"),{code:"bridge_timeout"}));
+  assert.match(h.root.innerHTML,/对照学习结果待确认/);
+  assert.match(h.root.innerHTML,/页面连接超时/);
+  assert.doesNotMatch(h.root.innerHTML,/对照学习完成/);
+  h.page.unmount();
+});
+
+test("manual comparison accepts complete results with no candidates and validates diagnostic text",async()=>{
+  const h=await manualComparisonHarness({status:"ok",data:{simulation:false,state:"complete",receipts:{expression:{pending_rules:0}}}});
+  assert.match(h.root.innerHTML,/对照学习完成，未生成新候选。/);
+  assert.doesNotMatch(h.root.innerHTML,/lh-inline-status is-error|对照学习失败/);
+  h.page.unmount();
+  const unsafe=await manualComparisonHarness({status:"ok",data:{simulation:false,state:"failed",code:'<script>alert(1)</script>',stage:'secret key with spaces',error:'sk-sensitive-token'}});
+  assert.match(unsafe.root.innerHTML,/对照学习失败/);
+  assert.doesNotMatch(unsafe.root.innerHTML,/script|sensitive-token|secret key/);
+  unsafe.page.unmount();
+});

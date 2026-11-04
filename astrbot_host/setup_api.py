@@ -1137,8 +1137,16 @@ class SetupWebAPI:
                 if learning and data["simulation"] is False:
                     result = await session.application.daily_review.run(context, instruction,
                         expression_only=True, operation_key=data.get("operation_key"))
+                    receipts = result.get("receipts") or {}
+                    code = result.get("code") or receipts.get("code")
+                    failure = {}
+                    if code:
+                        failure = {"code": code, "stage": "model_generation" if code.startswith("model_")
+                                   else "output_validation"}
+                        if code == "model_insufficient_balance":
+                            failure["error"] = "DeepSeek API 余额不足，请充值后重试。"
                     return self._response(Outcome.success({**result, "simulation": False,
-                        "delivery_state": "not_requested"}))
+                        "delivery_state": "not_requested", **failure}))
                 from companion_v2.role_work.daily.simulation import simulate_daily_review
                 result = await simulate_daily_review(session.application, context, instruction,
                                                      attempt_id=uuid4().hex, expression_only=learning)
