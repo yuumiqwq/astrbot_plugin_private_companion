@@ -487,67 +487,29 @@ test('automatic collection status is visible without exposing event or asset ide
   assert.doesNotMatch(node.innerHTML, /private-material-id/);
 });
 
-test('learning semantic catalog loads group slang and reaction entries and saves its settings', async () => {
-  const {page, requests, root} = harness(true);
-  const node = root();
-  page.mount(node, {view: 'learning'});
-  assert.deepEqual(requests.map(request => request.values.kind), ['slang', 'reaction']);
-  const slang = {...settingsCatalog(), items: [{id: 'slang-1', kind: 'slang', revision: 2,
-    enabled: true, vector_ready: true, source_valid: true,
-    payload: {term: '小灯', meaning: '提醒喝水', usage: '群内昵称', collection_source: 'group_capture'}}]};
-  const reactions = {...settingsCatalog(), items: [{id: 'reaction-1', kind: 'reaction', revision: 3,
-    enabled: false, vector_ready: false, thumbnail_url: 'data:image/jpeg;base64,AA==',
-    payload: {name: '挥手', description: '挥手告别'}}]};
-  requests[0].resolve(slang);
-  requests[1].resolve(reactions);
-  await flush();
-  assert.match(node.innerHTML, /小灯/);
-  assert.match(node.innerHTML, /挥手/);
-  assert.match(node.innerHTML, /<img src="data:image\/jpeg;base64,AA==" alt="" loading="lazy">/);
-  assert.match(node.innerHTML, /语义目录与提供方/);
-  assert.match(node.innerHTML, /语义记忆与群聊黑话/);
-  assert.match(node.innerHTML, /语义反应素材/);
-  assert.match(node.innerHTML, /向量就绪/);
-  assert.match(node.innerHTML, /semantic-learning-links/);
-
-  node.submit('semanticSettings', {enabled: true, vision_review: false, memory_enabled: false,
-    slang_enabled: true, slang_learning: false, slang_web_search_enabled: true,
-    embedding_provider: 'embed-a', rerank_provider: '', analysis_provider: '',
-    timeout_seconds: 12, batch_size: 32, learning_interval_seconds: 30,
-    slang_web_search_candidates: 6, slang_web_search_results: 3});
-  assert.equal(requests[2].method, 'POST');
-  assert.equal(requests[2].values.action, 'configure');
-  assert.equal(requests[2].values.changes.memory_enabled, false);
-  assert.equal(requests[2].values.changes.slang_learning, false);
-  assert.equal(requests[2].values.changes.embedding_provider, 'embed-a');
-  assert.equal(requests[2].values.changes.timeout_seconds, 12);
-  assert.equal(requests[2].values.changes.learning_interval_seconds, 1800);
-  assert.equal(requests[2].values.changes.reactions_trigger_probability, 0.2,
-    'settings hidden in this view remain preserved in the full configuration patch');
+test('group slang has its own catalog and preserves memory and reaction settings', async () => {
+  const {page,requests,root}=harness(true),node=root();
+  page.mount(node,{view:'slang'});assert.deepEqual(requests.map(x=>x.values.kind),['slang']);
+  requests[0].resolve({...settingsCatalog(),items:[{id:'slang-1',kind:'slang',revision:2,enabled:true,vector_ready:true,payload:{term:'小灯',meaning:'提醒喝水'}}]});
+  await flush();assert.match(node.innerHTML,/小灯/);assert.match(node.innerHTML,/黑话自动学习/);
+  assert.doesNotMatch(node.innerHTML,/语义记忆检索|向量模型（嵌入）|候选重排|语义反应素材|semanticFile/);
+  node.submit('semanticSettings',{slang_enabled:true,slang_learning:false,slang_web_search_enabled:true,analysis_provider:'analysis-a',timeout_seconds:12,learning_interval_seconds:30,slang_web_search_candidates:6,slang_web_search_results:3});
+  assert.equal(requests[1].values.changes.slang_learning,false);assert.equal(requests[1].values.changes.learning_interval_seconds,1800);
+  assert.equal(requests[1].values.changes.memory_enabled,true);assert.equal(requests[1].values.changes.reactions_trigger_probability,0.2);
+  assert.equal(requests[1].values.changes.embedding_provider,'');page.unmount();
 });
 
-test('global learning settings read and save without a chat target', async () => {
-  const {page, requests, root} = harness();
-  const node = root();
-  page.mount(node, {view:'learning', globalSettingsOnly:true, scopeKey:'global-semantic-settings'});
-  assert.equal(requests[0].method, 'GET');
-  assert.equal(requests[0].values.global, true);
-  assert.equal(requests[0].values.target_id, undefined);
-  assert.equal(requests[0].values.role_id, undefined);
-  requests[0].resolve({...settingsCatalog(), selection_ready:false, scope_kind:'global'});
-  await flush();
-  assert.match(node.innerHTML, /全局语义策略/);
-  assert.doesNotMatch(node.innerHTML, /semantic-learning-catalog|重建当前索引/);
-  node.submit('semanticSettings', {...FORM, learning_interval_seconds:30});
-  assert.equal(requests[1].method, 'POST');
-  assert.equal(requests[1].values.global, true);
-  assert.equal(requests[1].values.target_id, undefined);
-  assert.equal(requests[1].values.role_id, undefined);
-  requests[1].resolve({});
-  await flush();
-  assert.equal(requests[2].method, 'GET');
-  assert.equal(requests[2].values.global, true);
-  page.unmount();
+test('memory semantic settings are global and do not expose group or collection learning', async () => {
+  const {page,requests,root}=harness(),node=root();
+  page.mount(node,{view:'memory',globalSettingsOnly:true,scopeKey:'global-semantic-memory'});
+  assert.equal(requests[0].values.global,true);assert.equal(requests[0].values.target_id,undefined);
+  requests[0].resolve({...settingsCatalog(),selection_ready:false,items:[],sessions:[]});await flush();
+  assert.match(node.innerHTML,/语义记忆检索/);assert.match(node.innerHTML,/向量模型（嵌入）/);assert.match(node.innerHTML,/候选重排/);
+  assert.doesNotMatch(node.innerHTML,/群聊黑话|自动学习|群词义整理间隔|视觉与词义分析|semantic-learning-catalog|重建当前索引/);
+  node.submit('semanticSettings',{enabled:true,memory_enabled:false,embedding_provider:'embed-a',rerank_provider:'rerank-a',timeout_seconds:15,batch_size:30});
+  assert.equal(requests[1].values.global,true);assert.equal(requests[1].values.changes.memory_enabled,false);
+  assert.equal(requests[1].values.changes.embedding_provider,'embed-a');assert.equal(requests[1].values.changes.rerank_provider,'rerank-a');
+  assert.equal(requests[1].values.changes.slang_learning,true);assert.equal(requests[1].values.changes.learning_interval_seconds,21600);page.unmount();
 });
 
 test('learning semantic layout uses theme tokens and collapses cleanly on narrow screens', () => {

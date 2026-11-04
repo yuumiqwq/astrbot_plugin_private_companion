@@ -21,6 +21,7 @@ from companion_v2.conversation.media.reply import ImageReplyDraft
 from companion_v2.execution.models import TaskError
 from companion_v2.model_gateway.embedding import EmbeddingGateway, unit
 from companion_v2.proactive.external_materials import NewsItem, ParseBatch
+from companion_v2.proactive.news_context import UNAVAILABLE_INSTRUCTION
 from companion_v2.storage.semantic import SemanticStore
 from tests.test_host_application import HostFixture
 from tests.test_role_tool_loop import requested, answered, call
@@ -398,7 +399,7 @@ class SemanticConversationTests(HostFixture, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(port.calls, 1)
         envelope = self.called[-1].original
         self.assertNotIn("conversation.news", {item.owner for item in envelope.context.materials})
-        self.assertIn("没有取得可验证的近期来源材料", envelope.instruction)
+        self.assertIn(UNAVAILABLE_INSTRUCTION, envelope.instruction)
         context = self.context(app, batch)
         preferences = app.proactive.preferences.read(context, observed_at=self.clock.now()).unwrap()
         self.assertEqual(app.contact_schedule.news_events.diagnostic(context, preferences)["network_status"], "succeeded")

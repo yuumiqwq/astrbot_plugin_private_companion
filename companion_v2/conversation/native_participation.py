@@ -14,7 +14,7 @@ from .participation_prompts import group_hints, interjection_instruction, observ
 from .reply_settings import group_safety_settings, group_wakeup_settings
 
 
-AUTONOMOUS_REASONS = frozenset({"interjection", "repeat", "interest", "context_word", "image_interest", "cold_group", "behavior"})
+AUTONOMOUS_REASONS = frozenset({"interjection", "repeat", "interest", "context_word", "image_interest", "cold_group"})
 
 
 def _act(turn):
@@ -105,7 +105,6 @@ def native_participation_turn(participation, context, native_input, settings):
     if values["enable_group_repeat_follow"]:
         hints += ("\n群聊复读有独立的跟读和打断动作，由系统按管理员配置直接发送。"
                   "本轮是普通会话，按当前发言意图回应；不要借可见的复读内容扩展话题、解释其中的事实或自行启动复读动作。")
-    hints += participation.behavior.instruction(context, native_input)
     act = INTERJECTION if facts["enabled"] and facts["initiative"] else ""
     return {"instruction": INSTRUCTION + hints
                 + speaker_history_instruction(recent_visible, context.actor.principal.native_account_id)

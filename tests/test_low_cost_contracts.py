@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -9,8 +9,6 @@ from companion_v2.integration.nai_image import map_nai_request
 from companion_v2.knowledge.parsing import parse_knowledge_rows, parse_worldbook
 from companion_v2.model_gateway.replacement_rules import build_rules, match_route
 from companion_v2.proactive.external_materials import parse_news_response, parse_weather_response
-from companion_v2.role_work.journal.self_review import INSTRUCTION as REVIEW_INSTRUCTION
-from companion_v2.role_work.journal.self_review import parse_output as parse_review
 
 
 def test_worldbook_and_knowledge_parsers_keep_valid_rows_and_report_bad_rows() -> None:
@@ -120,28 +118,6 @@ def test_expression_learning_and_content_drafts_require_known_evidence() -> None
     assert (draft.title, draft.work_type, draft.body) == ("合成标题", "短篇", "合成正文")
 
 
-def test_self_review_is_expiring_evidence_bound_guidance() -> None:
-    now = datetime(2026, 9, 26, 12, tzinfo=timezone.utc)
-    output = parse_review({
-        "summary": "本轮有一项表达不确定性的改进机会",
-        "guidance": [{
-            "kind": "try_next_time",
-            "observation": "一次回答没有说明来源仍待核对",
-            "next_action": "遇到未知结果时明确标注待核对",
-            "confidence": 0.8,
-            "evidence_handles": ["turn-1"],
-            "expires_at": (now + timedelta(days=1)).isoformat(),
-        }],
-    }, allowed_evidence={"turn-1"}, now=now)
-    assert output.guidance[0].expires_at > now
-    assert "待审候选" in REVIEW_INSTRUCTION
-    with pytest.raises(ValueError, match="invalid_expiry"):
-        parse_review({
-            "summary": "", "guidance": [{
-                "kind": "keep", "observation": "x", "next_action": "y", "confidence": 1,
-                "evidence_handles": ["turn-1"], "expires_at": now.isoformat(),
-            }],
-        }, allowed_evidence={"turn-1"}, now=now)
 
 
 def test_nai_mapping_is_deterministic_and_rejects_unsupported_values() -> None:

@@ -1,14 +1,8 @@
-"""Background expression learning from messages in one exact conversation.
+"""Compatibility helpers for expression rules recorded by earlier versions.
 
-A run reads authorized inbound text from one private relationship or one group
-and asks the bound role model for reusable expression patterns. The result is a
-candidate set: nothing changes until an operator adopts an individual signal.
-Adopted signals are reversible and are never treated as conclusions about
-identity, personality, facts or stable preference.
-
-The window, batch size, minimum sample count, per-sample length and scan
-interval come from the registered ``expression.learning`` settings, so a
-distribution that starved one conversation no longer needs a code change.
+Current learning is manual approved-preset comparison in ``role_work.daily``.
+The former inbound sampler registers no tasks and its entry points never sample
+or generate new rules. Stored rule review and application remain independent.
 """
 
 from __future__ import annotations
@@ -18,23 +12,15 @@ from datetime import datetime, timedelta
 import json
 from logging import getLogger
 
-from companion_v2.conversation.foreground import (BackgroundPromptTrigger, PromptMaterial, PromptRequest,
-    SealedForegroundContext)
-from companion_v2.execution.models import (Lane, ProviderBinding, SideEffect, TaskContext, TaskDefinition,
-    TaskError, TaskRegistration, TaskResult, TaskSpec, digest, encode, require, stamp)
-from companion_v2.execution.runner import ExactTaskRunner
+from companion_v2.execution.models import (Lane, TaskContext, TaskError, digest, encode, stamp)
 from companion_v2.execution.service import outcome
-from companion_v2.foundation.refs import OperationRef, ScopeKind, VersionRef
+from companion_v2.foundation.refs import ScopeKind
 from companion_v2.model_gateway.models import ModelTaskProfile
 from companion_v2.storage.models import OperationState
 from companion_v2.storage.repositories import OperationRepository
 
 from . import learning
-from . import rule_details
-from . import rule_support
-from .configuration import (application_subject_allowed_for_context, read_settings,
-                            source_subject_allowed_for_context)
-from .style_evidence import INPUT_SAMPLE_SOURCE, MAX_WINDOW_HOURS, sample_document, sample_handles
+from .configuration import (read_settings)
 
 logger = getLogger(__name__)
 
@@ -93,17 +79,13 @@ class ExpressionStyleService:
         self._next_discovery_at = None
         self.cursor = 0
         self.closed = False
-        self.registrations = (TaskRegistration(TaskDefinition(KIND, OWNER, "role.expression.read",
-            Lane.BACKGROUND, side_effect=SideEffect.LOCAL, binding=ProviderBinding(OWNER, "local", "1", "style-1"),
-            timeout_seconds=LEARN_BUDGET_SECONDS, max_attempts=1, concurrency=1), self.validate),)
+        self.registrations = ()
 
     def attach(self, app):
         self.app, self.tasks, self.gateway = app, app.tasks, app.gateway
         if app.expression_samples is None:
             raise TaskError("expression_owner_unavailable", "the conversation owner is not attached")
         self.samples = app.expression_samples
-        self.runner = ExactTaskRunner(self.tasks, frozenset({KIND}), self.generate,
-                                      waiting=app.background_waiting)
 
     @staticmethod
     def identifier(context, operation_id):
@@ -212,237 +194,22 @@ class ExpressionStyleService:
             await check(context.scope, context.role_binding, instruction)
 
     def prepare(self, context, instruction, at):
-        self.app.require_running()
-        self._bound(context, instruction)
-        policy = self._policy(context, at)
-        if (context.scope.kind is ScopeKind.PRIVATE and not policy.private_learning_enabled
-                or context.scope.kind is ScopeKind.GROUP and not policy.group_learning_enabled):
-            self.results[self._work_key(context)] = {"state": "learning_disabled"}
-            return None
-        if (context.scope.kind is ScopeKind.PRIVATE
-                and not source_subject_allowed_for_context(self.runtime, context)):
-            self.results[self._work_key(context)] = {"state": "source_not_selected"}
-            return None
-        if self._active_signal_count(context) >= policy.active_signal_limit:
-            self.results[self._work_key(context)] = {"state": "capacity_reached", "limit": policy.active_signal_limit}
-            return None
-        progress = self._progress(context)
-        latest_sequence = progress["input_sequence"]
-        if context.scope.kind is ScopeKind.GROUP:
-            if self._global_group_batches(self._day(at)) >= policy.group_daily_batch_limit:
-                self.results[self._work_key(context)] = {"state": "daily_budget_reached"}
-                return None
-            count, latest_sequence = self.samples.new_inputs(context, at,
-                after_sequence=progress["input_sequence"], window_hours=policy.window_hours,
-                member_ids=policy.selected_members)
-            if count < policy.group_new_messages:
-                self.results[self._work_key(context)] = {"state": "waiting_for_new_messages", "new_messages": count,
-                                            "required": policy.group_new_messages}
-                return None
-        samples = self.samples.collect(context, at, window_hours=min(policy.window_hours, MAX_WINDOW_HOURS),
-                                       sample_limit=policy.sample_limit, sample_chars=policy.sample_chars,
-                                       source_kind=INPUT_SAMPLE_SOURCE,
-                                       member_ids=policy.selected_members if context.scope.kind is ScopeKind.GROUP else None,
-                                       review_enabled=policy.sample_review_enabled)
-        minimum = policy.group_min_samples if context.scope.kind is ScopeKind.GROUP else policy.min_samples
-        if len(samples.samples) < minimum:
-            self.results[self._work_key(context)] = {"state": "waiting_for_sample_review" if policy.sample_review_enabled else "insufficient_samples",
-                                        "available": len(samples.samples), "required": minimum}
-            return None
-        owner_key, scope_key = digest(self.samples.role_owner(context)), digest(context.scope)
-        existing_rows = self.runtime.read_all("""SELECT signal_id, dimension, observation, proposal, applicability_json, state
-            FROM expression_style_signals WHERE owner_key = ? AND scope_key = ?
-              ORDER BY created_at DESC, signal_id LIMIT 80""",
-            (owner_key, scope_key))
-        existing_rules = tuple({"signal_id": row["signal_id"],
-                                "dimension": row["dimension"], "observation": row["observation"][:800],
-                                "proposal": row["proposal"][:1200],
-                                "expression": rule_details.form_for(self.runtime, row),
-                                "applicability": learning.normalize_applicability(
-                                    json.loads(row["applicability_json"])), "state": row["state"]}
-                               for row in existing_rows)
-        return {"context": context, "instruction": instruction, "at": at, "policy": policy,
-                "samples": samples, "material_hash": samples.material_hash,
-                "catalogue": self.samples.catalogue(samples), "sample_context_key": context.key,
-                "sample_document": sample_document(samples), "existing_rules": existing_rules,
-                "latest_sequence": latest_sequence}
+        """Legacy inbound sampling has been replaced by approved preset comparison."""
+        self.results[context.key] = {"state": "preset_learning_required"}
+        return None
 
     @outcome
     def validate(self, spec, at):
-        self.app.require_running()
-        job = self.pending.get(spec.task_id)
-        if job is None or job["context"] != spec.context or job["request_key"] != spec.request_ref:
-            raise TaskError("expression_job_unavailable", "original style inputs are unavailable")
-        self._bound(spec.context, job["instruction"])
-        policy = self._policy(spec.context, at)
-        if (spec.context.scope.kind is ScopeKind.GROUP and not policy.group_learning_enabled
-                or spec.context.scope.kind is ScopeKind.PRIVATE and not policy.private_learning_enabled):
-            raise TaskError("expression_learning_disabled", "learning was disabled for this window")
-        if (spec.context.scope.kind is ScopeKind.PRIVATE
-                and not source_subject_allowed_for_context(self.runtime, spec.context)):
-            raise TaskError("expression_learning_disabled", "this relationship is no longer a selected source")
-        samples = job["samples"]
-        texts = self.samples.describe_handles([item.handle for item in samples.samples],
-            samples.opened_at, samples.closed_at, spec.context, at, source_kind=INPUT_SAMPLE_SOURCE)
-        from .style_evidence import SampleSet, StyleSample
-        rechecked = SampleSet(samples.opened_at, samples.closed_at,
-            tuple(StyleSample(item.handle, text.strip()[:job["policy"].sample_chars])
-                  for item, text in zip(samples.samples, texts)), INPUT_SAMPLE_SOURCE)
-        if rechecked.material_hash != job["material_hash"] or any(not self.samples.reviews.eligible(
-                spec.context, item, review_enabled=policy.sample_review_enabled) for item in samples.samples):
-            raise TaskError("expression_sample_changed", "sampled writing changed or was withdrawn")
-        if spec.context.scope.kind is ScopeKind.GROUP and policy.selected_members is not None and any(
-                item.sender_id not in policy.selected_members for item in samples.samples):
-            raise TaskError("expression_sample_changed", "selected learning members changed")
-        return True
+        raise TaskError("expression_preset_learning_required",
+                        "use manual comparison with approved persona presets")
 
     async def run(self, context, instruction):
-        if self.closed:
-            raise TaskError("expression_closed", "style worker is stopped")
-        if KIND not in self.gateway.router.profiles:
-            raise TaskError("model_task_unregistered", "style learning needs its background profile")
-        await self.guard(context, instruction)
-        job = self.prepare(context, instruction, self.tasks.now())
-        if job is None:
-            return self.results.get(self._work_key(context), {"state": "insufficient_samples"})
-        work_key = self._work_key(context)
-        request_key = digest([work_key, job["material_hash"], job["policy"].learning_mode])
-        identifier = self.identifier(context, request_key)
-        previous = self.operations.get(identifier)
-        if previous.is_success:
-            self._note_skipped(identifier, job, previous.value)
-            self.results[work_key] = {"state": "already_attempted", "task_id": identifier}
-            return self.results[work_key]
-        with self.runtime.transaction():
-            reservation = require(self.operations.reserve(OperationRef(identifier, OWNER, context.scope,
-                VersionRef(identifier, 1), identifier),
-                parameter_hash=digest([work_key, request_key]), observed_at=job["at"]))
-            if reservation.replayed:
-                self._note_skipped(identifier, job, reservation.value)
-                self.results[work_key] = {"state": "already_attempted", "task_id": identifier}
-                return self.results[work_key]
-            if context.scope.kind is ScopeKind.GROUP:
-                self._reserve_group_batch(context, job["policy"], job["at"], job["latest_sequence"])
-            self.pending[identifier] = {**job, "request_key": request_key}
-            try:
-                require(self.tasks.submit(TaskSpec(identifier, context, KIND, request_key, identifier,
-                    job["at"], job["at"] + timedelta(seconds=LEARN_BUDGET_SECONDS))))
-            except BaseException:
-                self.pending.pop(identifier, None)
-                raise
-        try:
-            result = require(await self.runner.run(context, identifier))
-            report = {"state": result.task.state, "task_id": identifier, "code": result.task.reason}
-            if result.failure_code:
-                # ``task.reason`` is the supervisor's stop reason (``worker_error``),
-                # which hides the cause the owner produced. A round cut at its own
-                # budget is ``model_timeout``, and that is what the last result has
-                # to say: the material batch is not retried after it.
-                report["code"] = result.failure_code
-            self.results[work_key] = report
-            return report
-        finally:
-            self.pending.pop(identifier, None)
-            self.committed.discard(identifier)
+        raise TaskError("expression_preset_learning_required",
+                        "use manual comparison with approved persona presets")
 
     async def generate(self, run):
-        job = self.pending[run.task.task_id]
-        context = job["context"]
-        await self.guard(context, job["instruction"])
-        run.validate()
-        mode = job["policy"].learning_mode
-        # The ceiling this run executes under is the registered profile's ceiling.
-        # Size the ask from it so a thinking model keeps the rest for its reasoning.
-        limit = learning.signal_limit(mode, self.gateway.router.profiles[KIND].max_output_tokens)
-        material = {"sample_window": job["sample_document"], "source_channel": context.scope.kind.value,
-                    "samples": job["catalogue"],
-                    "existing_rules": job["existing_rules"], "output_schema": learning.schema(limit)}
-        request = PromptRequest(BackgroundPromptTrigger(job["request_key"], context.actor.principal,
-            context.scope, job["at"]), job["instruction"], SealedForegroundContext(
-                (PromptMaterial(OWNER, "role_expression_samples", encode(material)),), (), ()),
-            learning_instruction(mode, limit),
-            context.role_binding, output_format="role_expression_learning")
-        completion = await self.gateway.generate(run, request)
-        try:
-            if completion.draft is None:
-                raise TaskError("expression_output_invalid", "style learning needs a complete response")
-            output = parse_output(completion.draft.text,
-                allowed_evidence=sample_handles(job["samples"]),
-                default_channels=(context.scope.kind.value,))
-            await self.guard(context, job["instruction"])
-            with self.runtime.transaction() as connection:
-                run.validate()
-                run.begin_effect()
-                owner_key = digest(self.samples.role_owner(context))
-                active_count = connection.execute("""SELECT COUNT(*) FROM expression_style_signals
-                    WHERE owner_key = ? AND scope_key = ? AND state IN ('pending', 'adopted')""",
-                    (owner_key, digest(context.scope))).fetchone()[0]
-                remaining = max(0, self._policy(context, self.tasks.now()).active_signal_limit - active_count)
-                existing_rows = connection.execute("""SELECT s.signal_id, s.dimension, s.observation, s.proposal,
-                        s.applicability_json, s.evidence_json, s.state, r.sample_json
-                    FROM expression_style_signals s JOIN expression_style_runs r ON r.run_id = s.run_id
-                    WHERE s.owner_key = ? AND s.scope_key = ? ORDER BY s.created_at DESC""",
-                    (owner_key, digest(context.scope))).fetchall()
-                signatures = {learning.candidate_signature(row["dimension"], row["observation"], row["proposal"],
-                    learning.normalize_applicability(json.loads(row["applicability_json"])),
-                    rule_details.form_for(self.runtime, row))
-                              for row in existing_rows}
-                forms = {}
-                for row in existing_rows:
-                    identity = learning.form_identity(rule_details.form_for(self.runtime, row))
-                    if identity is not None and (identity not in forms or row["state"] in ("pending", "adopted")):
-                        forms[identity] = row
-                accepted_signals = []
-                for item in output.signals:
-                    signature = learning.candidate_signature(item.dimension, item.observation, item.proposal,
-                                                             item.applicability, item.expression)
-                    identity = learning.form_identity(item.expression)
-                    if identity is not None and identity in forms:
-                        prior = forms[identity]
-                        if prior is not None and prior["state"] in ("pending", "adopted") and json.loads(prior["sample_json"]).get(
-                                "source_kind") == INPUT_SAMPLE_SOURCE:
-                            rule_support.record(self.runtime, prior["signal_id"],
-                                window={**job["sample_document"], "context_key": job["sample_context_key"]},
-                                handles=item.evidence_handles,
-                                original_handles=json.loads(prior["evidence_json"]))
-                        continue
-                    if signature in signatures:
-                        continue
-                    signatures.add(signature)
-                    if identity is not None:
-                        forms[identity] = None
-                    if len(accepted_signals) < remaining:
-                        accepted_signals.append(item)
-                run_id = "expression-run:" + digest([context.key, job["request_key"]])
-                at = stamp(self.tasks.now())
-                connection.execute("""INSERT INTO expression_style_runs VALUES
-                    (?, ?, ?, ?, ?, ?, 'pending', ?, NULL)""",
-                    (run_id, owner_key, digest(context.scope),
-                     encode({**job["sample_document"], "context_key": job["sample_context_key"]}),
-                     job["material_hash"], output.summary, at))
-                for ordinal, item in enumerate(accepted_signals):
-                    connection.execute("""INSERT INTO expression_style_signals
-                        (signal_id, run_id, owner_key, scope_key, dimension, observation, proposal,
-                         applicability_json, confidence, evidence_json, state, created_at, decided_at,
-                         decided_by, decision_key, ordinal)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL, NULL, NULL, ?)""",
-                        (run_id + ":signal:" + str(ordinal), run_id, owner_key, digest(context.scope),
-                         item.dimension, item.observation, item.proposal, encode(item.applicability),
-                         item.confidence, encode(sorted(item.evidence_handles)), at, ordinal))
-                    if item.expression is not None:
-                        rule_details.write(self.runtime, run_id + ":signal:" + str(ordinal), item.expression,
-                            at=self.tasks.now(), actor="learning_model", operation_key=run_id)
-                require(self.operations.transition(run.task.task_id, expected_state=OperationState.ACCEPTED,
-                    next_state=OperationState.COMPLETED, observed_at=self.tasks.now()))
-                self.committed.add(run.task.task_id)
-                run.record_operation(run.task.task_id)
-            self.app.notify()
-            return TaskResult("succeeded", effect="committed", result_ref=run_id,
-                receipt_ref=run.task.task_id, operation_id=run.task.task_id)
-        except BaseException:
-            if run.task.task_id not in self.committed:
-                self.gateway.ledger.discard(completion.call_id)
-            raise
+        raise TaskError("expression_preset_learning_required",
+                        "use manual comparison with approved persona presets")
 
     def _cursor(self, context):
         key = CURSOR_PREFIX + digest([self.samples.role_owner(context), context.scope])
@@ -529,23 +296,6 @@ class ExpressionStyleService:
                 (self._progress_key(context), encode({"day": day, "batches": count + 1,
                                                      "input_sequence": latest_sequence, "sequence_basis": "source_row"})))
 
-    def status(self, context):
-        at = self.tasks.now()
-        policy = self._policy(context, at)
-        progress = self._progress(context)
-        group = context.scope.kind is ScopeKind.GROUP
-        count = self._global_group_batches(self._day(at)) if group else 0
-        worker = self.workers.get(self._work_key(context))
-        new_messages = self.samples.new_inputs(context, at, after_sequence=progress["input_sequence"],
-            window_hours=policy.window_hours, member_ids=policy.selected_members)[0] if group else None
-        return {"last_result": self.results.get(self._work_key(context)), "running": worker is not None and not worker.done(),
-                "learning_enabled": policy.group_learning_enabled if group else policy.private_learning_enabled,
-                "application_enabled": policy.applies_to(context) and (group or
-                    application_subject_allowed_for_context(self.runtime, context)),
-                "learning_mode": policy.learning_mode,
-                "minimum_samples": policy.group_min_samples if group else policy.min_samples,
-                "group_batches_today": count, "group_daily_batch_limit": policy.group_daily_batch_limit,
-                "new_messages": new_messages, "required_new_messages": policy.group_new_messages if group else None}
 
     def due(self, context, at, *, scan_minutes=None):
         _, closed_at = self._cursor(context)
@@ -608,122 +358,22 @@ class ExpressionStyleService:
         return True
 
     def start(self, context, instruction):
-        if self.closed or KIND not in self.gateway.router.profiles:
-            raise TaskError("model_task_unregistered", "expression learning model is unavailable")
-        worker = self.workers.get(self._work_key(context))
-        if worker is not None and not worker.done():
-            return {"state": "running"}
-        at = self.tasks.now()
-        if self.prepare(context, instruction, at) is None:
-            return self.results.get(self._work_key(context), {"state": "insufficient_samples"})
-        key, _ = self._cursor(context)
-        self._advance_cursor(key, at)
-        self.workers[self._work_key(context)] = asyncio.create_task(self.run(context, instruction),
-                                                       name="companion:expression-learn")
-        self.workers[self._work_key(context)].add_done_callback(lambda done: self.app.notify())
-        self.app.notify()
-        return {"state": "queued"}
+        raise TaskError("expression_preset_learning_required",
+                        "use manual comparison with approved persona presets")
 
     def status(self, context):
-        """Read-only view of why this exact window is or is not learning.
-
-        The page otherwise only has counts: a window stuck on
-        ``source_not_selected``/``insufficient_samples``/``capacity_reached``
-        looks identical to one that never ran. Everything here is bounded and
-        derives from the same policy the scheduler uses.
-        """
-        at = self.tasks.now()
-        work_key = self._work_key(context)
-        state = dict(self.results.get(work_key) or {})
-        policy = self._policy(context, at)
-        group = context.scope.kind is ScopeKind.GROUP
-        try:
-            _, closed_at = self._cursor(context)
-        except TaskError:
-            closed_at = None
-        worker = self.workers.get(work_key)
-        scan_minutes = policy.group_scan_interval_minutes if group else policy.scan_interval_minutes
-        try:
-            due = self.due(context, at, scan_minutes=scan_minutes)
-        except TaskError:
-            due = False
-        return {
-            "state": state.get("state", "not_run"),
-            "code": state.get("code"),
-            "available": state.get("available"),
-            "required": state.get("required"),
-            "active": self._active_signal_count(context),
-            "limit": policy.active_signal_limit,
-            "last_run_at": stamp(closed_at) if closed_at is not None else None,
-            "due": due,
-            "worker": bool(worker is not None and not worker.done()),
-            "learning_enabled": policy.group_learning_enabled if group else policy.private_learning_enabled,
-            "sample_review_enabled": policy.sample_review_enabled,
-        }
+        """Report the manual preset workflow without inspecting raw samples."""
+        policy = self._policy(context, self.tasks.now())
+        return {"state": "manual_only", "source_kind": "preset_comparison",
+                "manual_only": True, "due": False, "worker": False, "running": False,
+                "learning_enabled": policy.enabled,
+                "application_enabled": policy.applies_to(context),
+                "active": self._active_signal_count(context),
+                "limit": policy.active_signal_limit}
 
     def advance(self):
-        if self.closed:
-            return
-        for key, worker in tuple(self.workers.items()):
-            if worker.done():
-                del self.workers[key]
-                if not worker.cancelled():
-                    error = worker.exception()
-                    if error:
-                        self.results[key] = {"state": "failed",
-                                             "code": getattr(error, "code", "expression_learn_failed")}
-        if self.workers or KIND not in self.gateway.router.profiles:
-            return
-        at = self.tasks.now()
-        # Discovery reads all authorized source windows, before the per-window
-        # scan gate. Delivery receipts must not repeat that work for every part.
-        if self._next_discovery_at is not None and at < self._next_discovery_at:
-            return
-        self._next_discovery_at = at + timedelta(seconds=60)
-        bindings = tuple(self.app.state_maintenance.bindings.values())
-        group_contexts = self._group_candidates(at)
-        if not bindings and not group_contexts:
-            self.next_checks.clear()
-            return
-        scanned_private = set()
-        for _ in range(min(16, len(bindings))):
-            context, instruction, _ = bindings[self.cursor % len(bindings)]
-            self.cursor += 1
-            at = self.tasks.now()
-            if context.scope.kind is not ScopeKind.PRIVATE:
-                continue
-            try:
-                from .private_scope import role_private_contexts
-                candidates = role_private_contexts(self.runtime, self.tasks.identity,
-                    self.samples.messages, context, at)
-                # The live binding is authoritative. Private-scope discovery can
-                # legitimately return nothing (identity bindings were rebuilt or
-                # the stored observation is gone); skipping the bound window would
-                # then disable automatic learning forever while the page still
-                # shows an empty rule library.
-                if not candidates:
-                    candidates = (context,)
-                for candidate in candidates:
-                    if candidate.key in scanned_private:
-                        continue
-                    scanned_private.add(candidate.key)
-                    source_instruction = (instruction if candidate.key == context.key
-                                          else self._private_instruction(candidate))
-                    if source_instruction and self._scan(candidate, source_instruction, at):
-                        return
-            except TaskError as error:
-                self.results[self._work_key(context)] = {"state": "blocked", "code": error.code}
-        # Group learning is opt-in per group and runs after the private queue.
-        for context in group_contexts:
-            at = self.tasks.now()
-            try:
-                instruction = self._group_instruction(context, at)
-                if instruction is None:
-                    continue
-                if self._scan(context, instruction, at):
-                    return
-            except TaskError as error:
-                self.results[self._work_key(context)] = {"state": "blocked", "code": error.code}
+        """Inbound conversation text is never scheduled as a style target."""
+        return
 
     def _group_instruction(self, context, at):
         """A group run needs its own switch and the exact current role prompt."""
@@ -758,12 +408,10 @@ class ExpressionStyleService:
 
     @property
     def active_handles(self):
-        return self.runner.active_handles + tuple("expression-learn:" + key for key, worker in
-            self.workers.items() if not worker.done())
+        return ()
 
     async def close(self):
         self.closed = True
         self.cancel_running()
-        await self.runner.close()
         if self.workers:
             await asyncio.wait(tuple(self.workers.values()), timeout=0.25)

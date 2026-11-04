@@ -5,8 +5,8 @@ window.CompanionMigrationConfigReview = (() => {
     models: {title: "模型任务设置", location: "模型与连接 → 功能任务", mount: "models"},
     news: {title: "资讯来源设置", location: "主动联系 → 资讯", scope: "installation", kinds: ["proactive.contact"],
       views: {"proactive.contact": {sectionIds: ["news"], navigationLimit: 0}}},
-    expression: {title: "表达学习设置", location: "学习与反思 → 角色策略 → 表达学习策略", kinds: ["expression.learning"],
-      views: {"expression.learning": {sectionIds: ["behavior"], navigationLimit: 0}}},
+    expression: {title: "表达规则应用", location: "学习与成长 → 表达学习", kinds: ["expression.learning"],
+      views: {"expression.learning": {sectionIds: ["application"], navigationLimit: 0}}},
   };
   const entries = {};
   const register = (sources, outcome, title, summary, editor = "") => {

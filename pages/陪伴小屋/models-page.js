@@ -25,10 +25,9 @@ window.CompanionModelsPage = (() => {
       ["memory.reflect", "记忆整理", "从已授权素材整理认识"]]],
     ["生活与成长", [["calendar.plan", "日程规划", "基于已有目标规划下一步"], ["role.state.maintain", "角色状态", "维护角色的连续生活状态"], ["role.reading.consume", "阅读理解", "阅读实际提供的原文"], ["role.growth.progress", "成长进展", "根据已完成确认提出进展"]]],
     ["私人书写", [["role.journal.diary", "日记", "保存私人书写"], ["role.journal.dream", "梦境", "保存梦境记录"], ["role.journal.derive", "书写整理", "整理已有文字素材"], ["role.journal.select", "素材选择", "选择本次书写素材"]]],
-    ["学习", [["role.expression.learn", "表达学习", "从当前会话的原始素材提炼表达规则"],
+    ["学习", [["role.daily_review", "整理与对照学习", ""],
       ["role.expression.review", "回复表达复核", "发送前检查规则应用是否自然"],
-      ["role.expression.contact_review", "主动表达复核", "主动消息发送前检查表达"],
-      ["role.self_review", "每日复盘", "从近期执行记录提炼调整"]]],
+      ["role.expression.contact_review", "主动表达复核", "主动消息发送前检查表达"]]],
     ["内容工作", [["content.authoring.draft", "内容起草", "根据用户要求与已有素材创作或续写作品"]]],
   ];
   const names = new Map(groups.flatMap(([group, items]) => items.map(([kind, label, description]) => [kind, { group, label, description }])));
@@ -1807,7 +1806,7 @@ window.CompanionModelsPage = (() => {
   }
   /* ---------- top-level render & routing ---------- */
   function semanticBanner() {
-    return `<div class="model-note cfg"><span>向量嵌入、候选重排和视觉分析不在任务路由里，而在「学习与反思 → 语义目录」统一配置；列表为空时先在 AstrBot 模型服务中加载对应模型。</span><button type="button" class="button small" data-go="manage" data-manage="learning" data-manage-subtab="semantic">打开向量模型配置</button></div>`;
+    return `<div class="model-note cfg"><span>向量嵌入、候选重排和视觉分析不在任务路由里，而在「学习与成长 → 语义目录」统一配置；列表为空时先在 AstrBot 模型服务中加载对应模型。</span><button type="button" class="button small" data-go="manage" data-manage="learning" data-manage-subtab="semantic">打开向量模型配置</button></div>`;
   }
   function tabBar(s) { const tabs = [["fn", "功能模型", ICONS.fn, snapshot(s).length],
       ["voice", "语音模型", ICONS.voice, s.voice.data ? s.voice.data.providers.length : ""],

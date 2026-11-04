@@ -19,7 +19,6 @@ from companion_v2.conversation.life_context import LIFE_INSTRUCTION
 from companion_v2.conversation.messages import KNOWLEDGE_INSTRUCTION
 from companion_v2.conversation.open_items_context import INSTRUCTION as OPEN_ITEMS_INSTRUCTION
 from companion_v2.conversation.relationship_context import RELATIONSHIP_INSTRUCTION
-from companion_v2.conversation.self_review_context import SELF_REVIEW_INSTRUCTION
 from companion_v2.conversation.style_context import EXPRESSION_STYLE_INSTRUCTION
 from companion_v2.execution.models import TaskError, digest, encode, require
 from companion_v2.delivery.history import CONTEXT_INSTRUCTION as SENT_MESSAGE_INSTRUCTION
@@ -488,8 +487,6 @@ def build_core_reply_prompt(application, context, native_input, *, at, keyword_m
         captured("life", "角色生活", LIFE_INSTRUCTION, getattr(messages, "life_context", None))
         captured("growth", "角色成长", ROLE_GROWTH_INSTRUCTION,
                  getattr(messages, "role_growth_context", None))
-        captured("self_review", "角色自我提醒", SELF_REVIEW_INSTRUCTION,
-                 getattr(messages, "role_self_review_context", None))
         captured("open_items", "当前未完成事项", OPEN_ITEMS_INSTRUCTION,
                  getattr(messages, "open_items_context", None))
 

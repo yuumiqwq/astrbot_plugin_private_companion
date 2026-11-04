@@ -80,9 +80,11 @@ const NEW_KINDS = {
   'expression.learning': {
     group: 'expression.learning', scope: 'role', layers: ['installation', 'role'],
     editableLayers: ['installation', 'role', 'window'],
-    settings: {scan_interval_minutes: 1440, group_scan_interval_minutes: 180, group_daily_batch_limit: 6},
-    fields: {scan_interval_minutes: ['integer', 5, 10080],
-      group_scan_interval_minutes: ['integer', 5, 10080], group_daily_batch_limit: ['integer', 1, 50]},
+    settings: {enabled:true, active_signal_limit:60, rules_per_turn:2, payload_chars:4000,
+      rotation_candidate_limit:24, rotation_decay_hours:336, private_application_enabled:true, group_application_enabled:true},
+    fields: {enabled:['boolean'], active_signal_limit:['integer',12,480], rules_per_turn:['integer',1,16],
+      payload_chars:['integer',500,16000], rotation_candidate_limit:['integer',1,64],
+      rotation_decay_hours:['integer',1,8760], private_application_enabled:['boolean'], group_application_enabled:['boolean']},
   },
   reaction: {
     group: 'expression.reaction', scope: 'installation', layers: ['installation'],
@@ -133,13 +135,11 @@ const NEW_KINDS = {
       signature_phrases: '慢慢来、我在呢', hobbies: '植物随笔、听雨',
       avatar_data_url: '',
       main_companion_subject: '',
-      expression_private_source_mode: 'owner', expression_private_source_subject_ids: '[]',
       expression_private_application_mode: 'all', expression_private_application_subject_ids: '[]'},
     fields: {name: ['text'], birthday: ['text'], gender: ['text'], species: ['text'],
       first_person: ['text'], voice_examples: ['text'], signature_phrases: ['text'],
       avatar_data_url: ['text'],
       hobbies: ['text'], main_companion_subject: ['text'],
-      expression_private_source_mode: ['text'], expression_private_source_subject_ids: ['text'],
       expression_private_application_mode: ['text'], expression_private_application_subject_ids: ['text']},
   },
   knowledge: {
@@ -236,9 +236,7 @@ const NEW_KINDS = {
       group_repeat_trigger_threshold: 4, group_repeat_follow_probability: 0.18,
       group_repeat_interrupt_probability: 0.1, group_repeat_interrupt_probability_step: 0.12,
       group_repeat_interrupt_text: '禁止复读', group_repeat_interrupt_image_path: '', group_repeat_window_seconds: 120,
-      group_context_max_age_hours: 12,
-      enable_group_behavior_learning:true, enable_group_behavior_imitation:true,
-      enable_group_behavior_feedback:true, group_behavior_guidance:''},
+      group_context_max_age_hours: 12},
     /* 概率字段注册成 probability（0–1 的小数），与 role.growth 的整数档位不同。 */
     fields: {enable_group_social_context: ['boolean'], enable_group_topic_threads: ['boolean'],
       group_topic_thread_max: ['integer', 3, 40], enable_group_mood_detection: ['boolean'],
@@ -255,9 +253,7 @@ const NEW_KINDS = {
       group_repeat_interrupt_probability: ['probability', 0, 1],
       group_repeat_interrupt_probability_step: ['probability', 0, 1],
       group_repeat_interrupt_text: ['text'], group_repeat_interrupt_image_path: ['text'],
-      group_repeat_window_seconds: ['integer', 10, 600], group_context_max_age_hours: ['integer', 1, 168],
-      enable_group_behavior_learning:['boolean'],
-      enable_group_behavior_imitation:['boolean'], enable_group_behavior_feedback:['boolean'],group_behavior_guidance:['text']},
+      group_repeat_window_seconds: ['integer', 10, 600], group_context_max_age_hours: ['integer', 1, 168]},
   },
 };
 
@@ -1093,21 +1089,17 @@ test('installation-wide contact preferences never use the selected target config
   harnessed.editors.stop();
 });
 
-test('learning policies are role-scoped and selectors only filter records', () => {
+test('learning keeps growth policy in its chain and expression rules in one workspace', () => {
   const start = app.indexOf('function renderLearningPage(){');
   const end = app.indexOf('/* 2026-09-30 接回：', start);
-  assert.ok(start >= 0 && end > start, 'the active learning page renderer must exist');
+  assert.ok(start >= 0 && end > start);
   const page = app.slice(start, end);
-  assert.match(page, /\['strategy','角色策略'\]/);
+  assert.match(page, /\['expression','表达学习'\],\['chain','成长链路'\]/);
   assert.match(page, /configEditors\('growthConfigWorkspace',\['role\.growth\.skills'\]/);
-  assert.match(page, /configEditors\('expressionLearningConfigWorkspace',\['expression\.learning'\]/);
-  assert.doesNotMatch(page, /strategyRole|learningRoleControls\('strategy'|roleConfigApiFor\(strategy/);
-  assert.doesNotMatch(page, /role_growth/,
-    'per-person growth permissions belong to the private member editor');
-  assert.match(page, /learningTab==='strategy'/);
-  assert.match(page, /const scopeControls=scopeKey\?learningScopeControls/,
-    'object selection is rendered only by the record tabs');
-  assert.match(page, /learningRoleControls\(scopeKey,'筛选记录',scopeControls\)/);
+  assert.match(page, /id="expressionSignalsWorkspace"/);
+  assert.doesNotMatch(page, /expressionLearningConfigWorkspace|expressionWorkspace|role_growth|角色策略|行为模仿|每日复盘/);
+  assert.match(page, /learningScopeControls\('growth','筛选记录'\)/);
+  assert.match(page, /learningRoleControls\('growth','筛选记录',controls\)/);
 });
 
 test('role learning policies use the selected role config route', async () => {
@@ -1606,7 +1598,7 @@ test('the skill group is role-shared and has no window override', async () => {
   assert.deepEqual(rendered.sort(), plain(Object.keys(NEW_KINDS['role.growth.skills'].settings)).sort());
 });
 
-test('expression learning exposes separate private and group cadence with a shared group budget', async () => {
+test('expression settings expose rule application and rotation without native sampling', async () => {
   const targetEndpoint = PREFIX + 'targets/window-a/roles/role-a/config';
   const harnessed = harness(['expression.learning'], {}, '', {configApi: targetEndpoint});
   harnessed.editors.restore();
@@ -1616,9 +1608,9 @@ test('expression learning exposes separate private and group cadence with a shar
   harnessed.requests[0].resolve(payload('expression.learning'));
   await drains();
   const painted = harnessed.painted['expression.learning'];
-  assert.match(painted, /私聊学习扫描间隔/);
-  assert.match(painted, /群聊学习扫描间隔/);
-  assert.match(painted, /角色群聊每日学习批次/);
+  assert.match(painted, /私聊应用规则/);
+  assert.match(painted, /规则容量/);
+  assert.doesNotMatch(painted, /扫描间隔|学习批次|样本|学习来源|每日对照学习/);
   assert.match(painted, /安装与角色/);
   const rendered = plain(harnessed.editors.state.instances[0].state.container.groups
     .flatMap(group => group.fields)).sort();
@@ -1703,12 +1695,8 @@ test('group participation fields can be filtered by page without duplicating the
   assert.deepEqual(expressionFields, ['enable_group_persona_denoise']);
   assert.equal(expression.state.container.title, '群聊表达去噪');
 
-  const behaviorView=harness(['group_participation'],{group_participation:{sectionIds:['behavior'],title:'行为模仿策略',note:''}});
-  const [behavior]=await loaded(behaviorView,['group_participation']);
-  const behaviorFields=plain(behavior.state.container.groups.flatMap(group=>group.fields));
-  assert.deepEqual(plain(behavior.state.container.groups.map(group=>group.id)),['behavior']);
-  assert.ok(behaviorFields.includes('enable_group_behavior_imitation'));
-  const exposed = [...decisionFields, ...interjectionFields, ...expressionFields, ...behaviorFields];
+  assert.doesNotMatch(adapter, /enable_group_behavior|group_behavior_guidance/);
+  const exposed = [...decisionFields, ...interjectionFields, ...expressionFields];
   assert.equal(exposed.length, new Set(exposed).size);
   assert.deepEqual([...exposed].sort(),
     plain(Object.keys(NEW_KINDS.group_participation.settings)).sort());
@@ -2104,16 +2092,15 @@ test('the role dossier maps profile fields onto the purpose-built controls', () 
       hair: 'line', eyes: 'line', clothing: 'line', image_identity_hint: 'line',
       world_name: 'line', era: 'line', tone: 'line',
       main_companion_subject: 'catalog-select',
-      expression_private_source_subject_ids: 'identity-checklist',
       expression_private_application_subject_ids: 'identity-checklist'});
   assert.equal(profile.chipOptions.gender.mode, 'single');
   assert.deepEqual(plain(profile.chipOptions.gender.options), ['女', '男', '无性别']);
   assert.deepEqual(plain(profile.chipOptions.species.options),
     ['人类', '精灵', '仿生人', 'AI', '兽人']);
   assert.deepEqual(plain(profile.segmentedChoices), [
-    'expression_private_source_mode', 'expression_private_application_mode']);
-  assert.deepEqual(plain(profile.choices.expression_private_source_mode),
-    {owner: '主要陪伴对象', selected: '指定对象', all: '所有获准私聊'});
+    'expression_private_application_mode']);
+  assert.equal(profile.choices.expression_private_source_mode, undefined);
+  assert.ok(!profile.order.includes('expression_private_source_mode'));
   assert.equal(profile.sections.at(-1).id, 'expression_learning');
   const relationship = window.CompanionConfigEditors.spec.relationship_profile;
   assert.equal(relationship.inputs.user_birthday, 'date');
@@ -2161,7 +2148,8 @@ test('role profile controls render as date, chips, quotes, tags and a segmented 
   assert.doesNotMatch(html, /wb-platform_names/);
   assert.match(html, /data-wb-section-panel="expression_learning"/);
   assert.match(html, /data-wb-field="main_companion_subject"/);
-  assert.match(html, /name="wb-expression_private_source_mode" value="owner"/);
+  assert.doesNotMatch(html, /wb-expression_private_source_mode|指定学习来源/);
+  assert.match(html, /name="wb-expression_private_application_mode" value="all"/);
   assert.match(html, /wb-identity-picker/);
 });
 
@@ -2224,7 +2212,7 @@ test('an invalid but recognizable stored birthday is surfaced on the editor', as
   assert.match(harnessed.painted.role_profile, /这个公历日期不存在/);
 });
 
-test('role learning scope choices use only private identities bound to the active role', async () => {
+test('rule application choices use only private identities bound to the active role', async () => {
   const harnessed = harness(['role_profile'], {}, '', {people: [
     {subject_id: 'owner-a', display_name: '主要对象', role_id: 'role-a', bot_id: 'bot-a', private_target: true},
     {subject_id: 'group-a', display_name: '群成员', role_id: 'role-a', bot_id: 'bot-a', private_target: false},
@@ -2234,7 +2222,7 @@ test('role learning scope choices use only private identities bound to the activ
   const [instance] = await loaded(harnessed, ['role_profile']);
   await drains();
   instance.state.draft.main_companion_subject = 'owner-a';
-  instance.state.draft.expression_private_source_subject_ids = '["owner-a"]';
+  instance.state.draft.expression_private_application_subject_ids = '["owner-a"]';
   harnessed.editors.paint();
   const html = harnessed.painted.role_profile;
   assert.match(html, /<option value="owner-a"[^>]*>主要对象/);

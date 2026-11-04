@@ -92,7 +92,7 @@ class CorePrivateConsumerTests(MultiFixture, unittest.IsolatedAsyncioTestCase):
                 samples.closed_at, context, self.clock.now(), source_kind=INPUT_SAMPLE_SOURCE)
         self.assert_core_only()
 
-    async def test_native_samples_prepare_learning_without_old_batch_and_optional_observer_failure(self):
+    async def test_optional_observer_failure_preserves_context_without_starting_old_learning(self):
         owner = self.app.messages.acquaintance
         original = owner.observe
         owner.observe = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("derived card unavailable"))
@@ -106,8 +106,9 @@ class CorePrivateConsumerTests(MultiFixture, unittest.IsolatedAsyncioTestCase):
         ExpressionConfigurationOwner(self.app.runtime).write(target_for(context), configuration_fields(),
             changes={GROUP + ".min_samples": 1}, reset=(), expected_revision=0, observed_at=self.clock.now())
         job = self.app.expression_style.prepare(context, prepared["instruction"], self.clock.now())
-        self.assertIsNotNone(job)
-        self.assertEqual(job["catalogue"][0]["text"], prepared["text"])
+        self.assertIsNone(job)
+        self.assertEqual(self.app.expression_style.workers, {})
+        self.assertNotIn("role.expression.learn", self.app.tasks.registrations)
         original_context = self.app.expression_samples.evidence_context({"context_key": context.key}, context)
         self.assertEqual(original_context, context)
         from companion_v2.expression.style_management import ExpressionStyleManagement
@@ -312,7 +313,7 @@ class CoreGroupConsumerTests(GroupFixture, unittest.IsolatedAsyncioTestCase):
 
     async def test_native_group_samples_bind_learning_api_and_relationship_graph(self):
         from astrbot_host.group_reply_api import GroupReplyWebAPI
-        prepared = await self.prepared("consumer-group-first", "今天一起去看星星")
+        await self.prepared("consumer-group-first", "今天一起去看星星")
         self.clock.advance(timedelta(seconds=1))
         second = await self.prepared("consumer-group-second", "好呀，今晚见", sender="201")
         context = second["context"]

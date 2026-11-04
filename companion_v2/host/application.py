@@ -29,7 +29,6 @@ from companion_v2.capabilities.ownership import DEFAULT_MEMORY_OWNER
 from companion_v2.capabilities.memory_push import DEFAULT_MEMORY_PUSH
 from companion_v2.capabilities.read_providers import ReadProviderRegistry
 from companion_v2.conversation.growth_context import ConversationRoleGrowthContext
-from companion_v2.conversation.self_review_context import ConversationSelfReviewContext, SELF_REVIEW_INSTRUCTION
 from companion_v2.conversation.style_context import ConversationExpressionStyleContext, EXPRESSION_STYLE_INSTRUCTION
 from companion_v2.conversation.open_items_context import OpenItemsReader
 from companion_v2.configuration.models import ConfigurationError
@@ -129,7 +128,6 @@ from companion_v2.relationships.private_notice import PrivateAccessGate, Private
 from companion_v2.library.service import ReadingArchiveService
 from companion_v2.role_work.journal.triggers import JournalTriggers
 from companion_v2.role_work.journal.scheduling import JournalScheduleDriver
-from companion_v2.memory.activity_receipts import RoleReceiptReader
 from companion_v2.expression.style_evidence import ExpressionSampleCatalog
 from companion_v2.expression.style_service import ExpressionStyleService
 from companion_v2.expression.review import ExpressionDraftReview
@@ -149,9 +147,6 @@ from companion_v2.conversation.content.cover_assets import (
     configuration_fields as content_cover_configuration_fields)
 from companion_v2.knowledge.context import knowledge_context
 from companion_v2.role_work.life import rest_gate
-from companion_v2.role_work.journal.self_review_evidence import SelfReviewEvidenceCatalog
-from companion_v2.role_work.journal.self_review_service import SelfReviewService
-from companion_v2.role_work.journal.self_review_management import SelfReviewManagement
 from companion_v2.role_work.daily.service import RoleDailyReview
 from companion_v2.relationships.service import RelationshipMemoryService
 from companion_v2.memory.service import MemoryService
@@ -309,7 +304,6 @@ class CompanionApplication:
         self.state_maintenance = StateMaintenance(runtime)
         self.calendar_planning = CalendarPlanning(runtime, weather_port=weather_port)
         self.growth_progress = GrowthProgressService(runtime)
-        self.self_review = SelfReviewService(runtime)
         self.expression_style = ExpressionStyleService(runtime)
         self.expression_draft_review = ExpressionDraftReview(runtime)
         self.agenda = AgendaService(runtime)
@@ -339,7 +333,7 @@ class CompanionApplication:
             TaskRegistration(TaskDefinition(DELIVERY_KIND, "conversation.delivery", REPLY_ACTION, Lane.FOREGROUND,
                 side_effect=SideEffect.MESSAGE_DELIVERY, binding=sender.binding, timeout_seconds=30,
                 max_attempts=1, concurrency=self.worker_limit), lambda spec, at: self.delivery.validate(spec, at)),
-        ) + self.poke_reply_model.registrations + self.journal_writer.registrations + self.memory_reflection.registrations + self.role_reader.registrations + self.state_maintenance.registrations + self.calendar_planning.registrations + self.growth_progress.registrations + self.self_review.registrations + self.expression_style.registrations + self.proactive.registrations + self.outbound.registrations + self.image_review_service.registrations + self.context_image_caption.registrations + self.image_narration.registrations + self.video_narration.registrations + self.screen_interpretation.registrations + self.screen_peek.registrations + self.authoring.registrations + (external.registrations if external is not None else ())
+        ) + self.poke_reply_model.registrations + self.journal_writer.registrations + self.memory_reflection.registrations + self.role_reader.registrations + self.state_maintenance.registrations + self.calendar_planning.registrations + self.growth_progress.registrations + self.expression_style.registrations + self.proactive.registrations + self.outbound.registrations + self.image_review_service.registrations + self.context_image_caption.registrations + self.image_narration.registrations + self.video_narration.registrations + self.screen_interpretation.registrations + self.screen_peek.registrations + self.authoring.registrations + (external.registrations if external is not None else ())
         registrations += self.expression_draft_review.registrations
         registrations += self.daily_review.registrations
         self.tasks = TaskSupervisor(runtime, registrations, limits=limits, now=self.now)
@@ -401,21 +395,16 @@ class CompanionApplication:
             RoleGrowthContextReader(self.role_growth, self.tasks, sources=self.role_journal.sources))
         self.role_timeline = RoleTimeline(self.life_context, self.role_growth_context.reader)
         self.open_items = OpenItemsReader(self.agenda, self.tasks)
-        self.role_self_review_evidence = SelfReviewEvidenceCatalog(
-            runtime, RoleReceiptReader(self.life_context))
-        self.role_self_review_context = ConversationSelfReviewContext(self.role_self_review_evidence)
         self.expression_samples = ExpressionSampleCatalog(runtime)
         self.expression_style_context = ConversationExpressionStyleContext(self.expression_samples)
         self.messages = ConversationMessages(self.tasks, relationships=self.relationship_memories,
                                              memory=self.memory, life=self.life_context, open_items=self.open_items,
                                              role_growth=self.role_growth_context, role_state=self.role_state,
-                                             role_self_review=self.role_self_review_context,
                                              expression_style=self.expression_style_context,
                                              calendar=self.calendar,
                                              reference_materials=self.references,
                                              knowledge=knowledge_context(runtime) if knowledge is None else knowledge,
                                              solar_term_port=solar_term_port)
-        self.role_self_review_evidence.attach(self.messages)
         self.expression_samples.attach(self.messages)
         self.background_history = BackgroundHistory(self.outbound, messages=self.messages,
                                                     verify_platform_message=self.messages.recalls.check_reply)
@@ -464,7 +453,6 @@ class CompanionApplication:
         self.state_maintenance.attach(self)
         self.calendar_planning.attach(self)
         self.growth_progress.attach(self)
-        self.self_review.attach(self)
         self.expression_style.attach(self)
         self.expression_draft_review.attach(self)
         self.journal_writer.attach(self.gateway, require_running=self.require_running, waiting=self.background_waiting)
@@ -946,13 +934,11 @@ class CompanionApplication:
                 self.calendar_planning.advance()
                 await asyncio.sleep(0)
                 self.growth_progress.advance()
-                self.self_review.advance()
                 await asyncio.sleep(0)
                 tools = self.messages.tools
                 participation = getattr(tools, "group_participation", None) if tools is not None else None
                 if participation is not None:
                     participation.advance_reflection()
-                self.expression_style.advance()
                 await asyncio.sleep(0)
                 if self.presence is not None:
                     self.presence.advance()
@@ -1012,7 +998,6 @@ class CompanionApplication:
             self.state_maintenance.cancel_running()
             self.calendar_planning.cancel_running()
             self.growth_progress.cancel_running()
-            self.self_review.cancel_running()
             self.expression_style.cancel_running()
             self.image_review_service.cancel_running()
             self.screen_interpretation.cancel_running()
@@ -1034,7 +1019,6 @@ class CompanionApplication:
                 + self.role_reader.active_handles + self.life_runtime.active_handles
                 + self.state_maintenance.active_handles + self.calendar_planning.active_handles
                 + self.growth_progress.active_handles
-                + self.self_review.active_handles
                 + self.expression_style.active_handles
                 + self.expression_draft_review.active_handles
                 + (self.presence.active_handles if self.presence else ())
@@ -1084,7 +1068,6 @@ class CompanionApplication:
             await self.state_maintenance.close()
             await self.calendar_planning.close()
             await self.growth_progress.close()
-            await self.self_review.close()
             await self.expression_style.close()
             await self.expression_draft_review.close()
             await self.image_review_service.close()

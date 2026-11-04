@@ -35,6 +35,7 @@ from ..expression.reaction_configuration import (GROUP as REACTION_GROUP, OWNER 
     configuration_fields as reaction_fields)
 from ..expression.configuration import (GROUP as EXPRESSION_GROUP, OWNER as EXPRESSION_OWNER,
     PRIVATE_GROUP as EXPRESSION_PRIVATE_GROUP, PRIVATE_OWNER as EXPRESSION_PRIVATE_OWNER,
+    PUBLIC_FIELDS as EXPRESSION_PUBLIC_FIELDS, RETIRED_PROFILE_SOURCE_FIELDS,
     configuration_fields as expression_fields,
     private_configuration_fields as expression_private_fields,
     private_target_for as expression_private_target_for)
@@ -50,8 +51,7 @@ from ..knowledge.configuration import (GROUP as KNOWLEDGE_GROUP, OWNER as KNOWLE
     configuration_fields as knowledge_fields)
 from ..model_gateway.budget import GROUP as BUDGET_GROUP, OWNER as BUDGET_OWNER, SOFT_FIELDS
 from ..role_work.growth.configuration import (GROUP as GROWTH_GROUP, OWNER as GROWTH_OWNER,
-    SKILLS_GROUP, SKILLS_OWNER, configuration_fields as growth_fields,
-    skill_configuration_fields)
+    SKILLS_GROUP, SKILLS_OWNER, configuration_fields as growth_fields)
 from ..role_profile.configuration import (FIELD_LIMITS as ROLE_PROFILE_FIELD_LIMITS,
     GROUP as ROLE_PROFILE_GROUP, OWNER as ROLE_PROFILE_OWNER,
     configuration_fields as role_profile_fields)
@@ -537,12 +537,40 @@ class RoleGrowthSkillsManagement(GroupEditor):
         return contract
 
 
-class ExpressionLearningManagement(GroupEditor):
-    """Role-level learning policy; relationship and group exceptions stay separate."""
+class _VisibleConfigurationFields:
+    """Publish only current controls while retaining stored legacy values."""
+
+    @property
+    def short_names(self):
+        return super().short_names - self.hidden_fields
+
+    def _settings(self, snapshot):
+        return {key: value for key, value in super()._settings(snapshot).items()
+                if key not in self.hidden_fields}
+
+    def _definitions(self):
+        return {key: value for key, value in super()._definitions().items()
+                if key not in self.hidden_fields}
+
+    def _provenance(self, snapshot):
+        return {key: value for key, value in super()._provenance(snapshot).items()
+                if key not in self.hidden_fields}
+
+    def _field_contract(self):
+        return {key: value for key, value in super()._field_contract().items()
+                if key not in self.hidden_fields}
+
+
+class ExpressionLearningManagement(_VisibleConfigurationFields, GroupEditor):
+    """Manual preset comparison and application of operator-adopted rules."""
 
     group, owner = EXPRESSION_GROUP, EXPRESSION_OWNER
     layers = expression_fields()[0].layers
     error_prefix = "expression_learning"
+
+    @property
+    def hidden_fields(self):
+        return GroupEditor.short_names.fget(self) - EXPRESSION_PUBLIC_FIELDS
 
 
 class PrivateExpressionLearningManagement(GroupEditor):
@@ -576,24 +604,26 @@ class PrivateExpressionLearningManagement(GroupEditor):
     @outcome
     def status(self, operator):
         result = require(super().status(operator))
-        field = EXPRESSION_PRIVATE_GROUP + ".private_learning_enabled"
         if not result["provenance"]["private_learning_enabled"]["explicit"]:
-            shared = require(ExpressionLearningManagement(self.app, self.context).status(operator))
-            result["settings"]["private_learning_enabled"] = shared["settings"]["private_learning_enabled"]
+            from companion_v2.expression.configuration import read_settings
+            result["settings"]["private_learning_enabled"] = read_settings(
+                self.app.runtime, self.context).private_learning_enabled
         return result
 
 
-class RoleProfileManagement(GroupEditor):
+class RoleProfileManagement(_VisibleConfigurationFields, GroupEditor):
     """Stable identity, personality and world canon shared by the selected role."""
 
     group, owner = ROLE_PROFILE_GROUP, ROLE_PROFILE_OWNER
     layers = role_profile_fields()[0].layers
     error_prefix = "role_profile"
+    hidden_fields = RETIRED_PROFILE_SOURCE_FIELDS
 
     def _field_contract(self):
         contract = super()._field_contract()
         for name, maximum in ROLE_PROFILE_FIELD_LIMITS.items():
-            contract[name]["maximum_chars"] = maximum
+            if name in contract:
+                contract[name]["maximum_chars"] = maximum
         return contract
 
 

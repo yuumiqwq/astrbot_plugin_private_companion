@@ -3,9 +3,11 @@
 import json
 import unittest
 
+from companion_v2.configuration.management import ExpressionLearningManagement, RoleProfileManagement
 from companion_v2.execution.models import TaskError, encode
 from companion_v2.expression.configuration import (
-    GROUP, ExpressionConfigurationOwner, configuration_fields, read_settings, target_for,
+    GROUP, PUBLIC_FIELDS, RETIRED_PROFILE_SOURCE_FIELDS, ExpressionConfigurationOwner,
+    configuration_fields, read_settings, target_for,
 )
 from companion_v2.expression.style_management import ExpressionStyleManagement
 from companion_v2.role_work.daily import expression
@@ -156,6 +158,27 @@ class DailyExpressionTests(daily_tests.DailyReviewTests):
         self.assertFalse(any(item.purpose == "expression_comparison"
                              for item in self.daily_calls()[-1].original.context.materials))
         self.assertIsNone(await expression.capture(app.daily_review, context))
+
+
+    async def test_dashboard_omits_legacy_material_controls_and_rejects_stale_writes(self):
+        app, context = await self.comparison_ready(diary=False, plan=False, memory=False)
+        manager = ExpressionLearningManagement(app, context)
+        status = manager.status(self.core).unwrap()
+        for name in ("settings", "fields", "provenance"):
+            self.assertEqual(set(status[name]), PUBLIC_FIELDS)
+        result = manager.configure(self.core, {"operation_key": "old-material-opt-in",
+            "edit_token": status["edit_token"], "changes": {"private_learning_enabled": True}})
+        self.assertTrue(result.failure)
+        self.assertEqual(result.failure.code, "expression_learning_configuration_invalid")
+
+        profile = RoleProfileManagement(app, context)
+        settings = profile.status(self.core).unwrap()
+        for name in ("settings", "fields", "provenance"):
+            self.assertFalse(RETIRED_PROFILE_SOURCE_FIELDS.intersection(settings[name]))
+        changed = profile.configure(self.core, {"operation_key": "old-source-selection",
+            "edit_token": settings["edit_token"],
+            "changes": {"expression_private_source_mode": "all"}})
+        self.assertTrue(changed.failure)
 
 
 class ApprovedTargetParserTests(unittest.TestCase):

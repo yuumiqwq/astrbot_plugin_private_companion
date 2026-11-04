@@ -96,6 +96,15 @@ INTEGER_FIELDS = tuple(LIMITS)
 ROLE_INTEGER_FIELDS = tuple(name for name in INTEGER_FIELDS if name not in SCOPED_FIELDS)
 MODES = ("light", "balanced", "aggressive")
 
+# Stored sampling policies remain readable for older installations. The current
+# dashboard learns only from approved persona presets, so it exposes just the
+# manual-learning switch and the application/rotation settings.
+PUBLIC_FIELDS = frozenset({"enabled", "active_signal_limit", "rules_per_turn", "payload_chars",
+    "rotation_candidate_limit", "rotation_decay_hours", "private_application_enabled",
+    "group_application_enabled"})
+RETIRED_PROFILE_SOURCE_FIELDS = frozenset({"expression_private_source_mode",
+    "expression_private_source_subject_ids"})
+
 
 def member_ids(value):
     """Member IDs are interpreted only inside the selected exact group scope."""

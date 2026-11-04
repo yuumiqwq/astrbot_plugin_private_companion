@@ -87,39 +87,19 @@ class ReplyWebAPITests(MultiFixture, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.native.registered_web_apis, [])
 
 
-    async def test_expression_learning_bounds_share_the_reply_route_and_stay_per_target(self):
+    async def test_reply_routes_keep_rule_review_without_observation_controls(self):
         self.controller = self.make_controller(multi_config(delivery_mode="onebot_private"))
         await self.start_host()
-        (await self.controller.authorize_delivery("first")).unwrap()
         self.controller.register_routes()
         handlers = {route: handler for route, handler, _, _ in self.native.registered_web_apis}
-        replies = {handler.__self__.controller.target_id: route for route, handler in handlers.items()
-                   if route.endswith("/reply") and handler.__self__.controller.role_id == "role-a"}
-        first, second = replies["first"], replies["second"]
-        status = (await request(handlers[first + "/expression"]))["data"]
-        self.assertEqual(status["group_id"], "expression.learning")
-        self.assertEqual(status["apply_mode"], "next_sealed_reply")
-        self.assertEqual(status["settings"]["rotation_decay_hours"], 336)
-        self.assertFalse(status["settings"]["group_learning_enabled"])
-        self.assertEqual(status["settings"]["rules_per_turn"], 2)
-        command = {"operation_key": "learn-bounds", "edit_token": status["edit_token"],
-                   "changes": {"group_learning_enabled": True, "rotation_decay_hours": 48,
-                               "sample_limit": 32, "min_samples": 6}}
-        saved = await request(handlers[first + "/expression/configure"], command)
-        self.assertEqual(saved["status"], "ok", saved)
-        self.assertTrue((await request(handlers[first + "/expression/configure"], command))["data"]["replayed"])
-        after = saved["data"]["status"]["settings"]
-        self.assertEqual((after["group_learning_enabled"], after["rotation_decay_hours"]), (True, 48))
-        self.assertEqual((after["sample_limit"], after["min_samples"]), (32, 6))
-        self.assertEqual((await request(handlers[second + "/expression"]))["data"]["settings"]["rotation_decay_hours"],
-                         336)
-        invalid = await request(handlers[first + "/expression/configure"],
-                                {"operation_key": "learn-bad", "edit_token": saved["data"]["status"]["edit_token"],
-                                 "changes": {"sample_limit": 4, "min_samples": 9}})
-        self.assertIn(invalid["data"]["code"],
-                      ("expression_settings_invalid", "invalid_configuration_value"))
-        self.assertEqual((await request(handlers[first + "/expression"], username="api_key:test"))["data"]["code"],
-                         "dashboard_identity_required")
+        replies = [route for route in handlers if route.endswith("/reply")]
+        self.assertTrue(replies)
+        for route in replies:
+            self.assertIn(route + "/style", handlers)
+            self.assertIn(route + "/style/command", handlers)
+            for suffix in ("/expression", "/expression/configure", "/style/samples",
+                    "/style/samples/command", "/style/learn"):
+                self.assertNotIn(route + suffix, handlers)
         self.controller.unregister_routes()
 
 

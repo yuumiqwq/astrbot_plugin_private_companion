@@ -24,8 +24,7 @@ REASONS = {"mention": "明确 @ 机器人", "native_wakeup": "命中宿主唤醒
            "image_interest": "已开启图片唤醒", "question": "命中群聊问题或求助策略",
            "context_word": "命中配置的群聊相关词", "interest": "命中配置的兴趣词",
            "repeat": "本群复读达到配置阈值", "interjection": "命中已开启的自主插话线索",
-           "cold_group": "命中配置的冷群接话策略", "role_choice": "原人格自主判断参与",
-           "behavior": "与本角色学到的群聊互动习惯相关"}
+           "cold_group": "命中配置的冷群接话策略", "role_choice": "原人格自主判断参与"}
 
 
 class GroupReplyAdmission:
@@ -128,7 +127,7 @@ class GroupReplyAdmission:
         if continuation["limit_reached"]:
             return ""
         if mentions_others:
-            return "behavior" if self._behavior_candidate(context, compact, wakeup, participation) else ""
+            return ""
         if continuation["candidate_reason"]:
             return continuation["candidate_reason"]
         if not wakeup["group_wakeup_enabled"]:
@@ -153,8 +152,6 @@ class GroupReplyAdmission:
                      else burst["count"]) if burst else 0
             if count >= participation["group_repeat_trigger_threshold"]:
                 return "repeat"
-        if self._behavior_candidate(context, compact, wakeup, participation):
-            return "behavior"
         # A repeated question or interest keyword is still a literal repeat.
         # Other candidates remain references for the ordinary role reply.
         question = (self.question_reference(context, text=compact, instruction=instruction, at=at,
@@ -183,11 +180,6 @@ class GroupReplyAdmission:
                 return "cold_group"
         return ""
 
-    def _behavior_candidate(self, context, text, wakeup, participation):
-        if not wakeup["group_wakeup_enabled"] or not participation.get("enable_group_behavior_imitation", False):
-            return False
-        from .behavior import GroupBehavior
-        return GroupBehavior(self.messages).candidate(context, text=text)
 
     def question_reference(self, context, *, text, instruction, at, settings, event_id=None):
         wakeup = group_wakeup_settings(settings)

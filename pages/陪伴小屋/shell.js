@@ -118,7 +118,7 @@ window.CompanionShell = (() => {
       ["identity", "network", "关系网"],
       ["contact", "heart-handshake", "主动与联系"],
       ["memory", "orbit", "事实与经历"],
-      ["learning", "graduation-cap", "学习与反思"],
+      ["learning", "graduation-cap", "学习与成长"],
       ["models", "sliders-horizontal", "模型与连接"],
       ["maintenance", "settings-2", "治理与维护"],
       ["mobile", "smartphone", "手机连接"],
@@ -142,7 +142,7 @@ window.CompanionShell = (() => {
 
   /* 导航的唯一一份分组数据。左栏和「全部功能」浮层都读它，
      免得两处各维护一套名字（曾经浮层里叫「学习与成长」「资料与备份」，
-     左栏叫「学习与反思」「资料与维护」，同一个页面两个名字）。 */
+     左栏叫「学习与成长」「资料与维护」，同一个页面两个名字）。 */
   function railGroups() {
     return RAIL_GROUPS.map(([group, items]) => [group, items.map(([id, icon, label, kind]) => ({
       id, icon, label, view: kind === "view",

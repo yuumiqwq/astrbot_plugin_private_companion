@@ -63,13 +63,17 @@ window.CompanionSemanticPage = (() => {
   let root,scope,abort,state,kind="reaction",view="all",after={},sessionId="",busy=false,editing=null,result=null,message="",generation=0,draft=null,conflict=false,selectedTarget=null,selectedSelection=null,selectedScopeKey="",globalSettingsOnly=false;
   const visibleFlags = () => view === "expression"
     ? flags.filter(([id]) => reactionFlags.has(id))
-    : view === "learning" ? flags.filter(([id]) => !reactionFlags.has(id) || id === "vision_review") : flags;
-  const visibleProviders = () => view === "expression" ? [] : providerFields;
+    : view === "memory" ? flags.filter(([id]) => ["enabled","memory_enabled"].includes(id))
+      : view === "slang" ? flags.filter(([id]) => id.startsWith("slang_")) : flags;
+  const visibleProviders = () => view === "expression" ? []
+    : view === "memory" ? providerFields.filter(([id]) => id !== "analysis_provider")
+      : view === "slang" ? providerFields.filter(([id]) => id === "analysis_provider") : providerFields;
   const visibleNumbers = () => view === "expression" ? reactionNumberFields
-    : view === "learning" ? semanticNumberFields : numberFields;
-  const visibleSelects = () => view === "learning" ? [] : selectFields;
+    : view === "memory" ? semanticNumberFields.filter(([id]) => ["timeout_seconds","batch_size"].includes(id))
+      : view === "slang" ? semanticNumberFields.filter(([id]) => id !== "batch_size") : numberFields;
+  const visibleSelects = () => ["memory","slang"].includes(view) ? [] : selectFields;
   const visibleKinds = group => view === "expression" ? ["reaction"]
-    : view === "learning" ? (group ? ["slang","reaction"] : ["reaction"])
+    : view === "memory" ? [] : view === "slang" ? (group ? ["slang"] : [])
       : (group ? ["reaction","slang"] : ["reaction"]);
   const selection = () => globalSettingsOnly?{global:true}:(()=>{const value=selectedSelection||product.selection();return {target_id:value.target_id,role_id:value.role_id,...(sessionId?{session_id:sessionId}:{})};})();
   const target = () => globalSettingsOnly ? null : selectedTarget || product.target();
@@ -114,18 +118,18 @@ window.CompanionSemanticPage = (() => {
   function renderLearning(cfg,group) {
     const current=shown=>draft?{...cfg,...draft}[shown]:cfg[shown];
     const catalog=state.catalog||{},slangCount=Number(catalog.slang?.total||0),reactionCount=Number(catalog.reaction?.total||0);
-    const counts=group?`${slangCount} 条黑话 · ${reactionCount} 项素材`:`${reactionCount} 项素材`;
-    let html='<div class="settings-heading"><div><h2>'+(globalSettingsOnly?'全局语义策略':'语义目录')+'</h2></div><span class="semantic-state '+escape(state.state)+'">'+escape({ready:"嵌入已就绪",lexical_fallback:"关键词回退",disabled:"已停用"}[state.state]||"状态待核对")+'</span></div>';
+    const counts=view==="slang"?`${slangCount} 条黑话`:group?`${slangCount} 条黑话 · ${reactionCount} 项素材`:`${reactionCount} 项素材`;
+    let html='<div class="settings-heading"><div><h2>'+(view==="memory"?'语义记忆检索':'群聊黑话')+'</h2></div><span class="semantic-state '+escape(state.state)+'">'+escape({ready:"嵌入已就绪",lexical_fallback:"关键词回退",disabled:"已停用"}[state.state]||"状态待核对")+'</span></div>';
     if(message)html+='<p class="semantic-feedback'+(conflict?" semantic-conflict":"")+'" role="status">'+escape(message)+'</p>';
-    if(!globalSettingsOnly){
-    html+='<section class="semantic-learning-catalog" aria-label="语义条目"><header class="semantic-learning-heading"><h3>语义条目 · 阵列</h3><span>'+escape(counts)+'</span></header>';
+    if(view==="slang"&&group){
+    html+='<section class="semantic-learning-catalog" aria-label="群聊黑话"><header class="semantic-learning-heading"><h3>群聊黑话</h3><span>'+escape(counts)+'</span></header>';
     if(group&&state.sessions?.length)html+='<label class="semantic-session">群会话<select id="semanticSession" aria-label="群会话">'+state.sessions.map((id,index)=>'<option value="'+escape(id)+'" '+(id===state.session_id?'selected':'')+'>'+escape(id===target()?.group_id?'主群会话':'群会话 '+(index+1))+'</option>').join('')+'</select></label>';
     if(!state.selection_ready)html+='<p class="semantic-learning-empty" role="status">该群会话暂无语义条目</p>';
     else {
       html+='<div class="semantic-learning-toolbar"><form id="semanticSearch">';
-      if(group)html+='<select name="kind" aria-label="素材类型"><option value="slang" '+(kind==="slang"?'selected':'')+'>群黑话</option><option value="reaction" '+(kind==="reaction"?'selected':'')+'>反应素材</option></select>';
+      if(visibleKinds(group).length>1)html+='<select name="kind" aria-label="素材类型"><option value="slang" '+(kind==="slang"?'selected':'')+'>群黑话</option><option value="reaction" '+(kind==="reaction"?'selected':'')+'>反应素材</option></select>';
       html+='<input name="query" type="search" maxlength="2000" placeholder="检索语义条目" aria-label="检索语义条目"><button class="button" '+(busy?'disabled':'')+'>检索</button></form>'+
-        '<label class="semantic-import button"><span>导入素材</span><input id="semanticFile" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" '+(busy?'disabled':'')+'></label>'+
+        (kind==="reaction"?'<label class="semantic-import button"><span>导入素材</span><input id="semanticFile" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" '+(busy?'disabled':'')+'></label>':"")+
         (kind==="reaction"?batchAnalyzeButton():"")+'</div>';
       if(result)html+='<div class="semantic-results"><strong>检索结果</strong><span>'+(result.embedded||0)+'/'+(result.eligible||0)+' 已建索引</span>'+(result.items||[]).map((item,index)=>'<button data-semantic-open="'+escape(item.id)+'" data-semantic-kind="'+escape(item.kind||kind)+'">'+escape(item.payload.name||item.payload.term||'未命名条目 '+(index+1))+'</button>').join('')+'</div>';
       const rows=(state.items||[]).map(item=>{
@@ -152,22 +156,19 @@ window.CompanionSemanticPage = (() => {
     const currentFlags=visibleFlags();
     const coreFlags=currentFlags.filter(([id])=>["enabled","vision_review"].includes(id));
     const memoryFlags=currentFlags.filter(([id])=>["memory_enabled","slang_enabled","slang_learning","slang_web_search_enabled"].includes(id));
-    const coreNumbers=semanticNumberFields.filter(([id])=>["timeout_seconds","batch_size"].includes(id));
-    const memoryNumbers=semanticNumberFields.filter(([id])=>!coreNumbers.some(([field])=>field===id));
+    const coreNumbers=visibleNumbers().filter(([id])=>["timeout_seconds","batch_size"].includes(id));
+    const memoryNumbers=visibleNumbers().filter(([id])=>!coreNumbers.some(([field])=>field===id));
     const flagMarkup=items=>'<div class="semantic-flags">'+items.map(([id,label])=>toggle(id,label,current(id))).join('')+'</div>';
-    const providerMarkup='<div class="semantic-providers">'+providerFields.map(([id,label,type])=>'<label>'+label+'<select name="'+id+'">'+options(state.providers?.[type],current(id))+'</select></label>').join('')+'</div>'
-      +(!(state.providers?.embedding||[]).length?'<p class="semantic-meta">没有读到向量模型。请先在 AstrBot 的模型服务页添加 embedding 类型的 Provider，再回到这里选择。</p>':'');
+    const providerMarkup='<div class="semantic-providers">'+visibleProviders().map(([id,label,type])=>'<label>'+(view==="slang"&&id==="analysis_provider"?'词义分析模型':label)+'<select name="'+id+'">'+options(state.providers?.[type],current(id))+'</select></label>').join('')+'</div>';
     const numberMarkup=items=>'<div class="semantic-providers">'+items.map(([id,label,min,max,step])=>{
       const raw=current(id),value=id==="learning_interval_seconds"&&Number.isFinite(Number(raw))?Math.round(Number(raw)/60):raw;
       return '<label>'+label+'<input name="'+id+'" type="number" min="'+min+'" max="'+max+'" step="'+(step||1)+'" value="'+escape(value??'')+'"></label>';
     }).join('')+'</div>';
-    html+='<form id="semanticSettings" class="semantic-learning-settings"><section class="semantic-config-panel"><header><h3>语义目录与提供方</h3></header>'+
+    html+='<form id="semanticSettings" class="semantic-learning-settings"><section class="semantic-config-panel"><header><h3>'+(view==="memory"?'检索提供方':'词义分析')+'</h3></header>'+
       flagMarkup(coreFlags)+providerMarkup+numberMarkup(coreNumbers)+'</section>'+
-      '<section class="semantic-config-panel"><header><h3>语义记忆与群聊黑话</h3></header>'+
+      '<section class="semantic-config-panel"><header><h3>'+(view==="memory"?'语义记忆检索':'群聊黑话设置')+'</h3></header>'+
       flagMarkup(memoryFlags)+numberMarkup(memoryNumbers)+
-      '<nav class="semantic-learning-links" aria-label="相关配置"><button type="button" data-go="manage" data-manage="models"><span>语义提供方</span><i data-lucide="arrow-up-right"></i></button>'+
-      '<button type="button" data-go="manage" data-manage="expression" data-manage-subtab="reaction"><span>语义反应素材</span><i data-lucide="arrow-up-right"></i></button>'+
-      '<button type="button" data-go="memories"><span>每日反思与经历</span><i data-lucide="arrow-up-right"></i></button></nav></section>'+
+      '</section>'+
       '<div class="semantic-learning-actions"><button class="button primary" type="submit" '+(busy?'disabled':'')+'>'+(draft?'保存草稿':'保存配置')+'</button>'+
       (draft?'<button class="button" type="button" data-semantic="discard">放弃草稿</button>':'')+
       (globalSettingsOnly?'':'<button class="button" type="button" data-semantic="reindex" '+(busy||!state.selection_ready?'disabled':'')+'>重建当前索引</button>')+'</div></form>';
@@ -189,7 +190,7 @@ window.CompanionSemanticPage = (() => {
     const shown=draft?{...cfg,...draft}:cfg;
     const currentViewFlags=visibleFlags(),currentViewProviders=visibleProviders(),currentViewNumbers=visibleNumbers();
     const kinds=visibleKinds(group);
-    if(view==="learning"){
+    if(["memory","slang"].includes(view)){
       root.innerHTML=renderLearning(cfg,group);
       window.lucide?.createIcons({nodes:root.querySelectorAll("[data-lucide]")});
       return;
@@ -288,7 +289,7 @@ window.CompanionSemanticPage = (() => {
     busy=true;if(!append)state=null;render();
     try{
       const group=target()?.scope_kind==="group";
-      const kinds=view==="learning"?visibleKinds(group):[kind];
+      const kinds=view==="memory"?["reaction"]:view==="slang"?visibleKinds(group):[kind];
       const fetchPages=()=>Promise.all(kinds.map(type=>append&&!after[type]
         ?Promise.resolve({items:[],next_after:null})
         :api("GET",{...selection(),kind:type,...(append&&after[type]?{after:after[type]}:{})})));
@@ -343,8 +344,8 @@ window.CompanionSemanticPage = (() => {
     unmount();root=node;selectedTarget=options.target||null;selectedSelection=options.selection||null;selectedScopeKey=typeof options.scopeKey==="string"?options.scopeKey:"";
     globalSettingsOnly=options.globalSettingsOnly===true;
     scope=selectedScopeKey||product.scopeKey();state=null;result=null;after={};sessionId="";editing=null;message="";busy=false;
-    view=["learning","expression"].includes(options?.view)?options.view:"all";
-    kind=view==="learning"&&target()?.scope_kind==="group"?"slang":"reaction";abort=new AbortController();
+    view=options?.view==="learning"?"memory":["memory","slang","expression"].includes(options?.view)?options.view:"all";
+    kind=view==="slang"?"slang":"reaction";abort=new AbortController();
     node.addEventListener("click",async event=>{
       const item=event.target.closest("[data-semantic-open]");if(item){kind=item.dataset.semanticKind||kind;open(item.dataset.semanticOpen);return;}
       const tab=event.target.closest("[data-semantic-kind]");if(tab){kind=tab.dataset.semanticKind;result=null;editing=null;after={};message="";load();return;}

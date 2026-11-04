@@ -50,7 +50,7 @@ class SharedBackgroundGatewayTests(ModelFixture, unittest.IsolatedAsyncioTestCas
 class SharedBackgroundSelectionTests(unittest.TestCase):
     def test_all_role_text_tasks_share_context_and_media_tasks_keep_their_input(self):
         kinds = ("calendar.plan", "memory.reflect", "role.journal.diary", "role.journal.dream",
-                 "role.journal.derive", "role.journal.select", "role.self_review", "role.growth.progress",
+                 "role.journal.derive", "role.journal.select", "role.growth.progress",
                  "role.expression.learn", "role.state.maintain", "role.reading.consume", "proactive.compose",
                  "proactive.judge", "role.daily_review")
         for kind in kinds:

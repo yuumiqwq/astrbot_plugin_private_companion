@@ -114,7 +114,7 @@ class CoreBackgroundConsumerTests(MultiFixture, unittest.IsolatedAsyncioTestCase
         self.assertEqual(self.app.runtime.read_one("SELECT state FROM sources WHERE source_id=?", (source.source_id,))["state"], "revoked")
         self.assert_core_only()
 
-    async def test_planning_and_self_review_use_native_sources_and_recheck_withdrawal(self):
+    async def test_planning_uses_native_sources_and_rechecks_withdrawal(self):
         prepared = await self.prepared(text="明天想安静阅读，不要安排太满")
         context = prepared["context"]
         job = planning_capture(self.app.calendar_planning, context, prepared["instruction"],
@@ -122,12 +122,6 @@ class CoreBackgroundConsumerTests(MultiFixture, unittest.IsolatedAsyncioTestCase
         self.assertIn(prepared["text"], job["material"]["current_reports"])
         self.assertIn(await prepared["native_source_future"], job["sources"])
         await self.observer.output(prepared, "好呀，给阅读留点时间", state="output_observed")
-        self.assertEqual(self.app.role_self_review_evidence.collect(context, self.clock.now()).evidence, ())
-        await self.observer.output(prepared, "好呀，给阅读留点时间", state="send_returned")
-        evidence = self.app.role_self_review_evidence.collect(context, self.clock.now())
-        self.assertEqual(len(evidence.evidence), 1)
-        self.assertIn("未获平台送达确认", evidence.evidence[0].payload)
-        self.app.role_self_review_evidence.resolve(evidence, context, self.clock.now())
         require(self.app.messages.recalls.accept(MessageRecall.from_scope(
             context.scope, prepared["event_id"], context.actor.principal.native_account_id)))
         renewed = planning_capture(self.app.calendar_planning, context, prepared["instruction"],

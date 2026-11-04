@@ -436,7 +436,7 @@ window.CompanionSetup = (() => {
     const providerId = modelDraft || state?.model?.provider_id || "";
     const canSetInitialProvider = state?.step === "model" && !state?.ready;
     const tasks = (modelTasks?.tasks || []).filter(task =>
-      ["proactive.compose", "calendar.plan", "role.state.maintain", "role.self_review"].includes(task.kind));
+      ["proactive.compose", "calendar.plan", "role.state.maintain", "role.daily_review"].includes(task.kind));
     const taskProviders = Array.isArray(modelTasks?.providers) ? modelTasks.providers : [];
     const taskMarkup = tasks.map(task => {
       const draft = modelTaskDrafts[task.kind] || {};

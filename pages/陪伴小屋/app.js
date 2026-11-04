@@ -50,7 +50,7 @@ if (!['auto','manual'].includes(state.sceneMode)) state.sceneMode='auto';
 if (!state.roomLayouts || typeof state.roomLayouts!=='object' || Array.isArray(state.roomLayouts)) state.roomLayouts={};
 const navGroups = [
   ['小屋', [['life','home','house','小屋'],['life','diary','notebook-pen','日记与生活']]],
-  ['塑造角色', [['manage','governance','user-round','自我'],['manage','identity','network','关系网'],['manage','identity-people','users-round','用户'],['manage','identity-groups','messages-square','群聊'],['manage','memory','orbit','事实与经历'],['manage','learning','graduation-cap','学习与反思']]],
+  ['塑造角色', [['manage','governance','user-round','自我'],['manage','identity','network','关系网'],['manage','identity-people','users-round','用户'],['manage','identity-groups','messages-square','群聊'],['manage','memory','orbit','事实与经历'],['manage','learning','graduation-cap','学习与成长']]],
   ['互动能力', [['manage','perception','scan-eye','感知'],['manage','understanding','brain-circuit','理解'],['manage','decision','brain','决策'],['manage','action','play','行动'],['manage','contact','heart-handshake','主动联系'],['manage','expression','message-square-more','表达'],['manage','output','shapes','产出']]],
    ['连接与运行', [['manage','setup','rocket','首次连接'],['manage','host','power','账号与会话'],['manage','models','sliders-horizontal','模型与连接'],['manage','maintenance','settings-2','治理与维护'],['manage','data','database','资料与维护'],['manage','appearance','palette','外观与设置']]],
 ];
@@ -63,7 +63,7 @@ let selfProfileSection='identity';
 let maintenancePane='';
 let dataPane='storage';
 let tokenTaskSettingsJump=0;
-let lifeWorkspaceTab='archive', replyPane='', learningTab='overview', navigationInitialized=false;
+let lifeWorkspaceTab='archive', replyPane='', learningTab='expression', navigationInitialized=false;
 const learningScopes={};
 let learningRecordFocus=null;
 let expressionModule='expression-text';
@@ -178,6 +178,7 @@ function navHref(next,tab='',subtab=''){
   const nested=next==='manage'&&tab==='governance'&&subtab&&subtab!=='profile'
     ||next==='manage'&&tab==='expression'&&subtab
     ||next==='manage'&&tab==='learning'&&subtab
+    ||next==='manage'&&tab==='memory'&&subtab==='settings'
     ||next==='manage'&&tab==='maintenance'&&subtab&&subtab!=='overview'
     ||next==='manage'&&tab==='data'&&['storage','backup','migration'].includes(subtab)
     ||next==='life'&&tab==='diary'&&subtab&&subtab!=='archive';
@@ -222,8 +223,11 @@ function navigationDestination(next,tab='',subtab=''){
   if(next==='people'){next='manage';tab='identity';}
   if(next==='memories'){next='manage';tab='memory';}
   if(next==='manage'){
-    if(tab==='learning'&&subtab==='skills')subtab='chain';
-    const aliases={semantic:['manage','perception'],persona:['manage','governance','questionnaire'],
+    if(tab==='learning'){
+      if(subtab==='semantic'){tab='memory';subtab='settings';}
+      else subtab=({overview:'expression',review:'expression',strategy:'chain',reflection:'chain',behavior:'chain',skills:'chain'})[subtab]||subtab;
+    }
+    const aliases={semantic:['manage','memory','settings'],persona:['manage','governance','questionnaire'],
       knowledge:['manage','governance','knowledge'],growth:['manage','learning','chain'],
       base:['life','diary'],state:['life','state'],reply:['manage','expression'],preferences:['manage','contact']};
     if(aliases[tab]){
@@ -240,7 +244,7 @@ function navigationDestination(next,tab='',subtab=''){
         :'archive';
   }else if(next==='manage'){
     tab=manageTabs.some(item=>item[0]===tab)?tab:'host';
-    subtab=tab==='learning'?(['overview','strategy','review','chain','expression','behavior','semantic','reflection'].includes(subtab)?subtab:'overview')
+    subtab=tab==='learning'?(['chain','expression','slang'].includes(subtab)?subtab:'expression')
       :tab==='expression'?(['text','segment','style','cleanup','voice','components','checks','timing','platform','reaction','group'].includes(subtab)?subtab:'')
       :tab==='maintenance'?(['diagnostics','cache','efficiency','recent','prompts','patrol'].includes(subtab)?subtab:'')
         :tab==='data'?(['storage','backup','migration'].includes(subtab)?subtab:'storage')
@@ -874,7 +878,7 @@ function mountPanelWorkspaces(){
   /* 自带版式的整页模块：容器在就挂，不在就卸。
      这两页此前只挂在老的 manage 路由（下面 render() 里那两行），而外壳重排后
      左栏走的是 section 面板——于是从新版小屋点「主动与联系」只会得到一个空的
-     <section id="contactWorkspace">，钟面永远不出现；「学习与反思」同理。
+     <section id="contactWorkspace">，钟面永远不出现；「学习与成长」同理。
      卸的那一路同样不能少：面板是整块 innerHTML 替换的，切走时不卸载的话
      联系页那条 80ms 的涟漪推进链会继续往已经丢弃的节点上写。 */
   const contactHost=$('#contactWorkspace');
@@ -883,28 +887,11 @@ function mountPanelWorkspaces(){
     :window.CompanionContactPage?.unmount());
   const learningHost=$('#learningWorkspace');
   const growthSources=learningReviewSources({scopeKey:learningTab==='chain'?'growth':null});
-  guarded('学习与反思',()=>learningHost
+  guarded('学习与成长',()=>learningHost
     ?growthSources.length
       ?window.CompanionLearningPage?.mount(learningHost,{sources:growthSources,layout:'chain',recordFocus:learningRecordFocus})
       :window.CompanionLearningPage?.unmount()
     :window.CompanionLearningPage?.unmount());
-  const learningOverviewHost=$('#learningOverviewWorkspace');
-  const behaviorHost=$('#behaviorLearningWorkspace');
-  guarded('行为模仿',()=>behaviorHost
-    ?window.CompanionBehaviorPage?.mount(behaviorHost,{api:roleConfigApi(product.role?.())})
-    :window.CompanionBehaviorPage?.unmount());
-  guarded('学习总览',()=>learningOverviewHost
-    ?window.CompanionLearningOverviewPage?.mount(learningOverviewHost,{sources:learningReviewSources({includeGroups:true}),semantic:{global:true}})
-    :window.CompanionLearningOverviewPage?.unmount());
-  const learningReviewHost=$('#learningReviewWorkspace');
-  guarded('学习审阅中心',()=>learningReviewHost
-    ?window.CompanionLearningReviewPage?.mount(learningReviewHost,{sources:learningReviewSources({includeGroups:true})})
-    :window.CompanionLearningReviewPage?.unmount());
-  const selfReviewHost=$('#selfReviewWorkspace');
-  const reviewSources=learningReviewSources();
-  guarded('每日复盘',()=>selfReviewHost
-    ?window.CompanionSelfReviewPage?.mount(selfReviewHost,{sources:reviewSources,state:'active'})
-    :window.CompanionSelfReviewPage?.unmount());
   const decisionHost=$('#decisionWorkspace');
   guarded('决策页',()=>decisionHost
     ?window.CompanionDecisionPage?.mount(decisionHost,{groupSettingsMarkup:renderDecisionOriginal()})
@@ -952,24 +939,11 @@ function mountPanelWorkspaces(){
   guarded('理解页',()=>understandingRoot
     ?window.CompanionUnderstandingPage?.mount(understandingRoot)
     :window.CompanionUnderstandingPage?.unmount());
-  const expressionHost=$('#expressionWorkspace');
-  if(expressionHost){
-    const selected=learningScope('expression');
-    guarded('表达学习',()=>selected
-      ?window.CompanionExpressionLearningPage?.mount(expressionHost,{replyApi:selected.role.reply_api,
-        scopeKind:selected.target.scope_kind,scopeKey:selected.key,
-        target:selected.target,role:selected.role})
-      :window.CompanionExpressionLearningPage?.unmount());
-  }else guarded('表达学习卸载',()=>window.CompanionExpressionLearningPage?.unmount());
   const expressionSignalsHost=$('#expressionSignalsWorkspace');
   const expressionSources=learningExpressionSources();
   guarded('表达规则',()=>expressionSignalsHost&&expressionSources.length
-    ?window.CompanionExpressionSignalsPage?.mount(expressionSignalsHost,{sources:expressionSources})
+    ?window.CompanionExpressionSignalsPage?.mount(expressionSignalsHost,{sources:expressionSources,manual:expressionSources.some(source=>source.target.scope_kind==='private'),stateFilter:'pending'})
     :window.CompanionExpressionSignalsPage?.unmount());
-  const expressionSamplesHost=$('#expressionSamplesWorkspace');
-  guarded('表达学习素材',()=>expressionSamplesHost&&expressionSources.length
-    ?window.CompanionExpressionSamplesPage?.mount(expressionSamplesHost,{sources:expressionSources})
-    :window.CompanionExpressionSamplesPage?.unmount());
   if($('#setupGuideHost'))guarded('首次配置引导',()=>mountSetupGuide());
   const legacyMigrationHost=$('#legacyMigrationWorkspace');
   if(legacyMigrationHost)guarded('旧版资料迁入',()=>window.CompanionSetup?.mountMigration(legacyMigrationHost));
@@ -990,11 +964,16 @@ function mountPanelWorkspaces(){
   guarded('手机连接',()=>mobileConnectionHost
     ?window.CompanionNativeExtensionPanel?.mount(mobileConnectionHost,{extensionId:'reality',onlyGroup:'mobile'})
     :window.CompanionNativeExtensionPanel?.prune());
-  const semanticLearningHost=$('#semanticLearningWorkspace');
+  const semanticMemoryHost=$('#semanticMemoryWorkspace');
+  const semanticSlangHost=$('#semanticSlangWorkspace');
+  const slangScope=semanticSlangHost?learningScope('slang'):null;
   const semanticExpressionHost=$('#semanticExpressionWorkspace');
   const semanticScope=semanticExpressionHost?learningScope('expression'):null;
-  guarded('语义目录',()=>semanticLearningHost
-    ?window.CompanionSemanticPage?.mount(semanticLearningHost,{view:'learning',globalSettingsOnly:true,scopeKey:'global-semantic-settings'})
+  guarded('语义配置',()=>semanticMemoryHost
+    ?window.CompanionSemanticPage?.mount(semanticMemoryHost,{view:'memory',globalSettingsOnly:true,scopeKey:'global-semantic-memory'})
+    :semanticSlangHost&&slangScope
+      ?window.CompanionSemanticPage?.mount(semanticSlangHost,{view:'slang',target:slangScope.target,
+        selection:{target_id:slangScope.target.target_id,role_id:slangScope.role.role_id},scopeKey:slangScope.key})
     :semanticExpressionHost&&semanticScope
       ?window.CompanionSemanticPage?.mount(semanticExpressionHost,{view:'expression',
         target:semanticScope.target,selection:{target_id:semanticScope.target.target_id,role_id:semanticScope.role.role_id},
@@ -1303,10 +1282,7 @@ function render(){
   window.CompanionRealityAccess?.unmount();
   window.CompanionScreenObservation?.unmount();
   window.CompanionModelsPage?.unmount();
-  window.CompanionExpressionLearningPage?.unmount();
   window.CompanionExpressionSignalsPage?.unmount();
-  window.CompanionExpressionSamplesPage?.unmount();
-  window.CompanionSelfReviewPage?.unmount();
   unmountSetupGuide();
   window.CompanionBackupPage?.unmount();
   window.CompanionStoragePage?.unmount();
@@ -1371,7 +1347,7 @@ function render(){
     main.hidden=true;
     main.innerHTML='';
   }
-  /* 主动与联系与学习与反思都是「自带版式」的整页模块，挂载统一由
+  /* 主动与联系与学习与成长都是「自带版式」的整页模块，挂载统一由
      mountPanelWorkspaces() 按容器是否存在负责——它们只出现在外壳面板里，
      这里再按 manageTab 挂一遍会和面板那一次叠成两份（mount() 会先 unmount，
      于是第二次挂载顶掉第一次，请求白跑一遍、动画也重播一次）。 */
@@ -1769,7 +1745,7 @@ function renderAppearanceSurfaces(){
 }
 const manageTabs=[
   ['perception','scan-eye','感知'],['understanding','brain-circuit','理解'],['decision','brain','决策'],['action','play','行动'],['contact','heart-handshake','主动联系'],['expression','message-square-more','表达'],['output','shapes','产出'],['governance','user-round','自我'],
-  ['identity','network','关系网'],['identity-people','users-round','用户'],['identity-groups','messages-square','群聊'],['identity-access','shield-check','访问规则'],['identity-feelings','heart-handshake','关系与情感'],['memory','orbit','事实与经历'],['learning','graduation-cap','学习与反思'],['models','sliders-horizontal','模型与连接'],['maintenance','settings-2','治理与维护'],['mobile','smartphone','手机连接'],
+  ['identity','network','关系网'],['identity-people','users-round','用户'],['identity-groups','messages-square','群聊'],['identity-access','shield-check','访问规则'],['identity-feelings','heart-handshake','关系与情感'],['memory','orbit','事实与经历'],['learning','graduation-cap','学习与成长'],['models','sliders-horizontal','模型与连接'],['maintenance','settings-2','治理与维护'],['mobile','smartphone','手机连接'],
   ['setup','rocket','开始使用'],
   ['host','power','账号与会话'],['appearance','palette','外观与设置'],['data','database','资料与维护'],
 ];
@@ -3723,7 +3699,6 @@ const SELF_PROFILE_SECTIONS=[
   ['motivations','compass','动机',['motivations','core_values','desire','hobbies']],
   ['boundaries','shield-check','边界',['boundaries','taboos']],
   ['world','globe-2','世界',['world_name','era','tone','rules','scenes','network','world_extra','world']],
-  ['expression_learning','message-square-more','表达学习范围',['main_companion_subject','expression_private_source_mode','expression_private_source_subject_ids','expression_private_application_mode','expression_private_application_subject_ids']],
 ];
 function selectSelfProfileSection(section){
   selfProfileSection=section;
@@ -3855,21 +3830,6 @@ function renderMaintenancePageOriginal(){
   if(maintenancePane==='patrol')return `<div class="maintenance-page"><nav class="maint-subnav" aria-label="治理与维护二级导航"><button type="button" data-go="manage" data-manage="maintenance">返回运行诊断</button><button type="button" aria-current="page">每日巡视</button></nav><section id="roleStateWorkspace" data-state-section="patrol" aria-label="每日巡视维护设置"></section></div>`;
   return `<div class="maintenance-page"><div class="maintenance-settings-entry"><button class="button small" type="button" data-maint-open-patrol>${I('clipboard-check')}每日巡视设置</button></div><section id="maintenanceWorkspace" aria-label="运行诊断与排障"></section></div>`;
 }
-function renderExpressionLearning(){
-  return `<section id="expressionWorkspace" aria-label="表达学习设置">${consoleLoading('正在读取表达学习设置…')}</section>`;
-}
-/* 技能域与日程影响属于角色默认值；逐用户授权在用户页单独配置。 */
-function renderLearningPageOriginal(){
-  return consoleSections([
-    ['表达与说话习惯学习','',`${renderExpressionLearning()}${configEditors('growthConfigWorkspace',['role.growth.skills'],'成长与技能','')}${settingsJump('风格提示词与表达规则','expression','候选的采纳、驳回与退役，以及每条已采纳规则被用过多少次。')}`],
-    ['记忆沉淀与每日反思','反思按时间到点或手动续接，把来源提炼为事实与经历摘要。',`${consoleMountHead('记忆反思','来源 → 新记忆条目；增量、重复安全，不回写改写已成型记忆。')}${settingsJump('反思结果与记忆治理','memory','查看沉淀下来的事实、经历与整理进度。')}`],
-  ]);
-}
-/* 需要一个具体对象与角色的配置组：后端按会话或按安装/角色保存。
-   没有可用对象时不渲染假控件，只说明到哪里改。 */
-/* 配置编辑器要么给出真实控件，要么给一句简短的行内提示。
-   这里**不再**退回 boundaryCard——那是给开发看的合同说明，
-   放进内容块里就是用户说的「垃圾桶」。缺条件时只说明去哪儿补。 */
 function configEditors(id,kinds,title,note,endpoint='',scoped=false){
   void note;
   const hint = (text,retry) => `<p class="config-editors-hint">${I('info')}<span>${text}</span></p>${retry?'<div class="dialog-actions"><button class="button small" type="button" data-workspace-retry>重新读取</button></div>':''}`;
@@ -3965,10 +3925,6 @@ function renderConfigEditors(){
       inputs:{custom_skills:'word-list'},listFields:{custom_skills:{maxItems:8,maxLength:24}},
     }),
   }));
-  if($('#expressionLearningConfigWorkspace'))configEditorMounts.push(mountConfigEditor(
-    'expressionLearningConfigWorkspace',['expression.learning'],{
-      'expression.learning':outputConfigView('expression.learning',{presentation:'journal',navigationLimit:0}),
-    }));
   if($('#knowledgeConfigWorkspace'))configEditorMounts.push(mountConfigEditor('knowledgeConfigWorkspace',['knowledge'],{
     knowledge:{sectionIds:['import','inject'],presentation:'journal',navigationLimit:0}
   }));
@@ -4002,9 +3958,6 @@ function renderConfigEditors(){
     group_participation:{sectionIds:['interjection'],title:'本群主动插话',scopeNote:'当前群聊',navigationLimit:0,
       query:null,requestSection:null,resetKey:'reset_to_inherit',
       onStatus:status=>window.CompanionDecisionPage?.updateParticipationStatus?.(status)}
-  }));
-  if($('#behaviorLearningConfigWorkspace'))configEditorMounts.push(mountConfigEditor('behaviorLearningConfigWorkspace',['group_participation'],{
-    group_participation:{sectionIds:['behavior'],title:'行为模仿策略',note:'',scopeNote:'角色默认设置',navigationLimit:0}
   }));
   if($('#groupDenoiseWorkspace'))configEditorMounts.push(mountConfigEditor('groupDenoiseWorkspace',['group_participation'],{
     group_participation:{sectionIds:['denoise'],title:'群聊表达去噪',note:'只影响群聊回复的表达腔调。'}
@@ -4052,7 +4005,7 @@ const manageSubtitles={
   'identity-access':'管理新私聊成员的默认权限。',
   'identity-feelings':'审阅角色对用户和群聊形成的关系理解。',
   memory:'查看事实、经历、来源与整理状态。',
-  learning:'审核表达学习，并管理角色成长与技能。',
+  learning:'',
   models:'分配各类任务使用的模型与后台工作预算。',
   setup:'',
   host:'发现 Bot 账号、人格和会话窗口，并管理它们的绑定与运行。',
@@ -4238,11 +4191,12 @@ function renderMemoryPage(){
     </div>
     ${records
       ? '<section id="memoryWorkspace" class="memory-workspace" aria-label="事实与经历工作区"></section>'
-      : `<section id="memorySettingsHost" class="memory-settings-workspace" aria-label="记忆策略设置">${consoleLoading('正在读取记忆策略…')}</section>`}
+      : `<section id="memorySettingsHost" class="memory-settings-workspace" aria-label="记忆策略设置">${consoleLoading('正在读取记忆策略…')}</section>
+         <section id="semanticMemoryWorkspace" class="memory-settings-workspace" aria-label="语义记忆检索">${consoleLoading('正在读取语义检索设置…')}</section>`}
   </div>`;
 }
 function learningRoleApi(target,role,key){
-  if(key==='semantic')return target?.scope_kind==='group'?role?.group_memory_api:role?.reply_api;
+  if(key==='slang')return target?.scope_kind==='group'?role?.reply_api:null;
   if(key==='expression')return role?.reply_api;
   if(target?.scope_kind!=='private')return null;
   return role?.growth_api;
@@ -4348,43 +4302,29 @@ window.addEventListener('companion:learning-open',event=>{
 });
 /* 策略按当前角色保存；记录页按来源汇总，不把某个私聊当作策略归属。 */
 function renderLearningPage(){
-  const sections=[['overview','总览'],['strategy','角色策略'],['review','审阅中心'],['chain','成长链路'],['expression','表达学习'],['behavior','行为模仿'],['semantic','语义目录'],['reflection','每日复盘']];
+  const sections=[['expression','表达学习'],['chain','成长链路']];
+  if(learningChoices('slang').length)sections.push(['slang','群聊黑话']);
+  if(!sections.some(([key])=>key===learningTab))learningTab='expression';
   const titles=Object.fromEntries(sections);
-  const nav=`<nav class="learning-hub-nav" aria-label="学习与反思">${sections.map(([key,label],index)=>
-    `<a class="learning-hub-tab${learningTab===key?' is-active':''}" href="${navHref('manage','learning',key)}" ${learningTab===key?'aria-current="page"':''}><span>${String(index+1).padStart(2,'0')} ${label}</span></a>`).join('')}</nav>`;
+  const nav=`<nav class="learning-hub-nav" aria-label="学习与成长">${sections.map(([key,label])=>
+    `<a class="learning-hub-tab${learningTab===key?' is-active':''}" href="${navHref('manage','learning',key)}" ${learningTab===key?'aria-current="page"':''}><span>${label}</span></a>`).join('')}</nav>`;
   let content='';
-  const scopeKey=learningTab==='chain'?'growth':learningTab==='expression'?'expression':'';
-  const scopeControls=scopeKey?learningScopeControls(scopeKey,'筛选记录'):'';
-  const recordControls=scopeKey?learningRoleControls(scopeKey,'筛选记录',scopeControls):'';
-  if(learningTab==='overview'){
-    content=`<section id="learningOverviewWorkspace" class="learning-overview-workspace" aria-label="学习总览">${consoleLoading('正在读取学习状态…')}</section>`;
-  }else if(learningTab==='strategy'){
-    content=`<div class="learning-policy-workspaces">
-      ${configEditors('growthConfigWorkspace',['role.growth.skills'],'成长与技能')}
-      ${configEditors('expressionLearningConfigWorkspace',['expression.learning'],'表达学习策略')}
-    </div>`;
-  }else if(learningTab==='review'){
-    content=`<section id="learningReviewWorkspace" class="learning-review-workspace" aria-label="学习审阅中心">${consoleLoading('正在汇总待审阅内容…')}</section>`;
-  }else if(learningTab==='expression'){
-    content=learningExpressionSources().length?`
-        ${recordControls}<section id="expressionSignalsWorkspace" class="expression-signals-workspace" aria-label="表达规则库">${consoleLoading('正在读取表达规则…')}</section>
-        <section id="expressionSamplesWorkspace" class="expression-samples-workspace" aria-label="表达学习观察素材">${consoleLoading('正在读取观察素材…')}</section>`
+  if(learningTab==='expression'){
+    const choices=learningChoices('expression');
+    const controls=new Set(choices.map(item=>item.role.role_id)).size>1?learningScopeControls('expression','角色'):'';
+    content=learningExpressionSources().length
+      ?`${controls}<section id="expressionSignalsWorkspace" class="expression-signals-workspace" aria-label="表达规则库">${consoleLoading('正在读取表达规则…')}</section>`
       :`<div class="learning-hub-empty" role="status">暂无表达学习记录</div>`;
-  }else if(learningTab==='behavior'){
-    content=`${configEditors('behaviorLearningConfigWorkspace',['group_participation'],'行为模仿策略','')}
-      <section id="behaviorLearningWorkspace" class="behavior-learning-workspace" aria-label="学到的群聊互动">${consoleLoading('正在读取互动习惯…')}</section>`;
-  }else if(learningTab==='semantic'){
-    content=`<section id="semanticLearningWorkspace" class="learning-semantic-workspace" aria-label="全局语义策略">${consoleLoading('正在读取全局语义设置…')}</section>`;
-  }else if(learningTab==='reflection'){
-    content=learningReviewSources().length
-      ?`<section id="selfReviewWorkspace" class="self-review-workspace" aria-label="插件每日复盘">${consoleLoading('正在汇总每日复盘…')}</section>`
-      :`<div class="learning-hub-empty" role="status">暂无可读取复盘的角色。</div>`;
+  }else if(learningTab==='slang'){
+    content=`${learningScopeControls('slang','群聊')}<section id="semanticSlangWorkspace" aria-label="群聊黑话">${consoleLoading('正在读取群聊黑话…')}</section>`;
   }else{
-    content=learningReviewSources({scopeKey:'growth'}).length
-      ?`${recordControls}<section class="learning-chain-top" aria-label="成长记录工作台"><section id="learningWorkspace" class="learning-workspace" aria-label="成长记录与进展"></section></section>`
-      :`<div class="learning-hub-empty" role="status">暂无成长记录</div>`;
+    const controls=learningScopeControls('growth','筛选记录');
+    content=`<details class="learning-growth-settings"><summary>成长设置</summary>${configEditors('growthConfigWorkspace',['role.growth.skills'],'成长与技能')}</details>`+
+      (learningReviewSources({scopeKey:'growth'}).length
+        ?`${learningRoleControls('growth','筛选记录',controls)}<section class="learning-chain-top" aria-label="成长记录工作台"><section id="learningWorkspace" class="learning-workspace" aria-label="成长记录与进展"></section></section>`
+        :`<div class="learning-hub-empty" role="status">暂无成长记录</div>`);
   }
-  return `<div class="learning-hub">${nav}<header class="learning-hub-head"><h1>学习与反思 <span>· ${escapeHTML(titles[learningTab]||'总览')}</span></h1></header><section class="learning-hub-panel" aria-label="${escapeHTML(titles[learningTab]||'总览')}">${content}</section></div>`;
+  return `<div class="learning-hub">${nav}<header class="learning-hub-head"><h1>学习与成长 <span>· ${escapeHTML(titles[learningTab])}</span></h1></header><section class="learning-hub-panel" aria-label="${escapeHTML(titles[learningTab])}">${content}</section></div>`;
 }
 /* 2026-09-30 接回：内容清空期间这一页只渲染一句占位，实现整体保留在 renderMaintenancePageOriginal。挂载点与挂载链从未动过，所以换回名字即可恢复。 */
 function renderMaintenancePage(){return renderMaintenancePageOriginal();}
@@ -4663,7 +4603,6 @@ function configSearchLocation(entry){
   if(entry.group==='life')return ['rest','backlog'].includes(entry.section)
     ?{next:'manage',tab:'contact',contactView:'gates',root:'#replyGateConfigWorkspace'}
     :{next:'life',tab:'diary',subtab:'archive',root:'#lifeConfigWorkspace'};
-  if(entry.group==='group_participation'&&entry.section==='behavior')return {next:'manage',tab:'learning',subtab:'behavior',root:'#behaviorLearningConfigWorkspace'};
   if(entry.group==='group_participation')return entry.section==='denoise'
     ?{next:'manage',tab:'expression',expressionModule:'expression-group',root:'#groupDenoiseWorkspace',focusSection:''}
     :entry.section==='interjection'
@@ -4824,7 +4763,7 @@ function renderSearch(){
     const selected=index===activeSearchResultIndex;
     if(result.kind==='setting'){
       const {entry,location}=result;
-      const pageLabels={identity:'关系网','identity-people':'用户','identity-groups':'群聊','identity-access':'访问规则','identity-feelings':'关系与情感',contact:'主动联系',expression:'表达',governance:'自我',diary:'日记与生活',output:'产出',models:'模型与连接',perception:'感知',decision:'决策',action:'行动',learning:'学习与反思'};
+      const pageLabels={identity:'关系网','identity-people':'用户','identity-groups':'群聊','identity-access':'访问规则','identity-feelings':'关系与情感',contact:'主动联系',expression:'表达',governance:'自我',diary:'日记与生活',output:'产出',models:'模型与连接',perception:'感知',decision:'决策',action:'行动',learning:'学习与成长'};
       const context=['配置项',pageLabels[location.tab]||location.tab,
         entry.sectionTitle,entry.field].filter(Boolean).join(' · ');
       return `<button id="search-option-${index}" class="search-result" type="button" role="option" aria-selected="${selected}" data-search-result="${index}">${I('sliders-horizontal')}<span><strong>${escapeHTML(entry.label)}</strong><small>${escapeHTML(context)}</small></span></button>`;
@@ -4857,7 +4796,7 @@ const tokenTaskSettings={
   'role.journal.derive':{next:'life',tab:'diary',subtab:'archive',workbench:{root:'#lifeConfigWorkspace',section:'routine',field:'derive_enabled'}},
   'role.journal.select':{next:'life',tab:'diary',subtab:'archive',workbench:{root:'#lifeConfigWorkspace',section:'routine',field:'diary_enabled'}},
   'role.growth.progress':{next:'manage',tab:'learning',subtab:'chain'},
-  'role.self_review':{next:'manage',tab:'learning',subtab:'reflection'},
+  'role.daily_review':{next:'manage',tab:'learning',subtab:'expression'},
   'role.expression.learn':{next:'manage',tab:'learning',subtab:'expression'},
   'role.expression.review':{next:'manage',tab:'learning',subtab:'expression'},
   'role.expression.contact_review':{next:'manage',tab:'learning',subtab:'expression'},

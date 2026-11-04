@@ -17,11 +17,9 @@ from companion_v2.memory.person.access import owner_key
 from companion_v2.proactive.management import ContactManagement
 from companion_v2.configuration.management import AcquaintanceManagement, ProactiveContactManagement
 from companion_v2.configuration.models import ConfigLayer
-from companion_v2.expression.configuration import read_settings as expression_settings
 from companion_v2.agenda.models import AgendaTarget
 from companion_v2.agenda.service import AgendaService
 from companion_v2.foundation.refs import OperationRef, VersionRef
-from companion_v2.proactive.configuration import target_for
 from companion_v2.proactive.rhythm_configuration import relationship_target_for
 from companion_v2.conversation.reply_management import ReplyManagement
 
@@ -229,16 +227,16 @@ class PrivateMemberTests(MultiFixture, unittest.IsolatedAsyncioTestCase):
         self.assertTrue(current["person.acquaintance_enabled"])
         self.assertTrue(current["person.learning.acquaintance_learning_enabled"])
 
-    async def test_growth_grants_and_expression_learning_exceptions_are_saved_per_private_person(self):
+    async def test_growth_grants_stay_private_without_raw_expression_learning_controls(self):
         app = await self.ready()
         first_person, second_person = self.person("first"), self.person("second")
         first_before = await self.settings(first_person)
         second_before = await self.settings(second_person)
         self.assertEqual(first_before["growth"]["scope"], "window")
-        self.assertEqual(first_before["expression"]["scope"], "relationship")
+        self.assertNotIn("expression", first_before)
+        self.assertNotIn("expression", second_before)
         saved = await self.configure({
             "growth": {"read_enabled": True, "proposals_enabled": True},
-            "expression": {"private_learning_enabled": False},
         }, person=first_person, key="first-person-learning")
         self.assertEqual(saved["status"], "ok", saved)
 
@@ -249,8 +247,11 @@ class PrivateMemberTests(MultiFixture, unittest.IsolatedAsyncioTestCase):
                 observed_at=self.clock.now()).is_success, action)
             self.assertFalse(app.tasks.check_context_access(second_context, action=action,
                 observed_at=self.clock.now()).is_success, action)
-        self.assertFalse(expression_settings(app.runtime, first_context).private_learning_enabled)
-        self.assertTrue(expression_settings(app.runtime, second_context).private_learning_enabled)
+        rejected = await self.send("configure_member", command={**first_person,
+            "operation_key": "retired-expression-opt-in", "sections": {"expression": {
+                "edit_token": "0" * 64, "changes": {"private_learning_enabled": True}}}})
+        self.assertEqual(rejected["status"], "error", rejected)
+        self.assertEqual(rejected["data"]["code"], "private_member_command_invalid")
         self.assertEqual((await self.settings(second_person))["growth"]["settings"],
                          second_before["growth"]["settings"])
 

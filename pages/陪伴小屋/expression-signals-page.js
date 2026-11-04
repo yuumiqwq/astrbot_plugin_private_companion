@@ -79,6 +79,8 @@ window.CompanionExpressionSignalsPage = (() => {
   let editor = null;
   let kindFilter = "all";
   let sourceFilter = "all";
+  let manualEnabled = false;
+  let learning = false;
 
   function pageState() {
     const states = [stateFilter === "active" ? "adopted" : stateFilter];
@@ -95,19 +97,19 @@ window.CompanionExpressionSignalsPage = (() => {
   };
   const selectedImportSource = () => sources.find(source => source.key === importSourceKey) || sources[0] || null;
   function mounted(current = mountTicket) { return !!root?.isConnected && current === mountTicket; }
-  async function bounded(promise) {
+  async function bounded(promise, timeoutMs = 15000) {
     let timer;
     try {
       return await Promise.race([promise, new Promise((_, reject) => {
-        timer = setTimeout(() => reject(Object.assign(new Error("bridge_timeout"), {code: "bridge_timeout"})), 15000);
+        timer = setTimeout(() => reject(Object.assign(new Error("bridge_timeout"), {code: "bridge_timeout"})), timeoutMs);
       })]);
     } finally { clearTimeout(timer); }
   }
-  async function api(method, route, body) {
+  async function api(method, route, body, timeoutMs = 15000) {
     const product = window.CompanionProduct;
     const bridge = product?.bridgeNow?.() || await product?.bridgeFor?.();
     if (!bridge?.apiGet) throw Object.assign(new Error("bridge_unavailable"), {code: "bridge_unavailable"});
-    const response = await bounded(method === "GET" ? bridge.apiGet(route, body) : bridge.apiPost(route, body));
+    const response = await bounded(method === "GET" ? bridge.apiGet(route, body, {timeoutMs}) : bridge.apiPost(route, body, {timeoutMs}), timeoutMs);
     if (response?.status === "error") {
       const detail = response.data && typeof response.data === "object" ? response.data : {};
       throw Object.assign(new Error(response.message || detail.code || "request_failed"), {code: errorCode(detail.code || response.code || response.message)});
@@ -348,7 +350,7 @@ window.CompanionExpressionSignalsPage = (() => {
         ${importPreview ? `<div class="lh-expression-import-preview" role="status"><div><strong>${e(importPreview.title || "表达分享包")}</strong><span>${e(importPreview.importable_rule_count)} 条待导入 / ${e(importPreview.duplicate_rule_count)} 条重复 / ${e(importPreview.capacity_blocked_count)} 条超出容量</span></div>${importPreview.candidates?.length ? `<ul>${importPreview.candidates.slice(0, 6).map(item => `<li><b>${e(DIMENSION[item.dimension] || item.dimension)}</b><span>${e(item.observation)}</span><small>${e(item.proposal)}</small>${renderApplicability(item.applicability)}</li>`).join("")}</ul>` : ""}${importPreview.rejected_count ? `<details><summary>${e(importPreview.rejected_count)} 项未通过</summary><ul>${(importPreview.rejected || []).slice(0, 10).map(item => `<li>第 ${e(Number(item.group_index) + 1)} 组${item.rule_index == null ? "" : `第 ${e(Number(item.rule_index) + 1)} 条`}：${e(item.reason)}</li>`).join("")}</ul></details>` : ""}<small>确认后进入待审列表，采纳后才会用于回复。</small></div>` : ""}
       </div>${transferNotice ? `<p class="lh-inline-status ${transferError ? "is-error" : ""}" role="status">${e(transferNotice)}</p>` : ""}</section>` : "";
     root.innerHTML = `<section class="lh-signal-list" aria-label="表达规则库"><header class="lh-signal-head"><div><h3>表达规则库</h3><span class="lh-signal-capacity">${e(cap)}</span></div>
-      <div class="lh-signal-head-tools"><a class="lh-command" href="#manage/learning/strategy">学习设置</a><button type="button" class="lh-command" data-share-toggle aria-expanded="${transferOpen}">${transferOpen ? "收起分享" : "分享 / 导入"}</button><button type="button" class="lh-refresh" data-signal-refresh aria-label="重新读取" title="重新读取" ${busy || transferBusy ? "disabled" : ""}><i data-lucide="refresh-cw"></i></button></div></header>
+      <div class="lh-signal-head-tools">${manualEnabled ? `<button type="button" class="lh-command is-primary" data-expression-learn ${busy || transferBusy ? "disabled" : ""}>${learning ? "学习中…" : "立即对照学习"}</button>` : ""}<button type="button" class="lh-command" data-share-toggle aria-expanded="${transferOpen}">${transferOpen ? "收起分享" : "分享 / 导入"}</button><button type="button" class="lh-refresh" data-signal-refresh aria-label="重新读取" title="重新读取" ${busy || transferBusy ? "disabled" : ""}><i data-lucide="refresh-cw"></i></button></div></header>
       <div class="lh-signal-state-filters" role="group" aria-label="规则状态">${stateTabs}</div>
       <div class="lh-signal-toolbar"><div class="lh-signal-filters" role="group" aria-label="表达规则筛选">${filters}</div></div>
       <div class="lh-signal-selects"><label>学习类型<select data-rule-kind-filter><option value="all">全部类型</option><option value="style" ${kindFilter==="style"?"selected":""}>情境表达</option><option value="grammar" ${kindFilter==="grammar"?"selected":""}>语法句式</option></select></label>
@@ -358,6 +360,32 @@ window.CompanionExpressionSignalsPage = (() => {
       ${notice ? `<div class="lh-inline-status ${error ? "is-error" : ""}" role="status"><span>${e(notice)}</span>${issueList}</div>` : ""}
       ${rows || `<div class="lh-signal-empty">${busy ? "正在读取…" : kindFilter!=="all"||sourceFilter!=="all"?"当前筛选下没有表达规则":stateFilter === "pending" ? "还没有待审候选" : stateFilter === "retired" ? "还没有停用的表达规则" : stateFilter==="rejected"?"还没有拒绝的表达规则":"还没有已启用表达规则"}</div>`}${more}</section>`;
     window.lucide?.createIcons({attrs: {"aria-hidden": "true"}});
+  }
+  async function learn() {
+    if (!manualEnabled || busy || writing || transferBusy) return;
+    const current = mountTicket;
+    busy = writing = learning = true;
+    notice = ""; error = false; render();
+    let status = "", failed = false;
+    try {
+      const result = await api("POST", "setup/daily-diagnostic", {
+        simulation:false, confirm_delivery:false, mode:"expression", operation_key:operationKey("compare"),
+      }, 360000);
+      if (result.simulation !== false || result.state !== "complete") {
+        status = "对照学习未完成。"; failed = true;
+      } else {
+        stateFilter = "pending";
+        status = result.receipts?.empty ? "暂无新增回复。" : "对照学习完成。";
+      }
+    } catch (problem) {
+      status = ERRORS[errorCode(problem?.code)] || "尚未收到学习结果，请重新读取。";
+      failed = true;
+    }
+    if (!mounted(current)) return;
+    busy = writing = learning = false;
+    await read(current);
+    if (!mounted(current)) return;
+    notice = status; error = failed; render();
   }
   async function command(id, action) {
     const item = items.find(row => row._key === id);
@@ -474,6 +502,7 @@ window.CompanionExpressionSignalsPage = (() => {
     document.body.append(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(url);
   }
   function onClick(event) {
+    if (event.target.closest("[data-expression-learn]")) { void learn(); return; }
     if (writing || transferBusy) return;
     if (event.target.closest("[data-rule-save]")) { void saveRule(); return; }
     if (event.target.closest("[data-rule-cancel]")) { editor=null; render(); return; }
@@ -577,7 +606,8 @@ window.CompanionExpressionSignalsPage = (() => {
     items = []; pages = {}; capacity = null; notice = ""; busy = false; writing = false; error = false; readIssues = []; confirming = null;
     transferOpen = false; transferBusy = false; transferNotice = ""; transferError = false; importJSON = ""; importPreview = null;
     exportPackage = null; selectedExportIds = new Set();
-    editor=null;kindFilter="all";sourceFilter="all";stateFilter="active";
+    editor=null;kindFilter="all";sourceFilter="all";stateFilter=options.stateFilter==="pending"?"pending":"active";
+    manualEnabled=options.manual===true;learning=false;
     root?.addEventListener("click", onClick); root?.addEventListener("change", onChange); root?.addEventListener("input", onInput);
     window.addEventListener?.("companion-expression-updated", onUpdated); const current = ++mountTicket;
     if (sources.length) void read(current); else { notice = "没有可读取的表达规则来源。"; error = true; render(); }

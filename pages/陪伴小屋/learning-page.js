@@ -1,4 +1,4 @@
-/* 陪伴小屋 · 学习与反思（培育轨道）
+/* 陪伴小屋 · 学习与成长（培育轨道）
  *
  * 这一页管的是「角色自己长出来的技能与长期目标」：从哪条来源提出、谁确认过、
  * 现在在什么阶段、下一步能做什么、有哪些进展等着你过目。
@@ -549,7 +549,7 @@ window.CompanionLearningPage = (() => {
     return rows;
   }
   function railMarkup() {
-    return `<nav class="lea-rail" aria-label="学习与反思工作台">${VIEWS.map(([id, text, icon]) =>
+    return `<nav class="lea-rail" aria-label="学习与成长工作台">${VIEWS.map(([id, text, icon]) =>
       `<button type="button" data-view="${id}" aria-pressed="${data.view === id}">
         <span class="lea-rail-icon">${icon}</span><span class="lea-rail-label">${e(text)}</span>
         ${id === "reviews" && data.reviews.length ? `<em class="lea-count">${data.reviews.length}</em>` : ""}</button>`).join("")}</nav>`;

@@ -281,7 +281,7 @@ test("retired routes open their current workspace instead of account management"
     ["#manage/learning/skills", "#manage/learning/chain", "learning"],
     ["#manage/reply", "#manage/expression", "expression"],
     ["#manage/preferences", "#manage/contact", "contact"],
-    ["#manage/semantic", "#manage/perception", "perception"],
+    ["#manage/semantic", "#manage/memory/settings", "memory"],
     ["#people", "#manage/identity", "identity"],
     ["#memories", "#manage/memory", "memory"],
     ["#manage/base", "#life/diary", "diary"],
@@ -366,7 +366,7 @@ test("token usage links open the matching feature configuration", () => {
   const knownKinds = ["conversation.reply", "conversation.group.review", "proactive.compose", "proactive.judge",
     "memory.reflect", "memory.reflection", "role.state.maintain", "role.state.maintenance", "calendar.plan",
     "role.calendar.plan", "role.reading.consume", "role.growth.progress", "role.journal.diary", "role.journal.dream",
-    "role.journal.derive", "role.journal.select", "role.self_review", "role.expression.learn", "content.authoring.draft",
+    "role.journal.derive", "role.journal.select", "role.expression.learn", "content.authoring.draft",
     "conversation.context_image_caption", "conversation.image_narration", "conversation.image_review", "image_review", "screen.interpretation", "screen.peek"];
   for (const kind of knownKinds) assert.ok(h.run(`tokenTaskSettings['${kind}']`), kind);
   assert.equal(h.run("tokenTaskSettingsFor('conversation.image_narration').tab"), 'understanding');

@@ -24,14 +24,8 @@ class ReplyWebAPI:
         return [(PREFIX, self.status, ["GET"], "Read reply settings and recent diagnostics"),
                 (PREFIX + "/preview", self.preview, ["POST"], "Preview reply segmentation without model access"),
                 (PREFIX + "/configure", self.configure, ["POST"], "Save reply settings for subsequent turns"),
-                (PREFIX + "/expression", self.expression, ["GET"], "Read the expression-learning bounds"),
-                (PREFIX + "/expression/configure", self.expression_configure, ["POST"],
-                 "Save the expression-learning bounds"),
                 (PREFIX + "/style", self.style, ["GET"], "Review learned expression signals"),
                 (PREFIX + "/style/revise", self.style_revise, ["POST"], "Edit a learned expression rule"),
-                (PREFIX + "/style/samples", self.style_samples, ["GET"], "Review original expression samples"),
-                (PREFIX + "/style/samples/command", self.style_sample_command, ["POST"], "Decide an expression sample"),
-                (PREFIX + "/style/learn", self.style_learn, ["POST"], "Learn from this window's eligible samples"),
                 (PREFIX + "/style/export", self.style_export, ["POST"], "Export adopted expression rules"),
                 (PREFIX + "/style/import/preview", self.style_import_preview, ["POST"],
                  "Preview an expression rule-pack import"),
@@ -55,7 +49,7 @@ class ReplyWebAPI:
             if request.query:
                 raise TaskError("reply_request_invalid", "reply routes do not accept target overrides")
             data = None
-            if action not in ("status", "expression"):
+            if action != "status":
                 raw = await request.body()
                 if len(raw) > 300000:
                     raise ValueError("reply request is too large")
@@ -87,10 +81,6 @@ class ReplyWebAPI:
                     result = manager.status(operator)
                 elif action == "preview":
                     result = manager.preview(operator, data["settings"], data["text"], data.get("image_count", 0))
-                elif action == "expression":
-                    result = manager.expression_status(operator)
-                elif action == "expression_configure":
-                    result = manager.expression_configure(operator, data)
                 else:
                     result = manager.configure(operator, data)
                 if result.is_success and action in ("status", "configure"):
@@ -120,11 +110,7 @@ class ReplyWebAPI:
     async def configure(self):
         return await self._run("configure")
 
-    async def expression(self):
-        return await self._run("expression")
 
-    async def expression_configure(self):
-        return await self._run("expression_configure")
 
     async def _style(self, arguments, method):
         from .web_api import outcome_response
@@ -181,19 +167,8 @@ class ReplyWebAPI:
             return outcome_response(Outcome.failed("expression_command_invalid", "invalid UTF-8 style decision"))
         return await self._style(data, "command")
 
-    async def style_samples(self):
-        from .web_api import outcome_response
-        query = request.query
-        try:
-            if set(query.keys()) - {"state", "limit", "after_id"} or any(
-                    len(query.getlist(key)) != 1 for key in query.keys()):
-                raise ValueError
-            return await self._style({"state": query.get("state") or "all",
-                "limit": int(query.get("limit", "24")), "after_id": query.get("after_id") or None}, "list_samples")
-        except (ValueError, TypeError):
-            return outcome_response(Outcome.failed("expression_query_invalid", "invalid sample query"))
 
-    async def _sample_action(self, fields, method, *, max_bytes=8192):
+    async def _style_action(self, fields, method, *, max_bytes=8192):
         from .web_api import outcome_response
         try:
             raw = await request.body()
@@ -205,16 +180,12 @@ class ReplyWebAPI:
                 raise ValueError
             return await self._style(data, method)
         except (ValueError, TypeError, UnicodeError, RecursionError, OverflowError):
-            return outcome_response(Outcome.failed("expression_command_invalid", "invalid sample action"))
+            return outcome_response(Outcome.failed("expression_command_invalid", "invalid style action"))
 
-    async def style_sample_command(self):
-        return await self._sample_action({"handle", "action", "view_token", "operation_key"}, "sample_command")
 
-    async def style_learn(self):
-        return await self._sample_action(set(), "learn")
 
     async def style_revise(self):
-        return await self._sample_action({"signal_id", "view_token", "operation_key", "changes"}, "revise",
+        return await self._style_action({"signal_id", "view_token", "operation_key", "changes"}, "revise",
                                          max_bytes=32768)
 
     @staticmethod

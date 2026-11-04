@@ -42,7 +42,7 @@ SKIPPED = "group_participation_skipped"
 logger = logging.getLogger(__name__)
 INSTRUCTION = """以原人格旁听群聊，收到消息不等于有人在问你。结合话题、发言对象、已有回答和最近参与情况，判断此刻接话是否自然、有内容；他人之间的交流可以安静听着，不依赖固定关键词或回复配额。
 明确 @ 你时正常回应；未被明确 @ 而准备接话时，先调用 group.participation.choose，mode=reply，reason 简短说明参与缘由（称呼、引用、求助、补话等），只记录原因，不向群里发判断过程。随后按需使用工具与回复。
-不适合参与时调用 choose，mode=skip，reason 可省略。本轮到此结束，不发空消息、占位或“我选择不回复”。可以同时记录已授权的互动学习或反馈，不能先做业务操作再旁听，也不能用 skip 撤销已发生的操作。这个决定只针对本轮，不建立长期拒绝规则，不在无新消息时另起对话。
+不适合参与时调用 choose，mode=skip，reason 可省略。本轮到此结束，不发空消息、占位或“我选择不回复”。不能先做业务操作再旁听，也不能用 skip 撤销已发生的操作。这个决定只针对本轮，不建立长期拒绝规则，不在无新消息时另起对话。
 未点名、专名不明或缺少媒体内容时可以 skip；明确向你求助但材料不足时简短问清。若本轮有合适表情原图且足够表达即时态度，可先 reply 再只发图；表情不能代替问题答案。"""
 
 CONFIG_GROUP = "conversation.group_participation"
@@ -76,10 +76,6 @@ CONFIG_DEFAULTS = {
     "group_repeat_interrupt_image_path": "",
     "group_repeat_window_seconds": 120,
     "group_context_max_age_hours": 12,
-    "enable_group_behavior_learning": True,
-    "enable_group_behavior_imitation": True,
-    "enable_group_behavior_feedback": True,
-    "group_behavior_guidance": "",
 }
 CONFIG_LIMITS = {"group_topic_thread_max": (3, 40),
                  "group_interject_min_interval_minutes": (0, 1440),
@@ -106,7 +102,7 @@ def configuration_fields():
             CONFIG_GROUP + "." + name, CONFIG_GROUP, CONFIG_GROUP,
             {bool: ValueKind.BOOLEAN, int: ValueKind.INTEGER, float: ValueKind.PROBABILITY,
              str: ValueKind.TEXT}[type(default)], default,
-            minimum=low, maximum=high, maximum_chars=1200 if name == "group_behavior_guidance" else None,
+            minimum=low, maximum=high, maximum_chars=None,
             apply_mode=ApplyMode.IMMEDIATE, core_only=True, owner_id=CONFIG_OWNER))
     return tuple(fields)
 
@@ -168,9 +164,6 @@ def _check_interrupt_text(fields):
     image = fields.get(CONFIG_GROUP + "." + CONFIG_INTERRUPT_IMAGE)
     if image is not None:
         validate_interrupt_image_path(image.value)
-    guidance = fields.get(CONFIG_GROUP + ".group_behavior_guidance")
-    if guidance is not None and (type(guidance.value) is not str or len(guidance.value) > 1200):
-        raise ConfigurationError("group_participation_configuration", "behavior guidance must be at most 1200 characters")
 
 
 def group_participation_settings(runtime, context):
@@ -196,14 +189,12 @@ def group_participation_settings(runtime, context):
             raise ConfigurationError("group_participation_configuration", f"{name} must be a fraction between 0 and 1")
     validate_interrupt_text(settings[CONFIG_INTERRUPT_TEXT])
     validate_interrupt_image_path(settings[CONFIG_INTERRUPT_IMAGE])
-    if type(settings["group_behavior_guidance"]) is not str or len(settings["group_behavior_guidance"]) > 1200:
-        raise ConfigurationError("group_participation_configuration", "behavior guidance must be at most 1200 characters")
     return settings
 
 
 class GroupParticipation:
     actions = frozenset({ACTION})
-    catalog = (ToolSpec(ACTION, "按原人格决定本轮群聊参与或安静旁听；skip 可与互动学习、反馈笔记同批调用，不能与业务操作同批或在其后调用。",
+    catalog = (ToolSpec(ACTION, "按原人格决定本轮群聊参与或安静旁听；skip 不能与业务操作同批或在其后调用。",
         encode({"type": "object", "properties": {
             "mode": {"type": "string", "enum": ["reply", "skip"]},
             "reason": {"type": "string", "maxLength": 256}},
@@ -214,8 +205,6 @@ class GroupParticipation:
         self.records = GroupPresenceStore(self.runtime)
         self.speech = GroupSpeechLedger(self.runtime)
         self.admission = GroupReplyAdmission(messages)
-        from .behavior import GroupBehavior
-        self.behavior = GroupBehavior(messages)
         self._frozen_turns = {}
         self._reflection_day = ""
 
@@ -371,7 +360,6 @@ class GroupParticipation:
             return False  # media-only messages break the burst, without becoming expression evidence
         try:
             settings = group_participation_settings(self.runtime, context)
-            self.behavior.observe(context, text=text, speaker_id=speaker_id, received_at=received_at, event_id=event_id)
             item = history_items(({
                 "type": "group_member_message",
                 "speaker_id": speaker_id,

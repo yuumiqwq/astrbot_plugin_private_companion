@@ -63,13 +63,6 @@ def prepare_core_reply_outbound_message(event, prepared, message, *, segment_ind
     try:
         core = event.get_extra("_companion_v2_core_reply_context")
         first_text_segment = core.get("outbound_first_text_segment", 0) if isinstance(core, dict) else 0
-        from .core_reply_behavior import behavior_targets
-        behavior_mentions = behavior_targets(event, prepared,
-            first_text=segment_index == first_text_segment, text=text)
-        if isinstance(core, dict) and core.get("_behavior_plan"):
-            # A directed interaction answers its selected member. Do not also
-            # quote or ping the unrelated member who happened to open the turn.
-            settings = {**settings, "reply_quote_enabled": False, "reply_mention_speaker_enabled": False}
         plan = outbound_plan(
             settings=settings,
             scope_kind=prepared.get("channel", "private"),
@@ -85,7 +78,7 @@ def prepare_core_reply_outbound_message(event, prepared, message, *, segment_ind
         return message
     output = list(chain)
     quote = bool(plan and plan.quote) and not any(isinstance(component, Reply) for component in output)
-    mentions = [account for account in (behavior_mentions or (plan.mentions if plan else ()))
+    mentions = [account for account in (plan.mentions if plan else ())
                 if not any(isinstance(component, At)
                            and str(getattr(component, "qq", "")) == account for component in output)]
     mention_components = [At(qq=account) for account in mentions]

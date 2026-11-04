@@ -33,7 +33,7 @@ TASK_ROLE_REFERENCE_KINDS = frozenset({
     "conversation.poke_reply",
     "proactive.compose", "proactive.judge",
     "role.journal.diary", "role.journal.dream", "role.journal.derive", "role.journal.select",
-    "role.self_review", "role.growth.progress",
+    "role.growth.progress",
     "role.expression.learn", "role.expression.review", "role.expression.contact_review",
     "role.state.maintain", "role.reading.consume",
     "calendar.plan", "memory.reflect",

@@ -312,8 +312,8 @@ class AstrBotStagingHostTests(unittest.IsolatedAsyncioTestCase):
         async def forbid_host_persona_lookup(*_args, **_kwargs):
             raise AssertionError("the staging probe must use its V2 persona binding")
 
-        self.native.conversation_manager.get_conversation = forbid_host_persona_lookup
-        probe = await self.controller.probe()
+        with patch.object(self.native.conversation_manager, "get_conversation", forbid_host_persona_lookup):
+            probe = await self.controller.probe()
         self.assertTrue(probe.is_success, probe.failure)
         self.assertFalse(probe.unwrap()["pinned"])
         self.assertFalse(probe.unwrap()["model_request_sent"])
@@ -324,8 +324,8 @@ class AstrBotStagingHostTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(initialized["replayed"])
         self.assertEqual(started["state"], "running")
         model_profiles = self.controller.session.application.router.profiles
-        self.assertIn("role.self_review", model_profiles)
-        self.assertIn("role.expression.learn", model_profiles)
+        self.assertNotIn("role.self_review", model_profiles)
+        self.assertNotIn("role.expression.learn", model_profiles)
         event = FakeEvent(self.native)
         self.assertTrue(self.controller.claims(event))
         batch = (await self.controller.receive_claimed(event)).unwrap()

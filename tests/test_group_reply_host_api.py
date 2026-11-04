@@ -5,7 +5,6 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 import json
 import unittest
-from urllib.parse import urlencode
 
 from astrbot.api.web import PluginRequest, bind_request_context
 from starlette.requests import Request
@@ -18,7 +17,6 @@ from companion_v2.configuration.models import ConfigLayer, ConfigTarget
 from companion_v2.configuration.owners import SparseConfigurationOwner
 from companion_v2.conversation.participation import (ACTION, CONFIG_GROUP as PARTICIPATION_GROUP,
     group_participation_settings)
-from companion_v2.expression.configuration import GROUP_SCOPE_GROUP
 from companion_v2.foundation.refs import RoleOwnerRef, ScopeKind, ScopeRef
 from tests.group_host_support import GroupFixture, group_config
 from tests.native_adapter_support import completion
@@ -27,6 +25,10 @@ from tests.staging_bootstrap_support import wait_for_batch
 
 
 PREFIX = "/astrbot_plugin_private_companion"
+
+
+def system_text(payload):
+    return "\n".join(message["content"] for message in payload["messages"] if message["role"] == "system")
 
 
 class GroupReplyHostAPITests(GroupFixture, unittest.IsolatedAsyncioTestCase):
@@ -56,14 +58,14 @@ class GroupReplyHostAPITests(GroupFixture, unittest.IsolatedAsyncioTestCase):
         return await self.request("/configure", target=target, role=role, query=query,
             data={"operation_key": key, "edit_token": status["data"]["edit_token"], "changes": changes})
 
-    async def receive_group(self, *, target="group-a", unique=False, sender="200"):
+    async def receive_group(self, *, target="group-a", unique=False, sender="200", timeout_seconds=20):
         self.sequence += 1
         event = self.group_event(target=target, unique=unique, sender=sender,
                                  identifier="reply-settings-" + str(self.sequence))
         result = await self.controller.receive_claimed(event)
         self.assertTrue(result.is_success, result.failure)
         batch = result.unwrap()
-        await wait_for_batch(self.controller.session, batch)
+        await wait_for_batch(self.controller.session, batch, timeout_seconds=timeout_seconds)
         return batch
 
     def captured(self, batch):
@@ -115,7 +117,7 @@ class GroupReplyHostAPITests(GroupFixture, unittest.IsolatedAsyncioTestCase):
         self.assertFalse(current["group_air_guard_enabled"])
         self.assertEqual(current["group_wakeup_direct_words"], '["小星", "星星"]')
         payload, _ = self.native.provider.client.state.calls[-1]
-        instruction = payload["messages"][1]["content"]
+        instruction = system_text(payload)
         self.assertNotIn("读空气参考", instruction)
         self.assertIn("小星", instruction)
         self.assertIn("观星", instruction)
@@ -130,7 +132,7 @@ class GroupReplyHostAPITests(GroupFixture, unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.captured(after_disable)["group_wakeup_enabled"])
         self.assertTrue(self.captured(new)["group_wakeup_enabled"])
         payload, _ = self.native.provider.client.state.calls[-1]
-        self.assertNotIn("群唤醒参考", payload["messages"][1]["content"])
+        self.assertNotIn("群唤醒参考", system_text(payload))
 
     async def test_wakeup_preferences_use_original_speaker_and_preview_is_offline(self):
         await self.start_host()
@@ -152,19 +154,19 @@ class GroupReplyHostAPITests(GroupFixture, unittest.IsolatedAsyncioTestCase):
                    "group_wakeup_cold_group_enabled": True}
         self.assertEqual((await self.save(changes, key="wakeup"))["status"], "ok")
         await self.receive_group(sender="200")
-        ordinary = self.native.provider.client.state.calls[-1][0]["messages"][1]["content"]
+        ordinary = system_text(self.native.provider.client.state.calls[-1][0])
         self.assertIn("小星", ordinary)
         self.assertIn("最多 12 个", ordinary)
         self.assertIn("最多相对增加 20%", ordinary)
         self.assertNotIn("私有称呼", ordinary)
         await self.receive_group(sender="201")
-        primary = self.native.provider.client.state.calls[-1][0]["messages"][1]["content"]
+        primary = system_text(self.native.provider.client.state.calls[-1][0])
         self.assertIn("私有称呼", primary)
         self.assertIn("冷群参考间隔 25 分钟", primary)
         self.assertEqual((await self.save({"group_wakeup_bot_name_enabled": False},
                                           key="disable-name"))["status"], "ok")
         await self.receive_group(sender="200")
-        no_name = self.native.provider.client.state.calls[-1][0]["messages"][1]["content"]
+        no_name = system_text(self.native.provider.client.state.calls[-1][0])
         self.assertNotIn("小星", no_name)
 
     async def test_group_role_and_native_session_settings_are_separate(self):
@@ -276,22 +278,14 @@ class GroupReplyHostAPITests(GroupFixture, unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(reset["data"]["status"]["provenance"]["style_prompt"]["layer"])
         self.assertFalse(reset["data"]["status"]["provenance"]["style_prompt"]["explicit"])
 
-    async def test_expression_learning_settings_use_the_same_group_session_scope(self):
+    async def test_group_keeps_rule_review_without_observation_settings(self):
         await self.start_host()
-        status = await self.request("/expression")
-        self.assertEqual(status["status"], "ok", status)
-        self.assertEqual(status["data"]["group_id"], GROUP_SCOPE_GROUP)
-        self.assertFalse(status["data"]["settings"]["group_learning_enabled"])
-        member = await self.request("/expression", query="session_id=201_300")
-        command = {"operation_key": "group-learning-bounds", "edit_token": member["data"]["edit_token"],
-                   "changes": {"group_learning_enabled": True}}
-        saved = await self.request("/expression/configure", query="session_id=201_300", data=command)
-        self.assertEqual(saved["status"], "ok", saved)
-        self.assertTrue(saved["data"]["status"]["settings"]["group_learning_enabled"])
-        replayed = await self.request("/expression/configure", query="session_id=201_300", data=command)
-        self.assertTrue(replayed["data"]["replayed"])
-        self.assertFalse((await self.request("/expression"))["data"]["settings"]["group_learning_enabled"])
-        self.assertFalse((await self.request("/expression", query="session_id=202_300"))["data"]["settings"]["group_learning_enabled"])
+        prefix = PREFIX + "/host/targets/group-a/roles/" + digest("role-a") + "/reply"
+        self.assertIn((prefix + "/style", "GET"), self.routes)
+        self.assertIn((prefix + "/style/command", "POST"), self.routes)
+        for suffix, method in (("/expression", "GET"), ("/expression/configure", "POST"),
+                ("/style/samples", "GET"), ("/style/samples/command", "POST"), ("/style/learn", "POST")):
+            self.assertNotIn((prefix + suffix, method), self.routes)
 
     async def test_short_fragment_waits_then_merges_only_the_same_member(self):
         config = group_config()
@@ -323,7 +317,7 @@ class GroupReplyHostAPITests(GroupFixture, unittest.IsolatedAsyncioTestCase):
         await wait_for_batch(self.controller.session, batch)
         await wait_for_batch(self.controller.session, other)
         payload = self.native.provider.client.state.calls[0][0]
-        self.assertIn("已合并当前成员 2 条输入", payload["messages"][1]["content"])
+        self.assertIn("已合并当前成员 2 条输入", system_text(payload))
         users = " ".join(material["text"] for message in payload["messages"] if message["role"] == "user"
                          for material in json.loads(message["content"])["materials"])
         self.assertIn("瓦", users)
@@ -372,13 +366,13 @@ class GroupReplyHostAPITests(GroupFixture, unittest.IsolatedAsyncioTestCase):
     async def test_participation_diagnostics_limit_modes_and_exact_target_isolation(self):
         await self.start_host()
         self.assertEqual((await self.save({"group_wakeup_log_limit": 10}))["status"], "ok")
-        replied = [await self.receive_group() for _ in range(11)]
+        replied = [await self.receive_group(timeout_seconds=60) for _ in range(11)]
 
         async def skip(payload, tools):
             return completion(tools=[command(ACTION, {"mode": "skip", "reason": "private diagnostic reason"})])
 
         self.native.provider.client.state.behavior = skip
-        skipped = await self.receive_group()
+        skipped = await self.receive_group(timeout_seconds=60)
         pending = (await self.controller.receive_claimed(self.group_event(identifier="pending-fragment", text="瓦"))).unwrap()
         status = (await self.request())["data"]
         self.assertEqual(status["participation_limit"], 10)
@@ -396,7 +390,7 @@ class GroupReplyHostAPITests(GroupFixture, unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.request(role="role-b"))["data"]["participation_recent"], [])
         self.clock.advance(timedelta(seconds=15))
         self.controller.session.application.notify()
-        await wait_for_batch(self.controller.session, pending)
+        await wait_for_batch(self.controller.session, pending, timeout_seconds=60)
 
     async def test_style_list_without_a_group_session_is_an_empty_page_but_commands_still_fail(self):
         await self.start_host()

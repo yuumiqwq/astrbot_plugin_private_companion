@@ -3,9 +3,9 @@
 import logging
 
 from companion_v2.configuration.management import (
-    AcquaintanceManagement, PrivateAcquaintanceManagement,
+    PrivateAcquaintanceManagement,
     PrivateAcquaintanceLearningManagement, ProactiveContactManagement,
-    RelationshipProfileManagement, PrivateExpressionLearningManagement, RoleGrowthManagement,
+    RelationshipProfileManagement, RoleGrowthManagement,
 )
 from companion_v2.configuration.contract import contract_of, layers_of, provenance_of
 from companion_v2.configuration.models import ConfigLayer, ConfigurationError
@@ -166,7 +166,7 @@ class PrivateReplyManagement:
 EDITORS = {"profile": RelationshipProfileManagement, "person": PrivateAcquaintanceManagement,
            "person_learning": PrivateAcquaintanceLearningManagement,
            "contact": PrivateContactManagement, "growth": RoleGrowthManagement,
-           "expression": PrivateExpressionLearningManagement, "reply": PrivateReplyManagement}
+           "reply": PrivateReplyManagement}
 
 
 class PrivateMemberSettings:

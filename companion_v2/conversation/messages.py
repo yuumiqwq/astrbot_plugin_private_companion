@@ -56,7 +56,6 @@ from companion_v2.relationships.profile import ConversationRelationshipProfileCo
 from companion_v2.relationships.group_network import GroupRelationshipStore
 from .life_context import ConversationLifeContext, LIFE_INSTRUCTION
 from .growth_context import ConversationRoleGrowthContext, ROLE_GROWTH_INSTRUCTION
-from .self_review_context import ConversationSelfReviewContext, SELF_REVIEW_INSTRUCTION
 from .style_context import ConversationExpressionStyleContext, EXPRESSION_STYLE_INSTRUCTION
 from .open_items_context import ConversationOpenItems, INSTRUCTION as OPEN_ITEMS_INSTRUCTION
 from .state_context import ConversationStateContext
@@ -123,7 +122,7 @@ def event_from_document(data, context):
 
 class ConversationMessages:
     def __init__(self, tasks: TaskSupervisor, *, relationships=None, memory=None, life=None, open_items=None,
-                 role_growth=None, role_state=None, knowledge=None, role_self_review=None,
+                 role_growth=None, role_state=None, knowledge=None,
                  expression_style=None, reference_materials=None, timezone_name="Asia/Shanghai", solar_term_port=None,
                  calendar=None, cross_window=None):
         if relationships is not None and relationships.runtime is not tasks.runtime:
@@ -190,7 +189,6 @@ class ConversationMessages:
         self.life_context = ConversationLifeContext(life) if life is not None else None
         self.open_items_context = ConversationOpenItems(open_items) if open_items is not None else None
         self.role_growth_context = role_growth
-        self.role_self_review_context = role_self_review
         self.expression_style_context = expression_style
         self.reference_materials = reference_materials
         self.role_state_context = ConversationStateContext(role_state, calendar=calendar) if role_state is not None else None
@@ -486,16 +484,6 @@ class ConversationMessages:
                 growth_materials = self.role_growth_context.contributions(growth_snapshot, context, at)
                 contributions.extend(growth_materials)
         state_materials = ()
-        if isinstance(saved, dict) and "role_self_review" in saved:
-            review_snapshot = saved["role_self_review"]
-            ConversationSelfReviewContext.validate_snapshot(review_snapshot, context)
-            if self.role_self_review_context is None:
-                if review_snapshot["references"]:
-                    raise TaskError("self_review_context_unavailable",
-                                    "original self-review owner is unavailable")
-            else:
-                review_materials = self.role_self_review_context.contributions(review_snapshot, context, at)
-                contributions.extend(review_materials)
         if isinstance(saved, dict) and "expression_style" in saved:
             style_snapshot = saved["expression_style"]
             if self.expression_style_context is not None:
@@ -868,8 +856,6 @@ class ConversationMessages:
                 saved["life_context"] = self.life_context.capture(context, self.tasks.now())
             if private and self.role_growth_context is not None:
                 saved["role_growth"] = self.role_growth_context.capture(context, self.tasks.now())
-            if private and self.role_self_review_context is not None:
-                saved["role_self_review"] = self.role_self_review_context.capture(context, self.tasks.now())
             if self.expression_style_context is not None and style_policy is not None:
                 saved["expression_style"] = self.expression_style_context.capture(
                     context, self.tasks.now(), policy=style_policy)
@@ -995,8 +981,6 @@ class ConversationMessages:
             ("memory.person", "current_person_card"),
             ("role.expression", "expression_style_context"),
             ("role.expression", "expression_style_rule"),
-            ("role.self_review", "self_review_context"),
-            ("role.self_review", "self_review_guidance"),
         }
 
     def validate_optional_refresh(self, context, batch_id, original, request):

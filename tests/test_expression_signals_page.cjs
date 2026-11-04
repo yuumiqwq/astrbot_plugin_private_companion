@@ -200,3 +200,25 @@ test("旧作用域规则只作为可展开诊断，不冒充读取失败", async
   assert.doesNotMatch(root.innerHTML, /lh-inline-status is-error/);
   page.unmount();
 });
+
+test("manual comparison and pending rules share one workspace without native sample calls", async () => {
+  const calls=[],listeners=new Map();
+  const bridge={apiGet:async(route,query)=>{calls.push({method:'GET',route,query});return {status:'ok',data:{items:[],counts:{pending:0,adopted:0}}};},
+    apiPost:async(route,body,options)=>{calls.push({method:'POST',route,body,options});return {status:'ok',data:{simulation:false,state:'complete',receipts:{empty:true}}};}};
+  const root={isConnected:true,innerHTML:'',addEventListener:(name,fn)=>listeners.set(name,fn),removeEventListener:name=>listeners.delete(name)};
+  const window={CompanionProduct:{bridgeNow:()=>bridge,unwrap:value=>value},lucide:{createIcons(){}}};
+  const sandbox=vm.createContext({window,setTimeout,clearTimeout,Date,Math,Number,Object,Array,String});
+  vm.runInContext(source,sandbox);
+  const page=window.CompanionExpressionSignalsPage;
+  page.mount(root,{replyApi:'/astrbot_plugin_private_companion/targets/private/roles/persona/reply',scopeKey:'one',manual:true,stateFilter:'pending'});
+  for(let n=0;n<20&&page.state.busy;n++)await flush();
+  assert.match(root.innerHTML,/立即对照学习/);assert.match(root.innerHTML,/待审/);assert.match(root.innerHTML,/已启用/);
+  assert.doesNotMatch(root.innerHTML,/学习设置|每日对照学习|观察素材|允许.*学习|模仿对象/);
+  listeners.get('click')({target:{closest:selector=>selector==='[data-expression-learn]'?{}:null}});
+  for(let n=0;n<30&&!root.innerHTML.includes('暂无新增回复');n++)await flush();
+  const writes=calls.filter(c=>c.method==='POST');assert.equal(writes.length,1);
+  assert.equal(writes[0].route,'setup/daily-diagnostic');assert.equal(writes[0].body.mode,'expression');
+  assert.equal(writes[0].body.simulation,false);assert.equal(writes[0].body.confirm_delivery,false);assert.equal(writes[0].options.timeoutMs,360000);
+  assert.ok(calls.filter(c=>c.method==='GET').every(c=>c.route.endsWith('/style')));
+  assert.match(root.innerHTML,/暂无新增回复/);page.unmount();
+});

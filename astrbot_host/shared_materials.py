@@ -15,7 +15,7 @@ OWNER = "astrbot.role_context"
 COMMON_SECTIONS = frozenset({
     "person_card", "knowledge_reference", "knowledge_member_clue", "perception",
     "proactive_inspirations", "relationship_profile", "memory", "legacy_memory",
-    "relationship", "life", "growth", "self_review", "open_items", "role_state",
+    "relationship", "life", "growth", "open_items", "role_state",
 })
 MEMORY_PURPOSES = frozenset({
     "pinned_memory", "current_experience", "current_memory", "memory_coverage",

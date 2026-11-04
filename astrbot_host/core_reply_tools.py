@@ -45,7 +45,7 @@ LEAN_GROUP_TOOL_ORDER = ("group.participation.choose", "group.memory.query",
                          "reaction.search", "slang.search")
 LEAN_GROUP_ACTIONS = frozenset(LEAN_GROUP_TOOL_ORDER)
 STANDARD_GROUP_ACTIONS = LEAN_GROUP_ACTIONS | frozenset((
-    "group.behavior.learn", "group.behavior.feedback", "slang.learn", "turn.evidence"))
+    "slang.learn", "turn.evidence"))
 LEAN_GROUP_INSTRUCTION = ("【群聊精简工具】本轮工具集固定且很小。决定接话时直接写出回复，不要先调用 "
     "group.participation.choose；只有决定旁听或等待时才调用 choose(mode=skip)。"
     "不要因为缺少某个工具就声称无法回应，先用自然语言把当前能说的说完。")
@@ -258,9 +258,6 @@ class CoreReplyToolSession:
             # model is going to call.
             if participation is not None:
                 offered.extend(_OfferedTool(spec, "participation") for spec in participation.catalog_for(context))
-                behavior = getattr(participation, "behavior", None)
-                if behavior is not None and _field(self.prepared, "native_input") is not None:
-                    offered.extend(_OfferedTool(spec, "behavior") for spec in behavior.catalog_for(context))
             group = getattr(tools, "group_memory", None)
             if group is not None:
                 offered.extend(_OfferedTool(spec, "group") for spec in group.catalog_for(context))
@@ -335,11 +332,7 @@ class CoreReplyToolSession:
             latest = next((message for message in reversed(getattr(wrapper, "messages", ()))
                            if _field(message, "role") == "assistant" and _field(message, "tool_calls")), None)
             calls = _field(latest, "tool_calls", ())
-        from companion_v2.conversation.behavior.service import ANNOTATIONS
-        annotation_names = {native_tool_name(action) for action in ANNOTATIONS}
-        operations = [call for call in calls
-                      if _field(call, "name", _field(_field(call, "function"), "name")) not in annotation_names]
-        return len(operations) == 1
+        return len(calls) == 1
 
     def _latch_group_skip(self, wrapper, action, arguments):
         reason = arguments.get("reason", "")
@@ -408,9 +401,8 @@ class CoreReplyToolSession:
         try:
             self._latch_group_skip(wrapper, action, arguments)
             await self.authorize(wrapper)
-            from companion_v2.conversation.behavior.service import ANNOTATIONS
             if (self.state.get("group_participation", {}).get("mode") == "skip"
-                    and action not in ANNOTATIONS and action != "group.participation.choose"):
+                    and action != "group.participation.choose"):
                 raise TaskError("group_participation_skipped", "this group turn chose to keep listening")
             offered = next((item for item in self.catalog() if item.spec.action == action), None)
             if offered is None:
@@ -420,13 +412,10 @@ class CoreReplyToolSession:
             validate(arguments, schema)
             if offered.owner == "participation":
                 result = self.choose_participation(wrapper, arguments)
-            elif action not in ANNOTATIONS:
+            else:
                 self.state["_business_tools_started"] = True
             if offered.owner == "participation":
                 pass
-            elif offered.owner == "behavior":
-                from .core_reply_behavior import execute_core_behavior
-                result = execute_core_behavior(self, action, arguments, native_call_id(wrapper, action, arguments))
             elif offered.owner == "evidence":
                 result = await self.evidence()
             elif offered.owner == "external":

@@ -959,8 +959,8 @@ class MultiHostTests(MultiFixture, unittest.IsolatedAsyncioTestCase):
         started = await self.controller.start()
         self.assertTrue(started.is_success, started.failure)
         app = self.controller.session.application
-        self.assertIn("role.self_review", app.router.profiles)
-        self.assertIn("role.expression.learn", app.router.profiles)
+        self.assertNotIn("role.self_review", app.router.profiles)
+        self.assertNotIn("role.expression.learn", app.router.profiles)
         contexts = []
         for target in ("first", "second"):
             context, _ = await self.accepted(target)

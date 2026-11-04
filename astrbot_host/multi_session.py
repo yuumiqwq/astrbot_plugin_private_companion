@@ -61,9 +61,7 @@ from companion_v2.role_work.state.maintenance import state_profile
 from companion_v2.agenda.planning import planning_profile
 from .weather_settings import configured_weather_ports
 from companion_v2.role_work.growth.progress import growth_progress_profile
-from companion_v2.role_work.journal.self_review_service import self_review_profile
 from companion_v2.role_work.daily.service import daily_profile
-from companion_v2.expression.style_service import expression_learning_profile
 from companion_v2.expression.review import expression_review_profile
 from companion_v2.conversation.relay_settings import configuration_fields as relay_configuration_fields
 from .multi_authority import HOST_ID
@@ -462,8 +460,6 @@ class MultiHostSession:
                     state_profile(common.provider_id, max_output_tokens=common.max_output_tokens),
                     planning_profile(common.provider_id, max_output_tokens=common.max_output_tokens),
                     growth_progress_profile(common.provider_id, max_output_tokens=common.max_output_tokens),
-                    self_review_profile(common.provider_id, max_output_tokens=common.max_output_tokens),
-                    expression_learning_profile(common.provider_id, max_output_tokens=common.max_output_tokens),
                     expression_review_profile(common.provider_id, max_output_tokens=common.max_output_tokens),
                     expression_review_profile(common.provider_id, max_output_tokens=common.max_output_tokens, contact=True),
                     reading_profile(common.provider_id, max_output_tokens=common.max_output_tokens),

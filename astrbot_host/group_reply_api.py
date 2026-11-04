@@ -35,18 +35,12 @@ class GroupReplyWebAPI:
         return [(prefix, self.status, ["GET"], "Read this group's reply preferences"),
                 (prefix + "/preview", self.preview, ["POST"], "Preview this group's reply without model access"),
                 (prefix + "/configure", self.configure, ["POST"], "Save this group's reply preferences"),
-                (prefix + "/expression", self.expression, ["GET"], "Read this group's expression-learning bounds"),
-                (prefix + "/expression/configure", self.expression_configure, ["POST"],
-                 "Save this group's expression-learning bounds"),
                 (prefix + "/participation", self.participation, ["GET"],
                  "Read this group's active interjection settings"),
                 (prefix + "/participation/configure", self.participation_configure, ["POST"],
                  "Save this group's active interjection settings"),
                 (prefix + "/style", self.style, ["GET"], "Review this group's learned expression signals"),
-                (prefix + "/style/samples", self.style_samples, ["GET"], "Review this group's writing samples"),
                 (prefix + "/style/revise", self.style_revise, ["POST"], "Edit a group expression rule"),
-                (prefix + "/style/samples/command", self.style_sample_command, ["POST"], "Decide a group writing sample"),
-                (prefix + "/style/learn", self.style_learn, ["POST"], "Learn from eligible group samples"),
                 (prefix + "/style/export", self.style_export, ["POST"], "Export this group's adopted rules"),
                 (prefix + "/style/import/preview", self.style_import_preview, ["POST"], "Preview group rule import"),
                 (prefix + "/style/import/apply", self.style_import_apply, ["POST"], "Import group rules for review"),
@@ -122,10 +116,6 @@ class GroupReplyWebAPI:
                     result = manager.status(operator)
                 elif action == "preview":
                     result = manager.preview(operator, data["settings"], data["text"], data.get("image_count", 0))
-                elif action == "expression":
-                    result = manager.expression_status(operator)
-                elif action == "expression_configure":
-                    result = manager.expression_configure(operator, data)
                 elif action == "participation":
                     result = self._participation_status(session.application, operator, target, controller.now())
                     if result.is_success:
@@ -138,7 +128,7 @@ class GroupReplyWebAPI:
                 else:
                     result = manager.configure(operator, data)
                 if result.is_success and action != "preview":
-                    status = result.value if action in ("status", "expression", "participation") else result.value["status"]
+                    status = result.value if action in ("status", "participation") else result.value["status"]
                     status.update(target_id=self.target_id, role_id=self.role_id, session_id=session_id,
                                   scope_kind="group")
                 return outcome_response(result)
@@ -232,15 +222,7 @@ class GroupReplyWebAPI:
             return outcome_response(Outcome.failed("group_reply_request_invalid", "invalid UTF-8 group reply settings request"))
         return await self._run("configure", data)
 
-    async def expression(self):
-        return await self._run("expression")
 
-    async def expression_configure(self):
-        try:
-            data = await self._body("expression_configure")
-        except (ValueError, TypeError, UnicodeError, RecursionError, OverflowError):
-            return outcome_response(Outcome.failed("group_reply_request_invalid", "invalid UTF-8 expression settings request"))
-        return await self._run("expression_configure", data)
 
     async def participation(self):
         return await self._run("participation")
@@ -444,14 +426,8 @@ class GroupReplyWebAPI:
     async def style_command(self):
         return await self._style(command=True)
 
-    async def style_samples(self):
-        return await self._style(method="list_samples")
 
-    async def style_sample_command(self):
-        return await self._style(command=True, method="sample_command")
 
-    async def style_learn(self):
-        return await self._style(command=True, method="learn")
 
     async def style_revise(self):
         return await self._style(command=True, method="revise")
