@@ -73,10 +73,24 @@ async def simulate_daily_review(app, context, instruction, *, attempt_id, expres
                   "stages": [{"stage": stage, "state": "passed"} for stage in
                              ("source_capture", "model_generation")]}
         try:
-            output.parse(service, context, inputs, text)
+            parsed = output.parse(service, context, inputs, text)
             result["result"] = object_output(text)
             result["result"].setdefault("expression", None)
-            result["stages"].append({"stage": "output_validation", "state": "passed"})
+            rejected = list(getattr(parsed["expression"], "rejections", ()))
+            if rejected:
+                state = "partial" if parsed["expression"].signals else "failed"
+                result.update(state=state, stage="output_validation", expression_validation={
+                    "accepted_rules": len(parsed["expression"].signals), "rejected_rules": len(rejected),
+                    "rejections": rejected, "cursor_advanced": False})
+                rejected_indices = {item["index"] for item in rejected}
+                section = result["result"]["expression"]
+                section["signals"] = [item for index, item in enumerate(section["signals"], 1)
+                                      if index not in rejected_indices]
+                if state == "failed":
+                    result["code"] = rejected[0]["code"]
+                result["stages"].append({"stage": "output_validation", "state": state})
+            else:
+                result["stages"].append({"stage": "output_validation", "state": "passed"})
         except (TaskError, ValueError, TypeError, KeyError) as error:
             result.update(state="failed", stage="output_validation",
                           code=getattr(error, "code", "daily_output_invalid"), error=str(error))

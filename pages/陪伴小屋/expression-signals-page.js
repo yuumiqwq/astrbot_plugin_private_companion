@@ -22,9 +22,12 @@ window.CompanionExpressionSignalsPage = (() => {
     model_estimation_failed: "本机请求用量预估失败，尚未发送模型请求，整理位置保持不变。",
     host_model_limit: "本次请求超出模型配置的输入或输出上限，尚未发送模型请求，整理位置保持不变。",
     host_provider_changed: "模型配置已变化，请重新读取后重试。",
-    expression_approved_evidence_required: "模型生成的规则缺少认可示例依据，未写入规则或推进整理位置。",
-    expression_approved_quote_required: "模型引用的原文与认可示例不匹配，未写入规则或推进整理位置。",
-    expression_unapproved_pattern: "模型生成的说法缺少认可原文支持，未写入规则或推进整理位置。",
+    expression_approved_evidence_required: "模型生成的规则缺少认可示例依据。",
+    expression_approved_quote_required: "模型引用的原文与认可示例不匹配。",
+    expression_unapproved_pattern: "模型生成的说法缺少认可原文支持。",
+    expression_platform_marker: "候选包含平台标记。",
+    expression_candidate_invalid: "候选字段或结构不符合要求。",
+    expression_output_invalid: "模型返回的候选列表结构不符合要求。",
     expression_review_stale: "整理范围已被另一次学习处理，请重新读取。",
     expression_query_invalid: "规则筛选条件无效，请重新读取。",
     expression_revision_invalid: "请填写适用情境、具体说法或句式及使用方式。",
@@ -63,11 +66,34 @@ window.CompanionExpressionSignalsPage = (() => {
     return [label,stage?`阶段：${LEARNING_STAGES[stage] || stage}`:"",
       ERRORS[code] || (code?`错误码：${code}`:"")].filter(Boolean).join(" · ");
   }
+  function learningReceipt(value) {
+    const receipt=value?.receipts?.expression;
+    if(!receipt || typeof receipt!=="object")return null;
+    const count=value=>Number.isSafeInteger(value) && value>=0?value:null;
+    return {pending:count(receipt.pending_rules),rejected:count(receipt.rejected_rules),
+      cursorAdvanced:typeof receipt.cursor_advanced==="boolean"?receipt.cursor_advanced:null,
+      rejections:Array.isArray(receipt.rejections)?receipt.rejections.filter(item=>item && typeof item==="object"):[]};
+  }
+  function learningReceiptNotice(value,label,receipt) {
+    return [learningNotice(value,label),receipt?.pending!==null && receipt?.pending!==undefined?`新增待审 ${receipt.pending} 条`:"",
+      receipt?.rejected!==null && receipt?.rejected!==undefined?`未通过 ${receipt.rejected} 条`:"",
+      receipt?.cursorAdvanced===false?"整理位置已保留":receipt?.cursorAdvanced===true?"整理位置已更新":""].filter(Boolean).join(" · ");
+  }
+  function renderLearningRejections() {
+    const rejected=learningReport?.rejections || [];
+    if(!rejected.length)return "";
+    return `<details class="lh-signal-evidence" data-learning-rejections><summary>查看未通过项 · ${rejected.length} 条</summary><ol>${rejected.map((item,position)=>{
+      const code=errorCode(item.code),index=Number.isSafeInteger(item.index) && item.index>0?item.index:position+1;
+      const reason=ERRORS[code] || (code?`错误码：${code}`:"候选校验未通过。");
+      const examples=Array.isArray(item.unsupported_examples)?item.unsupported_examples.filter(value=>typeof value==="string" && value):[];
+      return `<li data-code="${e(code)}"><strong>第 ${index} 条 · ${e(reason)}</strong>${typeof item.pattern==="string" && item.pattern?`<div>候选说法：${e(item.pattern)}</div>`:""}${examples.length?`<div>未获支持片段：${examples.map(value=>`<span>${e(value)}</span>`).join("；")}</div>`:""}</li>`;
+    }).join("")}</ol></details>`;
+  }
   function responseError(value) {
     const detail=value.data && typeof value.data==="object"?value.data:{};
     const code=learningCode(detail) || learningCode(value);
     return Object.assign(new Error(value.message || code || "request_failed"),
-      {code,stage:learningStage(detail) || learningStage(value)});
+      {code,stage:learningStage(detail) || learningStage(value),receipts:detail.receipts || value.receipts});
   }
 
   const formatTime = value => typeof value === "string" && Number.isFinite(Date.parse(value))
@@ -108,6 +134,7 @@ window.CompanionExpressionSignalsPage = (() => {
   let sourceFilter = "all";
   let manualEnabled = false;
   let learning = false;
+  let learningReport = null;
 
   function pageState() {
     const states = [stateFilter === "active" ? "adopted" : stateFilter];
@@ -171,7 +198,7 @@ window.CompanionExpressionSignalsPage = (() => {
     const request = ++readTicket;
     const requestedFilter = filter;
     const requestedStateFilter = stateFilter;
-    if (!append) { pages = pageState(); items = []; capacity = null; capacityBySource = {}; countsBySource={}; confirming = null; notice = ""; error = false; readIssues = []; selectedExportIds = new Set(); }
+    if (!append) { learningReport = null; pages = pageState(); items = []; capacity = null; capacityBySource = {}; countsBySource={}; confirming = null; notice = ""; error = false; readIssues = []; selectedExportIds = new Set(); }
     const requestsToRead = sources.flatMap(source => Object.keys(pages[source.key] || {})
       .filter(state => !pages[source.key][state].loaded
         || append && pages[source.key][state].cursor && !pages[source.key][state].done)
@@ -378,7 +405,7 @@ window.CompanionExpressionSignalsPage = (() => {
       ${sources.length>1?`<label>记录来源<select data-rule-source-filter><option value="all">全部来源</option>${sources.map(source=>`<option value="${e(source.key)}" ${sourceFilter===source.key?"selected":""}>${e(sourceLabel(source))}</option>`).join("")}</select></label>`:""}</div>
       ${transfer}
       ${renderEditor()}
-      ${notice ? `<div class="lh-inline-status ${error ? "is-error" : ""}" role="status"><span>${e(notice)}</span>${issueList}</div>` : ""}
+      ${notice ? `<div class="lh-inline-status ${error ? "is-error" : ""}" role="status"><span>${e(notice)}</span>${renderLearningRejections()}${issueList}</div>` : ""}
       ${rows || `<div class="lh-signal-empty">${busy ? "正在读取…" : kindFilter!=="all"||sourceFilter!=="all"?"当前筛选下没有表达规则":stateFilter === "pending" ? "还没有待审候选" : stateFilter === "retired" ? "还没有停用的表达规则" : stateFilter==="rejected"?"还没有拒绝的表达规则":"还没有已启用表达规则"}</div>`}${more}</section>`;
     window.lucide?.createIcons({attrs: {"aria-hidden": "true"}});
   }
@@ -386,20 +413,24 @@ window.CompanionExpressionSignalsPage = (() => {
     if (!manualEnabled || busy || writing || transferBusy) return;
     const current = mountTicket;
     busy = writing = learning = true;
-    notice = ""; error = false; render();
-    let status = "", failed = false;
+    notice = ""; error = false; learningReport = null; render();
+    let status = "", failed = false, report = null;
     try {
       const result = await api("POST", "setup/daily-diagnostic", {
         simulation:false, confirm_delivery:false, mode:"expression", operation_key:operationKey("compare"),
       }, 360000);
+      report=learningReceipt(result);
       if (result.simulation !== false) {
         status = learningNotice(result,"对照学习结果待确认"); failed = true;
       } else if (result.state === "complete") {
         stateFilter = "pending";
         status = result.receipts?.empty ? "暂无新增回复。"
           : result.receipts?.expression?.pending_rules === 0 ? "对照学习完成，未生成新候选。" : "对照学习完成。";
+      } else if (result.state === "partial") {
+        stateFilter = "pending";
+        status = learningReceiptNotice(result,"对照学习部分完成",report);
       } else if (result.state === "failed") {
-        status = learningNotice(result,"对照学习失败"); failed = true;
+        status = learningReceiptNotice(result,"对照学习失败",report); failed = true;
       } else if (["prepared","running","received","pending","in_progress","in-progress","processing"].includes(result.state)) {
         status = learningNotice(result,"对照学习处理中");
       } else {
@@ -408,14 +439,15 @@ window.CompanionExpressionSignalsPage = (() => {
     } catch (problem) {
       const code=learningCode(problem);
       const uncertain=!code || ["bridge_timeout","request_timeout","daily_result_unknown"].includes(code);
-      status = learningNotice(problem,uncertain?"对照学习结果待确认":"对照学习失败");
+      report=learningReceipt(problem);
+      status = learningReceiptNotice(problem,uncertain?"对照学习结果待确认":"对照学习失败",report);
       failed = true;
     }
     if (!mounted(current)) return;
     busy = writing = learning = false;
     await read(current);
     if (!mounted(current)) return;
-    notice = status; error = failed; render();
+    notice = status; error = failed; learningReport = report; render();
   }
   async function command(id, action) {
     const item = items.find(row => row._key === id);
@@ -637,11 +669,11 @@ window.CompanionExpressionSignalsPage = (() => {
     transferOpen = false; transferBusy = false; transferNotice = ""; transferError = false; importJSON = ""; importPreview = null;
     exportPackage = null; selectedExportIds = new Set();
     editor=null;kindFilter="all";sourceFilter="all";stateFilter=options.stateFilter==="pending"?"pending":"active";
-    manualEnabled=options.manual===true;learning=false;
+    manualEnabled=options.manual===true;learning=false;learningReport=null;
     root?.addEventListener("click", onClick); root?.addEventListener("change", onChange); root?.addEventListener("input", onInput);
     window.addEventListener?.("companion-expression-updated", onUpdated); const current = ++mountTicket;
     if (sources.length) void read(current); else { notice = "没有可读取的表达规则来源。"; error = true; render(); }
   }
-  function unmount() { mountTicket++; readTicket++; root?.removeEventListener("click", onClick); root?.removeEventListener("change", onChange); root?.removeEventListener("input", onInput); window.removeEventListener?.("companion-expression-updated", onUpdated); root = null; apiBase = ""; scopeKey = ""; sources=[];items = []; pages = {}; capacity = null;capacityBySource={}; readIssues=[]; busy = false; writing = false; transferBusy = false; confirming = null; }
+  function unmount() { learningReport=null; mountTicket++; readTicket++; root?.removeEventListener("click", onClick); root?.removeEventListener("change", onChange); root?.removeEventListener("input", onInput); window.removeEventListener?.("companion-expression-updated", onUpdated); root = null; apiBase = ""; scopeKey = ""; sources=[];items = []; pages = {}; capacity = null;capacityBySource={}; readIssues=[]; busy = false; writing = false; transferBusy = false; confirming = null; }
   return {mount, unmount, get state() { return {items, busy, notice, scopeKey, filter, capacity,sources}; }};
 })();

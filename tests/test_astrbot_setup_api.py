@@ -369,6 +369,34 @@ class AstrBotSetupFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(app.daily_review.run.await_count, 1)
         app.proactive.contact.assert_not_awaited()
 
+    async def test_manual_learning_preserves_partial_and_rejected_candidate_receipts(self):
+        for state, pending in (("partial", 1), ("failed", 0)):
+            with self.subTest(state=state):
+                api, app, _, _ = self.simulation_api_fixture()
+                receipts = {"expression": {"pending_rules": pending, "rejected_rules": 1,
+                    "cursor_advanced": False, "rejections": [{"index": 1,
+                        "code": "expression_platform_marker", "pattern": "[回复]",
+                        "unsupported_examples": ["[回复]"]}]}}
+                if state == "failed":
+                    receipts["code"] = "expression_platform_marker"
+                app.daily_review = NS(run=AsyncMock(return_value={"state": state, "receipts": receipts}))
+                request = NS(username="administrator", query={}, body=AsyncMock(return_value=json.dumps(
+                    {"simulation": False, "confirm_delivery": False, "mode": "expression",
+                     "operation_key": "candidate-validation"}).encode()))
+                with patch("astrbot_host.setup_api.request", request), \
+                     patch("astrbot_host.setup_api.dashboard_operator", return_value=object()), \
+                     patch("companion_v2.role_work.life.management.RoleLifeManagement", return_value=NS(authorize=Mock())):
+                    result = await api.daily_diagnostic()
+                self.assertEqual(result["data"]["state"], state)
+                self.assertEqual(result["data"]["receipts"], receipts)
+                self.assertFalse(result["data"]["simulation"])
+                if state == "failed":
+                    self.assertEqual(result["data"]["code"], "expression_platform_marker")
+                    self.assertEqual(result["data"]["stage"], "output_validation")
+                else:
+                    self.assertNotIn("code", result["data"])
+                app.proactive.contact.assert_not_awaited()
+
     async def test_daily_diagnostic_rejects_delivery_before_starting_the_host(self):
         for fields in ({"simulation": True, "confirm_delivery": True},
                        {"simulation": False, "confirm_delivery": False}):

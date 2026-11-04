@@ -75,7 +75,9 @@ def parse(service, context, inputs, raw):
             raise TaskError("daily_memory_invalid", "memory candidates failed their original evidence checks")
         parsed["memory"] = result
     if inputs["parts"].get("expression"):
-        parsed["expression"] = expression.parse(value["expression"], inputs["expression"])
+        isolated = not any(enabled for name, enabled in inputs["parts"].items() if name != "expression")
+        parse_expression = expression.assess if isolated else expression.parse
+        parsed["expression"] = parse_expression(value["expression"], inputs["expression"])
     return parsed
 
 
@@ -117,7 +119,13 @@ def commit(service, context, inputs, run_id, parsed, *, run=None, effect_started
         if parsed.get("expression") is not None:
             receipts["expression"] = expression.commit(service, context, inputs["expression"],
                                                        parsed["expression"], run_id, connection)
-        service.update(run_id, state="complete", receipt_json=encode(receipts), updated_at=stamp(service.tasks.now()))
+        state = "complete"
+        comparison = receipts["expression"]
+        if comparison and comparison["rejected_rules"]:
+            state = "partial" if parsed["expression"].signals else "failed"
+            if state == "failed":
+                receipts["code"] = comparison["rejections"][0]["code"]
+        service.update(run_id, state=state, receipt_json=encode(receipts), updated_at=stamp(service.tasks.now()))
         service.committed.add(run_id)
         if run is not None:
             run.record_operation(run_id)

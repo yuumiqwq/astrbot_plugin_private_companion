@@ -2,6 +2,8 @@
 
 import json
 import unittest
+from copy import deepcopy
+from unittest.mock import patch
 
 from companion_v2.configuration.management import ExpressionLearningManagement, RoleProfileManagement
 from companion_v2.execution.models import TaskError, encode
@@ -86,6 +88,89 @@ class DailyExpressionTests(daily_tests.DailyReviewTests):
                     "emotion_gates": ["any"], "intent": "any", "keywords": []},
             }]}
         return answered(encode(result))
+
+    async def mixed_comparison_reply(self, envelope):
+        response = await self.comparison_reply(envelope)
+        value = json.loads(response.draft.text)
+        good = value["expression"]["signals"][0]
+        unapproved = deepcopy(good)
+        unapproved["proposal"] = "可以补充“先读题目。”作为自己的表达。"
+        marker = deepcopy(good)
+        marker["expression"].update(kind="style", pattern="[回复]")
+        value["expression"]["signals"] = [unapproved, marker, good]
+        return answered(encode(value))
+
+    async def test_mixed_candidates_save_only_approved_pending_rules_and_keep_the_window(self):
+        app, context = await self.comparison_ready(diary=False, plan=False, memory=False)
+        self.model_behavior = self.mixed_comparison_reply
+        result = await app.daily_review.run(context, "原角色人格", expression_only=True,
+                                             operation_key="mixed-candidates")
+        self.assertEqual(result["state"], "partial", result)
+        receipt = result["receipts"]["expression"]
+        self.assertEqual(receipt["pending_rules"], 1)
+        self.assertFalse(receipt["cursor_advanced"])
+        self.assertEqual(receipt["rejected_rules"], 2)
+        self.assertEqual([item["index"] for item in receipt["rejections"]], [1, 2])
+        self.assertEqual([item["code"] for item in receipt["rejections"]],
+                         ["expression_unapproved_pattern", "expression_platform_marker"])
+        self.assertEqual(receipt["rejections"][0]["unsupported_examples"], ["先读题目。"])
+        rows = app.runtime.read_all("SELECT state,proposal,evidence_json FROM expression_style_signals", ())
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["state"], "pending")
+        self.assertEqual(json.loads(rows[0]["evidence_json"]), ["preset:1"])
+        self.assertNotIn("先读题目", rows[0]["proposal"])
+        self.assertIsNone(app.runtime.read_one("SELECT value FROM runtime_metadata WHERE key=?",
+                                              (expression.cursor_key(context),)))
+        next_window = await expression.capture(app.daily_review, context, automatic=False)
+        self.assertEqual([item["sequence"] for item in next_window["unreviewed_dialogue"]], [11, 12])
+        self.assertEqual(len(next_window["existing_rules"]), 1)
+        current = app.expression_style_context.capture(context, self.clock.now(), policy=read_settings(app.runtime, context))
+        self.assertEqual(current["references"], [])
+        repeated = await app.daily_review.run(context, "原角色人格", expression_only=True,
+                                               operation_key="mixed-candidates")
+        self.assertEqual(repeated, result)
+        self.assertEqual(len(self.daily_calls()), 1)
+
+        self.model_behavior = self.comparison_reply
+        completed = await app.daily_review.run(context, "原角色人格", expression_only=True,
+                                                operation_key="all-valid-later")
+        self.assertEqual(completed["state"], "complete", completed)
+        self.assertTrue(completed["receipts"]["expression"]["cursor_advanced"])
+        self.assertEqual(completed["receipts"]["expression"]["pending_rules"], 0)
+        self.assertIsNone(await expression.capture(app.daily_review, context, automatic=False))
+        self.assertEqual(app.runtime.read_one("SELECT COUNT(*) n FROM expression_style_signals", ())["n"], 1)
+
+    async def test_partial_preview_reports_rejections_without_writing_or_advancing(self):
+        app, context = await self.comparison_ready(diary=False, plan=False, memory=False)
+        self.model_behavior = self.mixed_comparison_reply
+        result = await simulate_daily_review(app, context, "原角色人格",
+            attempt_id="partial-comparison-preview", expression_only=True)
+        self.assertEqual(result["state"], "partial", result)
+        self.assertEqual(result["expression_validation"]["accepted_rules"], 1)
+        self.assertEqual(result["expression_validation"]["rejected_rules"], 2)
+        self.assertEqual(len(result["result"]["expression"]["signals"]), 1)
+        self.assertEqual(result["stages"][-1], {"stage": "output_validation", "state": "partial"})
+        self.assertIsNone(app.runtime.read_one("SELECT value FROM runtime_metadata WHERE key=?",
+                                              (expression.cursor_key(context),)))
+        self.assertEqual(app.runtime.read_one("SELECT COUNT(*) n FROM expression_style_signals", ())["n"], 0)
+        self.assertEqual(app.runtime.read_one("SELECT COUNT(*) n FROM expression_style_runs", ())["n"], 0)
+
+    async def test_partial_rule_save_rolls_back_and_recovers_the_same_output_without_a_second_call(self):
+        app, context = await self.comparison_ready(diary=False, plan=False, memory=False)
+        self.model_behavior = self.mixed_comparison_reply
+        with patch.object(expression.rule_details, "write", side_effect=RuntimeError("synthetic storage failure")):
+            result = await app.daily_review.run(context, "原角色人格", expression_only=True,
+                                                 operation_key="partial-recovery")
+        self.assertEqual(result["state"], "received", result)
+        self.assertEqual(app.runtime.read_one("SELECT COUNT(*) n FROM expression_style_signals", ())["n"], 0)
+        self.assertEqual(app.runtime.read_one("SELECT COUNT(*) n FROM expression_style_runs", ())["n"], 0)
+        recovered = await app.daily_review.run(context, "原角色人格", expression_only=True,
+                                                operation_key="partial-recovery")
+        self.assertEqual(recovered["state"], "partial", recovered)
+        self.assertEqual(recovered["receipts"]["expression"]["pending_rules"], 1)
+        self.assertEqual(len(self.daily_calls()), 1)
+        self.assertIsNone(app.runtime.read_one("SELECT value FROM runtime_metadata WHERE key=?",
+                                              (expression.cursor_key(context),)))
 
     async def test_comparison_joins_one_daily_call_and_waits_for_adoption(self):
         app, context = await self.comparison_ready()
@@ -179,8 +264,11 @@ class DailyExpressionTests(daily_tests.DailyReviewTests):
         self.model_behavior = ungrounded
         result = await app.daily_review.run(context, "原角色人格", expression_only=True, operation_key="invalid")
         self.assertEqual(result["state"], "failed", result)
+        self.assertEqual(result["receipts"]["expression"]["rejected_rules"], 1)
+        self.assertEqual(result["receipts"]["code"], "expression_approved_evidence_required")
         self.assertIsNone(app.runtime.read_one("SELECT value FROM runtime_metadata WHERE key=?", (expression.cursor_key(context),)))
         self.assertEqual(app.runtime.read_one("SELECT COUNT(*) n FROM expression_style_signals", ())["n"], 0)
+        self.assertEqual(app.runtime.read_one("SELECT COUNT(*) n FROM expression_style_runs", ())["n"], 0)
         self.model_behavior = good
         result = await app.daily_review.run(context, "原角色人格", expression_only=True, operation_key="corrected")
         self.assertEqual(result["state"], "complete", result)
@@ -249,6 +337,42 @@ class ApprovedTargetParserTests(unittest.TestCase):
         result = expression.parse(self.value, self.snapshot)
         self.assertEqual(result.signals[0].evidence_handles, ("preset:1",))
 
+    def test_qq_placeholder_is_not_a_style_even_when_it_occurs_in_approved_records(self):
+        self.snapshot["handles"]["preset:1"]["content"] = "[回复]我可以学呀！哼 我明明有一直在学（委屈"
+        self.value["signals"][0]["expression"]["pattern"] = "[回复]"
+        self.value["signals"][0]["approved_quotes"][0]["quote"] = "[回复]"
+        with self.assertRaises(TaskError) as raised:
+            expression.parse(self.value, self.snapshot)
+        self.assertEqual(raised.exception.code, "expression_platform_marker")
+        self.assertEqual(raised.exception.unsupported_examples, ("[回复]",))
+
+    def test_context_cues_can_be_described_without_becoming_style_examples(self):
+        self.value["signals"][0]["expression"]["situation"] = "对方提到“（缩被窝）”时"
+        parsed = expression.parse(self.value, self.snapshot)
+        self.assertEqual(len(parsed.signals), 1)
+
+    def test_one_invalid_candidate_does_not_discard_an_approved_candidate(self):
+        bad = deepcopy(self.value["signals"][0])
+        bad["proposal"] = "可以补充“（缩被窝）”表达。"
+        self.value["signals"].insert(0, bad)
+        assessed = expression.assess(self.value, self.snapshot)
+        self.assertEqual(len(assessed.signals), 1)
+        self.assertEqual(len(assessed.rejections), 1)
+        self.assertEqual(assessed.rejections[0]["index"], 1)
+        self.assertEqual(assessed.rejections[0]["unsupported_examples"], ["（缩被窝）"])
+
+    def test_invalid_candidate_shape_has_its_own_rejection(self):
+        self.value["signals"].insert(0, [])
+        assessed = expression.assess(self.value, self.snapshot)
+        self.assertEqual(len(assessed.signals), 1)
+        self.assertEqual(assessed.rejections[0]["code"], "expression_candidate_invalid")
+
+    def test_invalid_batch_shape_still_fails_before_any_candidate_is_processed(self):
+        self.value["signals"] = {"not": "a list"}
+        with self.assertRaises(TaskError) as raised:
+            expression.assess(self.value, self.snapshot)
+        self.assertEqual(raised.exception.code, "expression_output_invalid")
+
     def test_comparison_references_never_become_positive_learning_evidence(self):
         self.value["signals"][0]["evidence_handles"].append("unreviewed:2")
         result = expression.parse(self.value, self.snapshot)
@@ -264,6 +388,22 @@ class ApprovedTargetParserTests(unittest.TestCase):
         self.value["signals"][0]["proposal"] = "句末可以补充“（缩被窝）”表达。"
         with self.assertRaisesRegex(TaskError, "unreviewed-only expression"):
             expression.parse(self.value, self.snapshot)
+
+    def test_unapproved_examples_are_rejected_in_both_advice_fields_and_quote_forms(self):
+        self.value["signals"][0]["expression"].update(kind="grammar", pattern="先回应，再补充下一步")
+        self.snapshot["unreviewed_dialogue"].append({"role": "assistant", "content": "先读题目。"})
+        for field in ("proposal", "pattern"):
+            for pair in (("“", "”"), ('"', '"'), ("‘", "’"), ("'", "'"), ("`", "`"), ("", "")):
+                with self.subTest(field=field, quotes=pair):
+                    value = deepcopy(self.value)
+                    advice = "先简短答应，再说" + pair[0] + "先读题目。" + pair[1]
+                    if field == "proposal":
+                        value["signals"][0][field] = advice
+                    else:
+                        value["signals"][0]["expression"][field] = advice
+                    assessed = expression.assess(value, self.snapshot)
+                    self.assertEqual(len(assessed.signals), 0)
+                    self.assertEqual(assessed.rejections[0]["code"], "expression_unapproved_pattern")
 
     def test_a_quote_must_come_from_the_cited_approved_message(self):
         self.value["signals"][0]["approved_quotes"][0]["quote"] = "（缩被窝)"

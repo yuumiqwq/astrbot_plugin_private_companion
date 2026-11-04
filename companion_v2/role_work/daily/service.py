@@ -127,7 +127,7 @@ class RoleDailyReview:
             original = TaskContext.restore(json.loads(row["context_json"]))
             if original.key != context.key:
                 return self.status(run_id)
-            if row["state"] in ("complete", "failed", "unknown"):
+            if row["state"] in ("complete", "partial", "failed", "unknown"):
                 return self.status(run_id)
             if row["state"] == "received" and row["task_id"]:
                 task = self.runtime.read_one("SELECT state FROM execution_tasks WHERE task_id=?", (row["task_id"],))
@@ -177,7 +177,7 @@ class RoleDailyReview:
                     permanent = result.stop_code in {"planning_window_expired", "planning_settings_changed",
                         "planning_role_changed", "planning_calendar_changed", "daily_settings_changed", "daily_role_changed",
                         "memory_settings_changed", "memory_reflection_stale", "journal_revision_conflict", "journal_deleted"}
-                    if current["state"] not in ("received", "complete", "failed") or current["state"] == "received" and permanent:
+                    if current["state"] not in ("received", "complete", "partial", "failed") or current["state"] == "received" and permanent:
                         dispatched = self.runtime.read_one("SELECT 1 FROM model_calls WHERE task_id=? AND state IN ('dispatched','unknown')", (task_id,))
                         state = "unknown" if dispatched and not permanent else "failed"
                         with self.runtime.transaction() as connection:
@@ -186,7 +186,7 @@ class RoleDailyReview:
                 return self.status(run_id)
             except TaskError as error:
                 with self.runtime.transaction() as connection:
-                    if self._row(run_id)["state"] != "complete":
+                    if self._row(run_id)["state"] not in ("complete", "partial"):
                         self.update(run_id, state="failed", receipt_json=encode({"code": error.code}),
                                     updated_at=stamp(self.tasks.now()))
                 return self.status(run_id)

@@ -223,18 +223,19 @@ test("manual comparison and pending rules share one workspace without native sam
   assert.match(root.innerHTML,/暂无新增回复/);page.unmount();
 });
 
-async function manualComparisonHarness(response, problem) {
+async function manualComparisonHarness(response, problem, options={}) {
   const calls=[],listeners=new Map();let finish;
   const settled=new Promise(resolve=>{finish=resolve;});
   const bridge={
-    apiGet:async(route,query)=>{calls.push({method:"GET",route,query});return {status:"ok",data:{items:[],counts:{pending:0,adopted:0}}};},
+    apiGet:async(route,query)=>{const items=calls.some(call=>call.method==="POST")?options.items || []:[];
+      calls.push({method:"GET",route,query});return {status:"ok",data:{items,counts:{pending:items.length,adopted:0}}};},
     apiPost:async(route,body)=>{calls.push({method:"POST",route,body});await settled;if(problem)throw problem;return response;},
   };
   const root={isConnected:true,innerHTML:"",addEventListener:(name,fn)=>listeners.set(name,fn),removeEventListener:name=>listeners.delete(name)};
   const window={CompanionProduct:{bridgeNow:()=>bridge,unwrap:value=>value},lucide:{createIcons(){}}};
   vm.runInContext(source,vm.createContext({window,setTimeout,clearTimeout,Date,Math,Number,Object,Array,String}));
   const page=window.CompanionExpressionSignalsPage;
-  page.mount(root,{replyApi:`/${HOST}/targets/private/roles/persona/reply`,manual:true,stateFilter:"pending"});
+  page.mount(root,{replyApi:`/${HOST}/targets/private/roles/persona/reply`,manual:true,stateFilter:options.initialState || "pending"});
   for(let n=0;n<20&&page.state.busy;n++)await flush();
   const click=()=>listeners.get("click")({target:{closest:selector=>selector==="[data-expression-learn]"?{}:null}});
   click();click();
@@ -248,7 +249,7 @@ async function manualComparisonHarness(response, problem) {
   assert.equal(calls.filter(call=>call.method==="GET").length,2);
   assert.ok(calls.filter(call=>call.method==="GET").every(call=>call.route.endsWith("/style")));
   assert.ok(calls.filter(call=>call.method==="POST").every(call=>call.route==="setup/daily-diagnostic"));
-  return {page,root,calls};
+  return {page,root,calls,click:selector=>listeners.get("click")({target:{closest:value=>value===selector?{}:null}})};
 }
 
 test("manual comparison shows insufficient DeepSeek balance from result or receipt codes without retries",async()=>{
@@ -273,11 +274,15 @@ test("manual comparison shows approved-evidence validation failures without repo
     ["expression_approved_evidence_required","模型生成的规则缺少认可示例依据"],
   ]){
     const h=await manualComparisonHarness({status:"ok",data:{simulation:false,state:"failed",
-      code,stage:"output_validation",receipts:{code}}});
+      code,stage:"output_validation",receipts:{code,expression:{pending_rules:0,rejected_rules:1,
+        cursor_advanced:false,rejections:[{index:1,code}]}}}});
     assert.match(h.root.innerHTML,/对照学习失败/);
     assert.match(h.root.innerHTML,/阶段：输出校验/);
     assert.ok(h.root.innerHTML.includes(text));
-    assert.match(h.root.innerHTML,/未写入规则或推进整理位置/);
+    assert.match(h.root.innerHTML,/新增待审 0 条/);
+    assert.match(h.root.innerHTML,/未通过 1 条/);
+    assert.match(h.root.innerHTML,/整理位置已保留/);
+    assert.match(h.root.innerHTML,/查看未通过项/);
     assert.doesNotMatch(h.root.innerHTML,/对照学习完成/);
     h.page.unmount();
   }
@@ -339,4 +344,71 @@ test("manual comparison accepts complete results with no candidates and validate
   assert.match(unsafe.root.innerHTML,/对照学习失败/);
   assert.doesNotMatch(unsafe.root.innerHTML,/script|sensitive-token|secret key/);
   unsafe.page.unmount();
+});
+
+const candidateRejections=[
+  {index:1,code:"expression_unapproved_pattern",pattern:"干嘛/干嘛呀",unsupported_examples:["怎么又叫我宝宝"]},
+  {index:2,code:"expression_platform_marker",pattern:"[回复]",unsupported_examples:["[回复]"]},
+];
+
+test("partial comparison shows saved and rejected counts, keeps the checkpoint and opens pending rules",async()=>{
+  const item={signal_id:"approved-rule",state:"pending",dimension:"diction",proposal:"仅保留已认可的说法",
+    expression:{kind:"style",pattern:"合格的说法"},actions:["adopt","reject"],view_token:"token"};
+  const h=await manualComparisonHarness({status:"ok",data:{simulation:false,state:"partial",
+    code:"expression_unapproved_pattern",stage:"output_validation",receipts:{expression:{
+      pending_rules:1,rejected_rules:2,cursor_advanced:false,rejections:candidateRejections}}}},null,{initialState:"active",items:[item]});
+  assert.match(h.root.innerHTML,/对照学习部分完成/);
+  assert.match(h.root.innerHTML,/新增待审 1 条/);assert.match(h.root.innerHTML,/未通过 2 条/);
+  assert.match(h.root.innerHTML,/整理位置已保留/);
+  assert.doesNotMatch(h.root.innerHTML,/未写入规则|对照学习失败|lh-inline-status is-error/);
+  assert.match(h.root.innerHTML,/data-signal-state="pending" aria-pressed="true"/);
+  assert.equal(h.calls.filter(call=>call.method==="GET").at(-1).query.state,"pending");
+  assert.match(h.root.innerHTML,/lh-signal-card is-pending/);assert.match(h.root.innerHTML,/合格的说法/);
+  assert.match(h.root.innerHTML,/data-learning-rejections/);assert.match(h.root.innerHTML,/查看未通过项 · 2 条/);
+  assert.match(h.root.innerHTML,/第 1 条 · 模型生成的说法缺少认可原文支持/);
+  assert.match(h.root.innerHTML,/第 2 条 · 候选包含平台标记/);
+  assert.match(h.root.innerHTML,/候选说法：干嘛\/干嘛呀/);
+  assert.match(h.root.innerHTML,/未获支持片段：<span>怎么又叫我宝宝<\/span>/);
+  assert.match(h.root.innerHTML,/候选说法：\[回复\]/);
+  h.click("[data-signal-refresh]");
+  for(let n=0;n<20&&h.page.state.busy;n++)await flush();
+  assert.doesNotMatch(h.root.innerHTML,/data-learning-rejections|对照学习部分完成/);
+  assert.equal(h.calls.filter(call=>call.method==="POST").length,1);
+  h.page.unmount();
+});
+
+test("fully rejected comparison retains per-candidate reasons and reports zero pending additions",async()=>{
+  const h=await manualComparisonHarness({status:"ok",data:{simulation:false,state:"failed",
+    code:"expression_unapproved_pattern",stage:"output_validation",receipts:{code:"expression_unapproved_pattern",
+      expression:{pending_rules:0,rejected_rules:2,cursor_advanced:false,rejections:candidateRejections}}}});
+  assert.match(h.root.innerHTML,/对照学习失败/);assert.match(h.root.innerHTML,/lh-inline-status is-error/);
+  assert.match(h.root.innerHTML,/新增待审 0 条/);assert.match(h.root.innerHTML,/未通过 2 条/);
+  assert.match(h.root.innerHTML,/整理位置已保留/);assert.match(h.root.innerHTML,/查看未通过项 · 2 条/);
+  assert.match(h.root.innerHTML,/expression_platform_marker/);assert.match(h.root.innerHTML,/怎么又叫我宝宝/);
+  assert.doesNotMatch(h.root.innerHTML,/对照学习完成|对照学习部分完成/);
+  h.page.unmount();
+});
+
+test("candidate rejection diagnostics escape fragments and preserve valid source sequence numbers",async()=>{
+  const h=await manualComparisonHarness({status:"ok",data:{simulation:false,state:"failed",
+    code:"expression_candidate_invalid",receipts:{expression:{pending_rules:0,rejected_rules:2,cursor_advanced:false,
+      rejections:[{index:3,code:"expression_candidate_invalid",pattern:'<img src=x onerror="attack()">',
+        unsupported_examples:['<script>attack()</script>',null,{}]},
+        {index:4,code:"future_candidate_error",pattern:"普通片段",unsupported_examples:[]}]}}}});
+  assert.match(h.root.innerHTML,/第 3 条 · 候选字段或结构不符合要求/);
+  assert.match(h.root.innerHTML,/第 4 条 · 错误码：future_candidate_error/);
+  assert.match(h.root.innerHTML,/&lt;img src=x onerror=&quot;attack\(\)&quot;&gt;/);
+  assert.match(h.root.innerHTML,/&lt;script&gt;attack\(\)&lt;\/script&gt;/);
+  assert.doesNotMatch(h.root.innerHTML,/<img src=x|<script>|\[object Object\]/);
+  h.page.unmount();
+});
+
+test("API failures retain rejected-candidate receipts alongside the original failure status",async()=>{
+  const h=await manualComparisonHarness({status:"error",data:{code:"expression_platform_marker",stage:"output_validation",
+    receipts:{expression:{pending_rules:0,rejected_rules:1,cursor_advanced:false,rejections:[candidateRejections[1]]}}}});
+  assert.match(h.root.innerHTML,/对照学习失败/);assert.match(h.root.innerHTML,/阶段：输出校验/);
+  assert.match(h.root.innerHTML,/新增待审 0 条/);assert.match(h.root.innerHTML,/候选包含平台标记/);
+  assert.match(h.root.innerHTML,/第 2 条/);assert.match(h.root.innerHTML,/候选说法：\[回复\]/);
+  assert.match(h.root.innerHTML,/整理位置已保留/);
+  h.page.unmount();
 });
