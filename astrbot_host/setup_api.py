@@ -1141,7 +1141,7 @@ class SetupWebAPI:
                     code = result.get("code") or receipts.get("code")
                     failure = {}
                     if code:
-                        failure = {"code": code, "stage": "model_generation" if code.startswith("model_")
+                        failure = {"code": code, "stage": "model_generation" if code.startswith(("model_", "host_model_", "host_provider_"))
                                    else "output_validation"}
                         if code == "model_insufficient_balance":
                             failure["error"] = "DeepSeek API 余额不足，请充值后重试。"
@@ -1152,7 +1152,7 @@ class SetupWebAPI:
                                                      attempt_id=uuid4().hex, expression_only=learning)
                 return self._response(Outcome.success(result))
             except TaskError as error:
-                if error.code.startswith("model_"):
+                if error.code.startswith(("model_", "host_model_", "host_provider_")):
                     stage = "model_generation"
                 elif error.code in {"daily_output_invalid", "daily_output_incomplete", "daily_plan_invalid",
                                     "daily_memory_invalid", "daily_disabled_part"}:

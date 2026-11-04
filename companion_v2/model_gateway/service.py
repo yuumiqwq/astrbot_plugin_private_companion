@@ -197,6 +197,8 @@ class LocalModelGateway:
                          run.task.task_id, round_no, provider.binding, position, envelope.original.output_format)
             try:
                 amount = provider.reserve(provider_envelope)
+            except TaskError:
+                raise
             except Exception as error:
                 logger.debug("[CompanionV2][开发者追踪] 模型网关预估失败 task=%s round=%d provider=%s error_type=%s",
                              run.task.task_id, round_no, provider.binding, type(error).__name__, exc_info=True)

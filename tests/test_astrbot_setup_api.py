@@ -380,6 +380,23 @@ class AstrBotSetupFlowTests(unittest.IsolatedAsyncioTestCase):
             api.controller.start.assert_not_awaited()
             app.proactive.contact.assert_not_awaited()
 
+    async def test_manual_learning_reports_native_preflight_failures_as_model_generation(self):
+        for code in ("host_model_limit", "host_provider_changed"):
+            with self.subTest(code=code):
+                api, app, _, _ = self.simulation_api_fixture()
+                app.daily_review = NS(run=AsyncMock(return_value={"state": "failed", "receipts": {"code": code}}))
+                request = NS(username="administrator", query={}, body=AsyncMock(return_value=json.dumps(
+                    {"simulation": False, "confirm_delivery": False, "mode": "expression",
+                     "operation_key": "preflight-failure"}).encode()))
+                with patch("astrbot_host.setup_api.request", request), \
+                     patch("astrbot_host.setup_api.dashboard_operator", return_value=object()), \
+                     patch("companion_v2.role_work.life.management.RoleLifeManagement", return_value=NS(authorize=Mock())):
+                    result = await api.daily_diagnostic()
+                self.assertEqual(result["data"]["code"], code)
+                self.assertEqual(result["data"]["stage"], "model_generation")
+                self.assertFalse(result["data"]["simulation"])
+                app.proactive.contact.assert_not_awaited()
+
 
     async def bind_core_window(self, persona_id="original"):
         write_binding(self.controller.binding_root,

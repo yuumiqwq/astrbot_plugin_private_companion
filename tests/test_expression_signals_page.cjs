@@ -283,6 +283,22 @@ test("manual comparison shows approved-evidence validation failures without repo
   }
 });
 
+test("manual comparison identifies local preflight failures before provider dispatch",async()=>{
+  for(const [code,text] of [
+    ["model_estimation_failed","本机请求用量预估失败"],
+    ["host_model_limit","本次请求超出模型配置的输入或输出上限"],
+  ]){
+    const h=await manualComparisonHarness({status:"ok",data:{simulation:false,state:"failed",
+      code,stage:"model_generation",receipts:{code}}});
+    assert.match(h.root.innerHTML,/对照学习失败/);
+    assert.match(h.root.innerHTML,/阶段：模型生成/);
+    assert.ok(h.root.innerHTML.includes(text));
+    assert.match(h.root.innerHTML,/尚未发送模型请求，整理位置保持不变/);
+    assert.doesNotMatch(h.root.innerHTML,/对照学习完成/);
+    h.page.unmount();
+  }
+});
+
 test("manual comparison preserves diagnostic codes and stages from API and thrown exceptions",async()=>{
   for(const [response,problem] of [
     [{status:"error",data:{code:"model_insufficient_balance",stage:"model_generation"}},null],

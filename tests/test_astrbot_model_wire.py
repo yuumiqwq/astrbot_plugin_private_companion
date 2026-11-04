@@ -2,6 +2,7 @@ from dataclasses import replace
 import json
 from types import SimpleNamespace as NS
 import unittest
+from unittest.mock import patch
 import httpx
 from openai import APIConnectionError
 
@@ -18,6 +19,25 @@ REPORTED_USAGE = Amount(40, 90, input_tokens=30, cached_input_tokens=10, output_
 
 
 class NativeModelTests(NativeFixture, unittest.IsolatedAsyncioTestCase):
+    async def test_persisted_native_context_capacity_works_without_online_metadata(self):
+        envelope = await self.envelope()
+        material = PromptMaterial("astrbot.conversation", "recent_private_dialogue", "[]")
+        comparison = PromptMaterial("role.daily", "expression_comparison", encode({
+            "approved_dialogue": "已认可示例" * 20000}))
+        shared = replace(envelope, original=replace(envelope.original, output_format="role_daily_review",
+            context=replace(envelope.original.context, materials=(material, comparison))))
+        with patch.dict("astrbot.core.utils.llm_metadata.LLM_METADATAS", {}, clear=True):
+            self.native.provider.provider_config["max_context_tokens"] = 1048576
+            configured = self.make_model()
+            reservation = configured.reserve(shared)
+            self.assertGreater(reservation.tokens, configured.maximum_input_estimate)
+            self.native.provider.provider_config.pop("max_context_tokens")
+            automatic = self.make_model()
+            with self.assertRaises(TaskError) as raised:
+                automatic.reserve(shared)
+            self.assertEqual(raised.exception.code, "host_model_limit")
+        self.assertEqual(self.native.provider.client.state.calls, [])
+
     async def test_shared_native_capacity_includes_tool_definitions(self):
         self.native.provider.provider_config["max_context_tokens"] = 10000
         self.native_model = self.make_model()

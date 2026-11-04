@@ -101,6 +101,36 @@ class ModelFixture(ExecutionFixture):
 
 
 class ModelGatewayTests(ModelFixture, unittest.IsolatedAsyncioTestCase):
+    async def test_known_preflight_errors_preserve_their_cause_without_dispatch(self):
+        def limit(_envelope):
+            raise TaskError("host_model_limit", "shared request exceeds the native model context window")
+
+        primary = replace(self.providers[0], reserve=limit)
+        self.router = ModelRouter(self.configuration, self.profiles, (primary, self.providers[1]))
+        self.router.start(expected_generation=1)
+        self.gateway = LocalModelGateway(self.router, self.ledger, self.tasks)
+        with self.assertRaises(TaskError) as raised:
+            await self.gateway.generate(self.model_run(), self.request())
+        self.assertEqual(raised.exception.code, "host_model_limit")
+        self.assertEqual(self.called, [])
+        self.assertEqual(len(self.call_rows()), 0)
+        self.assertEqual(len(self.accounts()), 0)
+
+    async def test_unexpected_estimation_errors_remain_generic_without_dispatch(self):
+        def broken(_envelope):
+            raise ValueError("private provider details")
+
+        primary = replace(self.providers[0], reserve=broken)
+        self.router = ModelRouter(self.configuration, self.profiles, (primary, self.providers[1]))
+        self.router.start(expected_generation=1)
+        self.gateway = LocalModelGateway(self.router, self.ledger, self.tasks)
+        with self.assertRaises(TaskError) as raised:
+            await self.gateway.generate(self.model_run(), self.request())
+        self.assertEqual(raised.exception.code, "model_estimation_failed")
+        self.assertNotIn("private provider details", str(raised.exception))
+        self.assertEqual(self.called, [])
+        self.assertEqual(len(self.call_rows()), 0)
+
     async def test_insufficient_balance_preserves_cause_and_releases_reservations(self):
         self.responses = {name: ProviderResponse("not_started", usage=Amount(0, 0),
             receipt_ref=name + ":402", failure=ModelFailure.TRANSPORT,
