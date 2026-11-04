@@ -266,6 +266,23 @@ test("manual comparison shows insufficient DeepSeek balance from result or recei
   }
 });
 
+test("manual comparison shows approved-evidence validation failures without reporting completion",async()=>{
+  for(const [code,text] of [
+    ["expression_approved_quote_required","模型引用的原文与认可示例不匹配"],
+    ["expression_unapproved_pattern","模型生成的说法缺少认可原文支持"],
+    ["expression_approved_evidence_required","模型生成的规则缺少认可示例依据"],
+  ]){
+    const h=await manualComparisonHarness({status:"ok",data:{simulation:false,state:"failed",
+      code,stage:"output_validation",receipts:{code}}});
+    assert.match(h.root.innerHTML,/对照学习失败/);
+    assert.match(h.root.innerHTML,/阶段：输出校验/);
+    assert.ok(h.root.innerHTML.includes(text));
+    assert.match(h.root.innerHTML,/未写入规则或推进整理位置/);
+    assert.doesNotMatch(h.root.innerHTML,/对照学习完成/);
+    h.page.unmount();
+  }
+});
+
 test("manual comparison preserves diagnostic codes and stages from API and thrown exceptions",async()=>{
   for(const [response,problem] of [
     [{status:"error",data:{code:"model_insufficient_balance",stage:"model_generation"}},null],

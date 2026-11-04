@@ -12,7 +12,7 @@ from companion_v2.expression.style_evidence import ExpressionSampleCatalog
 SOURCE_KIND = "preset_comparison"
 CURSOR_PREFIX = "role.daily.expression.cursor.v1:"
 INSTRUCTION = '表达对照学习：\napproved_dialogue 是人工认可的完整预设对话，代表希望你模仿的风格。只学习 assistant 一方，user 发言用于理解语境。unreviewed_dialogue 是你生成的对话，它们没有被人工选入预设，这不代表它们一定是完全错误的，但绝非你要模仿的风格，提供这些对话给你是为了方便你了解自己以往是怎么生成的，方便你对照、发现和纠正其中潜在的错误表达。\n在相似情境中比较具体说法和接话方式，归纳贴近认可示例的表达规则；不从未认可内容单独建立偏好。每条候选至少引用一条 preset: 开头的认可 assistant 证据，可同时引用 unreviewed: 证据，说明规则适用的情境，保持认可示例中的自然变化，不把偶尔用法强制为每次使用。结果放在 expression 字段，使用本轮提供的规则 Schema；规则仅进入待审核列表。已经整理过的历史只作其他任务背景，不再作为本轮新的表达学习证据。每条候选填写 expression：kind=style 是具体情境表达，pattern 保留有辨识度的短说法或带占位的说法，例如在彼此已有共识、不需解释时用“懂的都懂”；kind=grammar 是可复用句法，pattern 写出结构，例如“先用两三个字确认，再省略主语接一句补充”。situation 说明何时合适，avoid 说明何时别用，proposal 说明角色怎样自然化用。\n不要把“更自然、简短口语化、温柔一些”这样的泛泛评价当作学到的表达。短而有辨识度的原话可以保留，长句、私人经历和身份信息不照搬；一次出现可成为局部情境候选，但不要宣称是长期习惯。样本、情境、说法、用法须对应，不能编造证据。对照 existing_rules 的情境与模板：同一说法、同一用法即使 observation 或 proposal 有新措辞也不要另提候选；已拒绝或已停用的规则也不要擅自复活。同一情境下不同的说法，以及相同说法在真正不同情境中的用法可以共存。\napplicability.channels 使用 private/proactive；relationship_stages 和 emotion_gates 无明确限制时填写 ["any"]。any 单独使用，不与其他值并列；keywords 可为空数组。'
-CONTRACT_INSTRUCTION = '输出约定：approved_quotes 每项填写 evidence_handle 和该认可 assistant 中连续、准确的 quote 原文。规则的学习依据只取这些认可原文；evidence_handles 中的 unreviewed 引用仅作对照，不会成为正面依据。kind=style 的 pattern 从认可摘录中直接取一个连续短语，句法结构归入 kind=grammar。observation 和 proposal 中用于示范的具体例句也来自认可原文。'
+CONTRACT_INSTRUCTION = '输出约定：approved_quotes 每项填写 evidence_handle 和该编号对应的认可 assistant 中连续、准确的 quote 原文，直接复制编号与原文。规则的学习依据只取这些认可原文；evidence_handles 中的 unreviewed 引用仅作对照，不会成为正面依据。kind=style 的 pattern 从认可摘录中直接取一个连续短语，也可用 / 分隔多个有认可摘录依据的原文变体，句法结构归入 kind=grammar。observation 和 proposal 中用于示范的具体例句也来自认可原文。'
 
 
 def schema():
@@ -108,6 +108,37 @@ async def capture(service, context, *, automatic=True):
             "captured_at": stamp(service.tasks.now())}
 
 
+def approved_quotations(quotes, handles, approved):
+    """Resolve a misnumbered citation only through its unique exact approved text."""
+    if not isinstance(quotes, list) or not quotes or len(quotes) > 8:
+        raise TaskError("expression_approved_quote_required", "each rule needs exact quotations from its approved evidence")
+    resolved = []
+    for item in quotes:
+        if (type(item) is not dict or set(item) != {"evidence_handle", "quote"}
+                or type(item["evidence_handle"]) is not str or item["evidence_handle"] not in handles
+                or type(item["quote"]) is not str or not item["quote"].strip()):
+            raise TaskError("expression_approved_quote_required", "each rule needs exact quotations from its approved evidence")
+        handle, quote = item["evidence_handle"], item["quote"]
+        if quote not in approved[handle]:
+            matches = [key for key, content in approved.items() if quote in content]
+            if len(matches) != 1:
+                raise TaskError("expression_approved_quote_required", "each rule needs exact quotations from its approved evidence")
+            handle = matches[0]
+        resolved.append({"evidence_handle": handle, "quote": quote})
+    return resolved
+
+
+def approved_pattern(pattern, quotes):
+    """Require exact approved support for a phrase or every slash-separated variant."""
+    if type(pattern) is not str or not pattern.strip():
+        return False
+    if any(pattern in item["quote"] for item in quotes):
+        return True
+    variants = [item.strip() for item in re.split(r"[/／]", pattern)]
+    return (len(variants) > 1 and all(variants)
+            and all(any(variant in item["quote"] for item in quotes) for variant in variants))
+
+
 def parse(raw, snapshot):
     value = json.loads(encode(raw))
     approved = {key: item["content"] for key, item in snapshot["handles"].items()
@@ -119,16 +150,10 @@ def parse(raw, snapshot):
         handles = [handle for handle in references if handle in approved]
         if not handles:
             raise TaskError("expression_approved_evidence_required", "rule evidence needs approved assistant sources")
-        signal["evidence_handles"] = handles
-        quotes = signal.pop("approved_quotes", None)
-        if (not isinstance(quotes, list) or not quotes or len(quotes) > 8
-                or any(type(item) is not dict or set(item) != {"evidence_handle", "quote"}
-                       or item["evidence_handle"] not in handles or type(item["quote"]) is not str
-                       or not item["quote"].strip() or item["quote"] not in approved[item["evidence_handle"]]
-                       for item in quotes)):
-            raise TaskError("expression_approved_quote_required", "each rule needs exact quotations from its approved evidence")
+        quotes = approved_quotations(signal.pop("approved_quotes", None), handles, approved)
+        signal["evidence_handles"] = list(dict.fromkeys(item["evidence_handle"] for item in quotes))
         form = signal.get("expression", {})
-        if form.get("kind") == "style" and not any(form.get("pattern", "") in item["quote"] for item in quotes):
+        if form.get("kind") == "style" and not approved_pattern(form.get("pattern"), quotes):
             raise TaskError("expression_unapproved_pattern", "a concrete expression must occur in its approved quotation")
         canonical = lambda text: "".join(unicodedata.normalize("NFKC", text).split())
         examples = [form.get("pattern", ""), *re.findall(r"[“「『](.*?)[”」』]", signal.get("proposal", ""))]

@@ -107,6 +107,35 @@ class DailyExpressionTests(daily_tests.DailyReviewTests):
         self.assertEqual(len(after["references"]), 1)
         self.assertTrue(app.expression_style_context.contributions(after, context, self.clock.now(), policy=policy))
 
+    async def test_exact_approved_text_repairs_a_misnumbered_reference_before_commit(self):
+        app, context = await self.comparison_ready(diary=False, plan=False, memory=False)
+        self.source.approved.extend([{"role": "user", "content": "明天见？"},
+                                     {"role": "assistant", "content": "明天见。"}])
+        original = self.comparison_reply
+
+        async def misnumbered(envelope):
+            response = await original(envelope)
+            value = json.loads(response.draft.text)
+            signal = value["expression"]["signals"][0]
+            signal["evidence_handles"] = ["preset:3"]
+            signal["approved_quotes"][0]["evidence_handle"] = "preset:3"
+            return answered(encode(value))
+
+        self.model_behavior = misnumbered
+        result = await app.daily_review.run(context, "原角色人格", expression_only=True,
+                                             operation_key="repair-reference")
+        self.assertEqual(result["state"], "complete", result)
+        self.assertEqual(result["receipts"]["expression"]["pending_rules"], 1)
+        row = app.runtime.read_one("SELECT evidence_json,state FROM expression_style_signals", ())
+        self.assertEqual(json.loads(row["evidence_json"]), ["preset:1"])
+        self.assertEqual(row["state"], "pending")
+        self.assertIsNotNone(app.runtime.read_one("SELECT value FROM runtime_metadata WHERE key=?",
+                                                (expression.cursor_key(context),)))
+        repeated = await app.daily_review.run(context, "原角色人格", expression_only=True,
+                                               operation_key="repair-reference")
+        self.assertEqual(repeated["state"], "complete")
+        self.assertEqual(len(self.daily_calls()), 1)
+
     async def test_manual_and_scheduled_runs_share_cursor_and_retain_all_approved_examples(self):
         app, context = await self.comparison_ready(diary=False, plan=False, memory=False)
         first = await app.daily_review.run(context, "原角色人格", expression_only=True, operation_key="manual-first")
@@ -239,4 +268,44 @@ class ApprovedTargetParserTests(unittest.TestCase):
     def test_a_quote_must_come_from_the_cited_approved_message(self):
         self.value["signals"][0]["approved_quotes"][0]["quote"] = "（缩被窝)"
         with self.assertRaisesRegex(TaskError, "exact quotations"):
+            expression.parse(self.value, self.snapshot)
+
+    def test_unique_exact_approved_quote_corrects_the_reference_without_mutating_input(self):
+        self.snapshot["handles"]["preset:3"] = {
+            "role": "assistant", "quality": "approved", "content": "明天见。"}
+        self.value["signals"][0]["evidence_handles"] = ["preset:3"]
+        self.value["signals"][0]["approved_quotes"][0]["evidence_handle"] = "preset:3"
+        before = encode(self.value)
+        result = expression.parse(self.value, self.snapshot)
+        self.assertEqual(result.signals[0].evidence_handles, ("preset:1",))
+        self.assertEqual(encode(self.value), before)
+
+    def test_misnumbered_quote_with_multiple_approved_matches_is_rejected(self):
+        self.snapshot["handles"].update({
+            "preset:3": {"role": "assistant", "quality": "approved", "content": "明天见。"},
+            "preset:5": {"role": "assistant", "quality": "approved", "content": "哼（委屈"},
+        })
+        self.value["signals"][0]["evidence_handles"] = ["preset:3"]
+        self.value["signals"][0]["approved_quotes"][0]["evidence_handle"] = "preset:3"
+        with self.assertRaisesRegex(TaskError, "exact quotations"):
+            expression.parse(self.value, self.snapshot)
+
+    def test_an_unreviewed_handle_cannot_be_rebound_to_an_approved_message(self):
+        self.value["signals"][0]["evidence_handles"].append("unreviewed:2")
+        self.value["signals"][0]["approved_quotes"][0]["evidence_handle"] = "unreviewed:2"
+        with self.assertRaisesRegex(TaskError, "exact quotations"):
+            expression.parse(self.value, self.snapshot)
+
+    def test_slash_variants_each_need_exact_approved_quotation_support(self):
+        self.snapshot["handles"]["preset:3"] = {
+            "role": "assistant", "quality": "approved", "content": "不知道诶\n\n不知道耶"}
+        signal = self.value["signals"][0]
+        signal["evidence_handles"] = ["preset:3"]
+        signal["approved_quotes"] = [{"evidence_handle": "preset:3", "quote": text}
+                                     for text in ("不知道诶", "不知道耶")]
+        signal["expression"]["pattern"] = "不知道诶/不知道耶"
+        result = expression.parse(self.value, self.snapshot)
+        self.assertEqual(result.signals[0].expression["pattern"], "不知道诶/不知道耶")
+        signal["expression"]["pattern"] = "不知道诶/（缩被窝)"
+        with self.assertRaisesRegex(TaskError, "approved quotation"):
             expression.parse(self.value, self.snapshot)
