@@ -210,6 +210,39 @@ class SharedHistoryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(sum(m["content"].count("Asia/Shanghai") for m in messages), 1)
                 self.assertEqual(json.loads(self.manager.get_conversation.return_value.history), history)
 
+    async def test_all_shared_background_modes_receive_one_transcription_legend_before_dialogue(self):
+        from astrbot.core.session_context import QQ_HISTORY_FORMAT_INSTRUCTION, prepare_request_context
+
+        history = [{"role": "assistant", "content": "[回复][图片]看这张", "_qq_time": 1793481687,
+                    "_qq_sequence": 672}]
+        self.manager.get_conversation.return_value = NS(history=json.dumps(history))
+        self.bridge.verified_persona.return_value = {"prompt": "OvO", "system_prompt": "OvO",
+            "begin_dialogs": [{"role": "user", "content": "看看吗？", "_no_save": True},
+                              {"role": "assistant", "content": "好呀。", "_no_save": True}]}
+        self.native.get_config = Mock(return_value={"timezone": "Asia/Shanghai"})
+        self.native.get_provider_by_id.return_value = NS(
+            provider_config={"max_context_tokens": 1048576}, get_model=lambda: "offline-test")
+
+        async def prepare(*args, **kwargs):
+            await prepare_request_context(self.native, *args, **kwargs)
+
+        self.native.prepare_session_request.side_effect = prepare
+        for output, mode in (("proactive_contact", "simple"), ("proactive_contact", "companion"),
+                             ("role_daily_review", "companion"), ("role_state", "companion"),
+                             ("calendar_planning", "companion")):
+            with self.subTest(output=output, mode=mode):
+                request = replace(self.request, output_format=output, proactive_mode=mode)
+                result = await self.loader(await self.loader(request))
+                messages = json.loads(result.context.materials[-1].payload)
+                legends = [index for index, message in enumerate(messages)
+                           if message["role"] == "system" and message["content"] == QQ_HISTORY_FORMAT_INSTRUCTION]
+                self.assertEqual(len(legends), 1)
+                first_dialogue = next(index for index, message in enumerate(messages)
+                                      if message["role"] in {"user", "assistant"})
+                self.assertLess(legends[0], first_dialogue)
+                self.assertEqual(result.role_instruction, "OvO")
+                self.assertEqual(json.loads(self.manager.get_conversation.return_value.history), history)
+
     async def test_simple_does_not_collect_companion_materials_and_budgets_native_presets(self):
         examples = [{"role": "user", "content": "Preset question", "_no_save": True},
                     {"role": "assistant", "content": "Preset answer", "_no_save": True}]
