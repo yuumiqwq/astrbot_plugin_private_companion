@@ -80,9 +80,9 @@ const NEW_KINDS = {
   'expression.learning': {
     group: 'expression.learning', scope: 'role', layers: ['installation', 'role'],
     editableLayers: ['installation', 'role', 'window'],
-    settings: {enabled:true, active_signal_limit:60, rules_per_turn:2, payload_chars:4000,
+    settings: {enabled:true, skip_processed_replies:true, active_signal_limit:60, rules_per_turn:2, payload_chars:4000,
       rotation_candidate_limit:24, rotation_decay_hours:336, private_application_enabled:true, group_application_enabled:true},
-    fields: {enabled:['boolean'], active_signal_limit:['integer',12,480], rules_per_turn:['integer',1,16],
+    fields: {enabled:['boolean'], skip_processed_replies:['boolean'], active_signal_limit:['integer',12,480], rules_per_turn:['integer',1,16],
       payload_chars:['integer',500,16000], rotation_candidate_limit:['integer',1,64],
       rotation_decay_hours:['integer',1,8760], private_application_enabled:['boolean'], group_application_enabled:['boolean']},
   },
@@ -1609,6 +1609,8 @@ test('expression settings expose rule application and rotation without native sa
   await drains();
   const painted = harnessed.painted['expression.learning'];
   assert.match(painted, /私聊应用规则/);
+  assert.match(painted, /跳过已整理回复/);
+  assert.match(painted, /data-wb-field="skip_processed_replies"/);
   assert.match(painted, /规则容量/);
   assert.doesNotMatch(painted, /扫描间隔|学习批次|样本|学习来源|每日对照学习/);
   assert.match(painted, /安装与角色/);

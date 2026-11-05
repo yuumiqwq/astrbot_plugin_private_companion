@@ -14,7 +14,7 @@ GLOBAL = (
     "每日整理：用同一人格、预设对话与会话历史，总结 local_date 当天的日记和记忆，安排次日活动。"
     "本轮只调用一次模型。启用的各部分遵守下述资料与格式，关闭或已存在的部分严格输出 null。"
     "只返回 JSON 对象 {\"diary\":对象或null,\"day_plan\":对象或null,\"memory\":对象或null,\"expression\":对象或null}。"
-    "在总输出预算内简明完整地写完各字段。表达对照仅分析新增未选入预设的回复，以完整认可预设为目标。\n"
+    "在总输出预算内简明完整地写完各字段。表达对照分析本轮选定的未选入预设回复，以完整认可预设为目标。\n"
 )
 DIARY_TASK = (COMMON + DIARY.split("仅输出", 1)[0]
     + "diary 对象包含 body、form、recall:null、afterglow:\"\" 和 material_ids。"

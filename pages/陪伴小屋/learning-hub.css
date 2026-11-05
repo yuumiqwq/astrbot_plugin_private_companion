@@ -185,3 +185,16 @@
 .learning-growth-settings[open]>summary{border-bottom:1px solid var(--t-line)}
 .learning-growth-settings>.config-editors{padding:var(--sp-3)}
 @media(max-width:600px){.lh-signal-head{align-items:flex-start;flex-direction:column}.lh-signal-head-tools{flex-wrap:wrap}.learning-hub-nav{grid-template-columns:minmax(0,1fr)}}
+
+.lh-repeat-settings{display:flex;align-items:center;flex-wrap:wrap;gap:var(--sp-3);min-width:0;padding:var(--sp-2) 0;color:var(--t-text-soft);font-size:var(--fs-tiny)}
+.lh-repeat-toggle,.lh-repeat-source{display:flex;align-items:center;gap:var(--sp-2);min-width:0}
+.lh-repeat-toggle input{appearance:none;position:relative;box-sizing:border-box;flex:none;inline-size:calc(var(--sp-5) + var(--sp-2));block-size:calc(var(--sp-4) + var(--sp-1));margin:0;border:1px solid var(--t-line-firm);border-radius:var(--r-pill);background:var(--t-surface-soft);cursor:pointer}
+.lh-repeat-toggle input::after{content:"";position:absolute;inset-block-start:calc(var(--sp-1) / 2);inset-inline-start:calc(var(--sp-1) / 2);inline-size:calc(var(--sp-4) - var(--sp-1) / 2);block-size:calc(var(--sp-4) - var(--sp-1) / 2);border-radius:50%;background:var(--t-text-soft)}
+.lh-repeat-toggle input:checked{border-color:var(--t-accent-solid);background:var(--t-accent-solid)}
+.lh-repeat-toggle input:checked::after{transform:translateX(var(--sp-3));background:var(--t-on-solid)}
+.lh-repeat-toggle input:disabled{opacity:.55;cursor:default}
+.lh-repeat-toggle input:focus-visible{outline:2px solid var(--t-focus);outline-offset:2px}
+.lh-repeat-source select{box-sizing:border-box;min-width:0;max-width:100%;padding:var(--sp-1) var(--sp-2);border:1px solid var(--t-line);border-radius:var(--r-xs);background:var(--t-surface);color:var(--t-text);font:inherit}
+.lh-repeat-status{min-width:0;overflow-wrap:anywhere;color:var(--t-text-faint)}
+.lh-repeat-status.is-error{color:var(--t-risk-ink)}
+@media(max-width:600px){.lh-repeat-settings{align-items:flex-start;flex-direction:column}.lh-repeat-source{width:100%}.lh-repeat-source select{flex:1}}

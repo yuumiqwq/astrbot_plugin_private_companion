@@ -32,6 +32,8 @@ window.CompanionExpressionSignalsPage = (() => {
     expression_output_invalid: "模型返回的候选列表结构不符合要求。",
     expression_counterexample_required: "负面约束缺少未认可回复中的对照反例。",
     expression_counterexample_invalid: "负面约束引用的对照反例无效。",
+    expression_rule_limit: "每次最多返回 3 条候选规则，正向与负面合计。",
+    configuration_revision_conflict: "配置已变化，请刷新后重试。",
     expression_review_stale: "整理范围已被另一次学习处理，请重新读取。",
     expression_query_invalid: "规则筛选条件无效，请重新读取。",
     expression_revision_invalid: "请填写适用情境、具体说法或句式及使用方式。",
@@ -140,7 +142,80 @@ window.CompanionExpressionSignalsPage = (() => {
   let manualEnabled = false;
   let learning = false;
   let learningReport = null;
+  let repeatSourceKey = "";
+  let repeatSnapshot = null;
+  let repeatLoading = false;
+  let repeatSaving = false;
+  let repeatNotice = "";
+  let repeatError = false;
+  let repeatReadTicket = 0;
 
+  function repeatSources() {
+    if(!manualEnabled)return [];
+    const seen=new Set();
+    return sources.filter(source=>source.target?.scope_kind==="private" && source.configBase).filter(source=>{
+      const key=source.target?.bot_id && source.role?.role_id
+        ?JSON.stringify([source.target.bot_id,source.role.role_id]):source.configBase;
+      if(seen.has(key))return false;
+      seen.add(key);return true;
+    });
+  }
+  const repeatSource = () => repeatSources().find(source=>source.key===repeatSourceKey);
+  const repeatSourceLabel = source => source.role?.display_name || source.role?.name || source.role?.persona_id || source.role?.role_id || sourceLabel(source);
+  function renderRepeatSettings() {
+    const available=repeatSources();
+    if(!available.length)return "";
+    const disabled=busy || writing || repeatLoading || repeatSaving;
+    const status=repeatSaving?"保存中…":repeatLoading?"读取中…":repeatNotice;
+    return `<div class="lh-repeat-settings">${available.length>1?`<label class="lh-repeat-source">设置角色<select data-expression-repeat-source ${disabled?"disabled":""}>${available.map(source=>`<option value="${e(source.key)}" ${source.key===repeatSourceKey?"selected":""}>${e(repeatSourceLabel(source))}</option>`).join("")}</select></label>`:""}<label class="lh-repeat-toggle"><input type="checkbox" role="switch" data-skip-processed-replies ${repeatSnapshot?.value===true?"checked":""} ${disabled || !repeatSnapshot?"disabled":""}><span>跳过已整理回复</span></label>${status?`<span class="lh-repeat-status${repeatError?" is-error":""}" role="status">${e(status)}</span>`:""}${repeatError?`<button type="button" class="lh-command" data-expression-repeat-refresh ${disabled?"disabled":""}>重新读取</button>`:""}</div>`;
+  }
+  function repeatFailure(problem,fallback) {
+    const code=issueCode(problem);
+    return ERRORS[code] || (code?`${fallback} · ${code}`:fallback);
+  }
+  async function readRepeatSettings(current=mountTicket,{keepNotice=false}={}) {
+    const source=repeatSource();
+    if(!mounted(current) || !source)return false;
+    const request=++repeatReadTicket;
+    if(repeatSnapshot?.sourceKey!==source.key)repeatSnapshot=null;
+    if(!keepNotice){repeatNotice="";repeatError=false;}
+    repeatLoading=true;render();
+    try {
+      const response=await api("GET",source.configBase,{sections:"expression.learning"});
+      if(!mounted(current) || request!==repeatReadTicket || source.key!==repeatSourceKey)return false;
+      const section=response.sections?.["expression.learning"];
+      if(typeof section?.settings?.skip_processed_replies!=="boolean" || typeof section.edit_token!=="string" || !section.edit_token)
+        throw Object.assign(new Error("invalid_response"),{code:"invalid_response"});
+      repeatSnapshot={sourceKey:source.key,value:section.settings.skip_processed_replies,token:section.edit_token};
+      return true;
+    } catch(problem) {
+      if(mounted(current) && request===repeatReadTicket && source.key===repeatSourceKey){
+        repeatSnapshot=null;repeatNotice=repeatFailure(problem,"设置读取失败，请重试。");repeatError=true;
+      }
+      return false;
+    } finally {
+      if(mounted(current) && request===repeatReadTicket && source.key===repeatSourceKey){repeatLoading=false;render();}
+    }
+  }
+  async function saveRepeatSetting(enabled) {
+    const source=repeatSource(),snapshot=repeatSnapshot;
+    if(!source || !snapshot || snapshot.sourceKey!==source.key || busy || writing || repeatLoading || repeatSaving || snapshot.value===enabled)return;
+    const current=mountTicket;
+    repeatSaving=true;repeatNotice="";repeatError=false;render();
+    let problem=null;
+    try {
+      await api("POST",source.configBase+"/configure",{section:"expression.learning",edit_token:snapshot.token,
+        changes:{skip_processed_replies:enabled},operation_key:operationKey("repeat")});
+    } catch(error) {problem=error;}
+    if(!mounted(current) || repeatSourceKey!==source.key)return;
+    const refreshed=await readRepeatSettings(current,{keepNotice:true});
+    if(!mounted(current) || repeatSourceKey!==source.key)return;
+    repeatSaving=false;
+    if(problem){repeatNotice=repeatFailure(problem,"保存结果待确认，请重新读取。");repeatError=true;}
+    else if(refreshed && repeatSnapshot?.value===enabled){repeatNotice="已保存。";repeatError=false;}
+    else {repeatNotice="保存结果待确认，请重新读取。";repeatError=true;}
+    render();
+  }
   function pageState() {
     const states = [stateFilter === "active" ? "adopted" : stateFilter];
     return Object.fromEntries(sources.map(source => [source.key,
@@ -406,7 +481,8 @@ window.CompanionExpressionSignalsPage = (() => {
         ${importPreview ? `<div class="lh-expression-import-preview" role="status"><div><strong>${e(importPreview.title || "表达分享包")}</strong><span>${e(importPreview.importable_rule_count)} 条待导入 / ${e(importPreview.duplicate_rule_count)} 条重复 / ${e(importPreview.capacity_blocked_count)} 条超出容量</span></div>${importPreview.candidates?.length ? `<ul>${importPreview.candidates.slice(0, 6).map(item => `<li><b data-rule-polarity="${polarityOf(item)}">${POLARITY[polarityOf(item)]} · ${e(DIMENSION[item.dimension] || item.dimension)}</b><span>${e(item.observation)}</span><small>${e(item.proposal)}</small>${renderApplicability(item.applicability)}</li>`).join("")}</ul>` : ""}${importPreview.rejected_count ? `<details><summary>${e(importPreview.rejected_count)} 项未通过</summary><ul>${(importPreview.rejected || []).slice(0, 10).map(item => `<li>第 ${e(Number(item.group_index) + 1)} 组${item.rule_index == null ? "" : `第 ${e(Number(item.rule_index) + 1)} 条`}：${e(item.reason)}</li>`).join("")}</ul></details>` : ""}<small>确认后进入待审列表，采纳后才会用于回复。</small></div>` : ""}
       </div>${transferNotice ? `<p class="lh-inline-status ${transferError ? "is-error" : ""}" role="status">${e(transferNotice)}</p>` : ""}</section>` : "";
     root.innerHTML = `<section class="lh-signal-list" aria-label="表达规则库"><header class="lh-signal-head"><div><h3>表达规则库</h3><span class="lh-signal-capacity">${e(cap)}</span></div>
-      <div class="lh-signal-head-tools">${manualEnabled ? `<button type="button" class="lh-command is-primary" data-expression-learn ${busy || transferBusy ? "disabled" : ""}>${learning ? "学习中…" : "立即对照学习"}</button>` : ""}<button type="button" class="lh-command" data-share-toggle aria-expanded="${transferOpen}">${transferOpen ? "收起分享" : "分享 / 导入"}</button><button type="button" class="lh-refresh" data-signal-refresh aria-label="重新读取" title="重新读取" ${busy || transferBusy ? "disabled" : ""}><i data-lucide="refresh-cw"></i></button></div></header>
+      <div class="lh-signal-head-tools">${manualEnabled ? `<button type="button" class="lh-command is-primary" data-expression-learn ${busy || transferBusy || repeatLoading || repeatSaving ? "disabled" : ""}>${learning ? "学习中…" : "立即对照学习"}</button>` : ""}<button type="button" class="lh-command" data-share-toggle aria-expanded="${transferOpen}">${transferOpen ? "收起分享" : "分享 / 导入"}</button><button type="button" class="lh-refresh" data-signal-refresh aria-label="重新读取" title="重新读取" ${busy || transferBusy ? "disabled" : ""}><i data-lucide="refresh-cw"></i></button></div></header>
+      ${renderRepeatSettings()}
       <div class="lh-signal-state-filters" role="group" aria-label="规则状态">${stateTabs}</div>
       <div class="lh-signal-toolbar"><div class="lh-signal-filters" role="group" aria-label="表达规则筛选">${filters}</div></div>
       <div class="lh-signal-selects"><label>规则类型<select data-rule-polarity-filter><option value="all">全部规则</option>${Object.entries(POLARITY).map(([key,label])=>`<option value="${key}" ${polarityFilter===key?"selected":""}>${label}</option>`).join("")}</select></label><label>学习类型<select data-rule-kind-filter><option value="all">全部类型</option><option value="style" ${kindFilter==="style"?"selected":""}>情境表达</option><option value="grammar" ${kindFilter==="grammar"?"selected":""}>语法句式</option></select></label>
@@ -418,7 +494,7 @@ window.CompanionExpressionSignalsPage = (() => {
     window.lucide?.createIcons({attrs: {"aria-hidden": "true"}});
   }
   async function learn() {
-    if (!manualEnabled || busy || writing || transferBusy) return;
+    if (!manualEnabled || busy || writing || transferBusy || repeatLoading || repeatSaving) return;
     const current = mountTicket;
     busy = writing = learning = true;
     notice = ""; error = false; learningReport = null; render();
@@ -591,7 +667,8 @@ window.CompanionExpressionSignalsPage = (() => {
     if (stateButton) { const next = STATE_FILTERS.some(([key]) => key === stateButton.dataset.signalState) ? stateButton.dataset.signalState : "active"; if (next !== stateFilter) { stateFilter = next; void read(mountTicket); } return; }
     const filterButton = event.target.closest("[data-signal-filter]");
     if (filterButton) { const next = FILTERS.some(([key]) => key === filterButton.dataset.signalFilter) ? filterButton.dataset.signalFilter : "all"; if (next !== filter) { filter = next; void read(mountTicket); } return; }
-    if (event.target.closest("[data-signal-refresh]")) { void read(mountTicket); return; }
+    if (event.target.closest("[data-expression-repeat-refresh]")) { if(!writing && !repeatSaving && !repeatLoading)void readRepeatSettings(mountTicket); return; }
+    if (event.target.closest("[data-signal-refresh]")) { void read(mountTicket); if(!repeatSaving)void readRepeatSettings(mountTicket); return; }
     if (event.target.closest("[data-signal-more]")) { void read(mountTicket, {append: true}); return; }
     const action = event.target.closest("[data-signal-action]");
     if (action) { if (action.dataset.signalAction === "retire") { confirming = action.dataset.id; render(); } else void command(action.dataset.id, action.dataset.signalAction); return; }
@@ -600,6 +677,13 @@ window.CompanionExpressionSignalsPage = (() => {
   }
   function onChange(event) {
     if (writing || transferBusy) return;
+    const repeatToggle=event.target.closest("[data-skip-processed-replies]");
+    if(repeatToggle){void saveRepeatSetting(repeatToggle.checked===true);return;}
+    const repeatSelection=event.target.closest("[data-expression-repeat-source]");
+    if(repeatSelection){
+      if(busy || repeatLoading || repeatSaving || !repeatSources().some(source=>source.key===repeatSelection.value))return;
+      repeatSourceKey=repeatSelection.value;repeatSnapshot=null;void readRepeatSettings(mountTicket);return;
+    }
     if (updateDraft(event.target)) return;
     const kind = event.target.closest("[data-rule-kind-filter]");
     if (kind) {kindFilter=kind.value;render();return;}
@@ -670,9 +754,9 @@ window.CompanionExpressionSignalsPage = (() => {
   }
   function mount(host, options = {}) {
     unmount(); root = host;
-    const candidates=Array.isArray(options.sources)?options.sources:options.replyApi?[{replyApi:options.replyApi,scopeKey:options.scopeKey,label:"当前来源"}]:[];
+    const candidates=Array.isArray(options.sources)?options.sources:options.replyApi?[{replyApi:options.replyApi,scopeKey:options.scopeKey,label:"当前来源",role:options.role,target:options.target,configApi:options.configApi}]:[];
     sources=candidates.map((source,index)=>{const value=relative(source.replyApi);return value?{...source,
-      key:String(source.key||source.scopeKey||value||index),scopeKey:source.scopeKey||source.key||"",apiBase:value}:null;}).filter(Boolean);
+      key:String(source.key||source.scopeKey||value||index),scopeKey:source.scopeKey||source.key||"",apiBase:value,configBase:relative(source.role?.config_api || source.configApi || source.config_api)}:null;}).filter(Boolean);
     apiBase=sources[0]?.apiBase||"";scopeKey=sources[0]?.scopeKey||"";importSourceKey=sources[0]?.key||"";
     filter = FILTERS.some(([key]) => key === options.state) ? options.state : "all";
     items = []; pages = {}; capacity = null; notice = ""; busy = false; writing = false; error = false; readIssues = []; confirming = null;
@@ -680,10 +764,15 @@ window.CompanionExpressionSignalsPage = (() => {
     exportPackage = null; selectedExportIds = new Set();
     editor=null;kindFilter="all";polarityFilter="all";sourceFilter="all";stateFilter=options.stateFilter==="pending"?"pending":"active";
     manualEnabled=options.manual===true;learning=false;learningReport=null;
+    const configSources=repeatSources(),currentConfig=relative(window.CompanionProduct?.role?.()?.config_api);
+    repeatSourceKey=(configSources.find(source=>source.scopeKey===options.scopeKey)
+      ||configSources.find(source=>source.configBase===currentConfig)||configSources[0])?.key || "";
+    repeatSnapshot=null;repeatLoading=false;repeatSaving=false;repeatNotice="";repeatError=false;
     root?.addEventListener("click", onClick); root?.addEventListener("change", onChange); root?.addEventListener("input", onInput);
     window.addEventListener?.("companion-expression-updated", onUpdated); const current = ++mountTicket;
     if (sources.length) void read(current); else { notice = "没有可读取的表达规则来源。"; error = true; render(); }
+    if(repeatSourceKey)void readRepeatSettings(current);
   }
-  function unmount() { learningReport=null; mountTicket++; readTicket++; root?.removeEventListener("click", onClick); root?.removeEventListener("change", onChange); root?.removeEventListener("input", onInput); window.removeEventListener?.("companion-expression-updated", onUpdated); root = null; apiBase = ""; scopeKey = ""; sources=[];items = []; pages = {}; capacity = null;capacityBySource={}; readIssues=[]; busy = false; writing = false; transferBusy = false; confirming = null; }
+  function unmount() { repeatReadTicket++;repeatSourceKey="";repeatSnapshot=null;repeatLoading=false;repeatSaving=false;repeatNotice="";repeatError=false; learningReport=null; mountTicket++; readTicket++; root?.removeEventListener("click", onClick); root?.removeEventListener("change", onChange); root?.removeEventListener("input", onInput); window.removeEventListener?.("companion-expression-updated", onUpdated); root = null; apiBase = ""; scopeKey = ""; sources=[];items = []; pages = {}; capacity = null;capacityBySource={}; readIssues=[]; busy = false; writing = false; transferBusy = false; confirming = null; }
   return {mount, unmount, get state() { return {items, busy, notice, scopeKey, filter, capacity,sources}; }};
 })();

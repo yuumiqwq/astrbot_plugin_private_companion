@@ -624,13 +624,13 @@ window.CompanionConfigEditors = (() => {
     "expression.learning": {
       title: "表达规则应用",
       note: "",
-      labels: {enabled:"启用表达规则",active_signal_limit:"待审与启用规则上限",
+      labels: {enabled:"启用表达规则",skip_processed_replies:"跳过已整理回复",active_signal_limit:"待审与启用规则上限",
         rules_per_turn:"每轮注入规则数",payload_chars:"注入长度上限",rotation_candidate_limit:"轮换候选数",
         rotation_decay_hours:"规则轮换间隔 / 小时",private_application_enabled:"私聊应用规则",group_application_enabled:"群聊应用规则"},
       helps: {},
-      order: ["enabled","private_application_enabled","group_application_enabled","active_signal_limit",
+      order: ["enabled","skip_processed_replies","private_application_enabled","group_application_enabled","active_signal_limit",
         "rules_per_turn","payload_chars","rotation_candidate_limit","rotation_decay_hours"],
-      sections: [{id:"application",title:"规则应用",fields:["enabled","private_application_enabled","group_application_enabled"]},
+      sections: [{id:"application",title:"规则应用",fields:["enabled","skip_processed_replies","private_application_enabled","group_application_enabled"]},
         {id:"rotation",title:"规则容量",fields:["active_signal_limit","rules_per_turn","payload_chars","rotation_candidate_limit","rotation_decay_hours"]}],
     },
     "role.growth.skills": {

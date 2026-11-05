@@ -50,6 +50,7 @@ LIMITS = {
 }
 DEFAULTS = {
     "enabled": True,
+    "skip_processed_replies": True,
     "daily_comparison_enabled": False,
     "private_learning_enabled": True,
     "group_learning_enabled": False,
@@ -87,7 +88,7 @@ ROLE_SCOPE_DEFAULTS = {
 }
 SCOPED_FIELDS = frozenset(("group_member_mode", "group_member_ids"))
 ROLE_DEFAULTS = {name: value for name, value in DEFAULTS.items() if name not in SCOPED_FIELDS}
-BOOLEAN_FIELDS = ("enabled", "daily_comparison_enabled", "private_learning_enabled", "group_learning_enabled", "private_application_enabled",
+BOOLEAN_FIELDS = ("enabled", "skip_processed_replies", "daily_comparison_enabled", "private_learning_enabled", "group_learning_enabled", "private_application_enabled",
                   "group_application_enabled", "sample_review_enabled", "style_review_enabled")
 ROLE_BOOLEAN_FIELDS = tuple(name for name in BOOLEAN_FIELDS if name not in SCOPED_FIELDS)
 TEXT_FIELDS = {"learning_mode": 16}
@@ -99,7 +100,7 @@ MODES = ("light", "balanced", "aggressive")
 # Stored sampling policies remain readable for older installations. The current
 # dashboard learns only from approved persona presets, so it exposes just the
 # manual-learning switch and the application/rotation settings.
-PUBLIC_FIELDS = frozenset({"enabled", "active_signal_limit", "rules_per_turn", "payload_chars",
+PUBLIC_FIELDS = frozenset({"enabled", "skip_processed_replies", "active_signal_limit", "rules_per_turn", "payload_chars",
     "rotation_candidate_limit", "rotation_decay_hours", "private_application_enabled",
     "group_application_enabled"})
 RETIRED_PROFILE_SOURCE_FIELDS = frozenset({"expression_private_source_mode",
@@ -394,6 +395,7 @@ class ExpressionLearningSettings:
     group_member_mode: str = "all"
     group_member_ids: str = ""
     enabled: bool = True
+    skip_processed_replies: bool = True
     daily_comparison_enabled: bool = False
 
     def __post_init__(self):

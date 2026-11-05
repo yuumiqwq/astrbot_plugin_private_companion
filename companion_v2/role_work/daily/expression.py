@@ -1,4 +1,4 @@
-"""Incremental expression comparison against operator-approved dialogue."""
+"""Manual expression comparison against operator-approved dialogue."""
 
 import json
 import re
@@ -12,11 +12,12 @@ from companion_v2.expression.style_evidence import ExpressionSampleCatalog
 
 SOURCE_KIND = "preset_comparison"
 CURSOR_PREFIX = "role.daily.expression.cursor.v1:"
+MAX_COMPARISON_RULES = 3
 INSTRUCTION = '表达对照学习：\napproved_dialogue 是人工认可的完整预设对话，代表希望你模仿的风格。只学习 assistant 一方，user 发言用于理解语境。unreviewed_dialogue 是你生成的对话，它们没有被人工选入预设，这不代表它们一定是完全错误的，但绝非你要模仿的风格，提供这些对话给你是为了方便你了解自己以往是怎么生成的，方便你对照、发现和纠正其中潜在的错误表达。\n在相似情境中比较具体说法和接话方式，归纳贴近认可示例的表达规则；不从未认可内容单独建立偏好。每条候选至少引用一条 preset: 开头的认可 assistant 证据，可同时引用 unreviewed: 证据，说明规则适用的情境，保持认可示例中的自然变化，不把偶尔用法强制为每次使用。结果放在 expression 字段，使用本轮提供的规则 Schema；规则仅进入待审核列表。已经整理过的历史只作其他任务背景，不再作为本轮新的表达学习证据。每条候选填写 expression：kind=style 是具体情境表达，pattern 保留有辨识度的短说法或带占位的说法，例如在彼此已有共识、不需解释时用“懂的都懂”；kind=grammar 是可复用句法，pattern 写出结构，例如“先用两三个字确认，再省略主语接一句补充”。situation 说明何时合适，avoid 说明何时别用，proposal 说明角色怎样自然化用。\n不要把“更自然、简短口语化、温柔一些”这样的泛泛评价当作学到的表达。短而有辨识度的原话可以保留，长句、私人经历和身份信息不照搬；一次出现可成为局部情境候选，但不要宣称是长期习惯。样本、情境、说法、用法须对应，不能编造证据。对照 existing_rules 的情境与模板：同一说法、同一用法即使 observation 或 proposal 有新措辞也不要另提候选；已拒绝或已停用的规则也不要擅自复活。同一情境下不同的说法，以及相同说法在真正不同情境中的用法可以共存。\napplicability.channels 使用 private/proactive；relationship_stages 和 emotion_gates 无明确限制时填写 ["any"]。any 单独使用，不与其他值并列；keywords 可为空数组。'
 COMPARISON_INSTRUCTION = (
     '本轮同时考虑正向表达与负面约束，模仿目标始终是 approved_dialogue 中的 assistant。'
     'expression.polarity=positive 表示建议采用，polarity=negative 表示建议避免。'
-    '对照相似情境下的认可表达与新增未认可回复，分析未认可回复在措辞或接话方式上有哪些不贴切之处，'
+    '对照相似情境下的认可表达与本轮未认可回复，分析未认可回复在措辞或接话方式上有哪些不贴切之处，'
     '将有具体对照依据的问题提出为待审核的负面约束；仅在未认可回复中出现这一点本身不作为质量差的理由。'
     '负面规则的 observation 说明两边的语境与表达差异，pattern 写应避免的具体说法或句式，'
     'proposal 写清应避免什么及更接近认可示例的表达方向，situation 写约束适用的情境，avoid 写例外情境。'
@@ -24,8 +25,11 @@ COMPARISON_INSTRUCTION = (
     '两类规则都先进入待审核列表。'
 )
 INSTRUCTION += '\n' + COMPARISON_INSTRUCTION
+INSTRUCTION = INSTRUCTION.replace('已经整理过的历史只作其他任务背景，不再作为本轮新的表达学习证据。',
+    '表达学习的语料范围以本轮 approved_dialogue 和 unreviewed_dialogue 为准。')
 CONTRACT_INSTRUCTION = (
-    '输出约定：每条规则填写 expression.polarity。approved_quotes 每项填写 evidence_handle 和该编号对应的认可 '
+    '输出约定：每次最多提出 3 条候选规则，正向表达与负面约束合计计算；优先提出最有依据且与已有规则不同的候选。'
+    '每条规则填写 expression.polarity。approved_quotes 每项填写 evidence_handle 和该编号对应的认可 '
     'assistant 中连续、准确的 quote 原文，直接复制编号与原文；两类规则都提供认可原文作为参照。'
     'positive 的 counterexamples 填 []，kind=style 的 pattern 从认可摘录中取连续短语，'
     '多个变体可用 / 分隔且分别提供认可原文，句法结构归入 kind=grammar。'
@@ -65,7 +69,7 @@ class ComparisonAssessment:
 
 def schema():
     """Describe approved targets and explicitly separated negative examples."""
-    result = learning.schema(3)
+    result = learning.schema(MAX_COMPARISON_RULES)
     signal = result["properties"]["signals"]["items"]
     signal["properties"]["approved_quotes"] = {
         "type": "array", "minItems": 1, "maxItems": 8,
@@ -96,7 +100,7 @@ def cursor_key(context):
 
 
 async def capture(service, context, *, automatic=True):
-    """Capture the full approved corpus and only unprocessed source replies.
+    """Capture approved examples and the configured incremental or full reply window.
 
     Args:
         service: Daily review coordinator.
@@ -127,7 +131,8 @@ async def capture(service, context, *, automatic=True):
         approved.append(item)
     if not handles:
         return None
-    after = cursor["sequence"]
+    skip_processed = read_settings(service.runtime, context).skip_processed_replies
+    after = cursor["sequence"] if skip_processed else 0
     unreviewed, through = [], after
     for message in source["dialogue"]:
         sequence = message.get("_qq_sequence")
@@ -159,6 +164,7 @@ async def capture(service, context, *, automatic=True):
     return {"source_kind": SOURCE_KIND, "schema_version": 2, "source_key": source["source_key"],
             "approved_dialogue": approved, "unreviewed_dialogue": unreviewed,
             "after_sequence": after, "through_sequence": through,
+            "skip_processed_replies": skip_processed,
             "cursor_before": previous, "handles": handles, "existing_rules": existing_rules,
             "captured_at": stamp(service.tasks.now())}
 
@@ -224,6 +230,8 @@ def counterexample_quotations(quotes, handles, unreviewed):
 
 def parse(raw, snapshot):
     value = json.loads(encode(raw))
+    if isinstance(value, dict) and isinstance(value.get("signals"), list) and len(value["signals"]) > MAX_COMPARISON_RULES:
+        raise TaskError("expression_rule_limit", "a comparison may propose at most three rules")
     approved = {key: item["content"] for key, item in snapshot["handles"].items()
                 if item.get("quality") == "approved" and item.get("role") == "assistant"}
     comparison = {key: item["content"] for key, item in snapshot["handles"].items()
@@ -284,8 +292,10 @@ def assess(raw, snapshot):
     """Validate independent candidates while retaining the exact rejection reasons."""
     value = json.loads(encode(raw))
     if (type(value) is not dict or set(value) != {"summary", "signals"}
-            or type(value["signals"]) is not list or len(value["signals"]) > learning.MAX_SIGNALS_PER_RUN):
+            or type(value["signals"]) is not list):
         raise TaskError("expression_output_invalid", "expression output needs a summary and bounded candidate list")
+    if len(value["signals"]) > MAX_COMPARISON_RULES:
+        raise TaskError("expression_rule_limit", "a comparison may propose at most three rules")
     approved = {key for key, item in snapshot["handles"].items()
                 if item.get("quality") == "approved" and item.get("role") == "assistant"}
     try:
@@ -391,7 +401,8 @@ def commit(service, context, snapshot, result, run_id, connection):
             rule_details.write(service.runtime, signal, item.expression, at=service.tasks.now(),
                                actor="learning_model", operation_key=identifier)
     if not rejections:
+        previous_sequence = json.loads(snapshot["cursor_before"])["sequence"] if snapshot["cursor_before"] else 0
         connection.execute("INSERT INTO runtime_metadata(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (cursor_key(context), encode({"sequence": snapshot["through_sequence"], "source_key": snapshot["source_key"],
+            (cursor_key(context), encode({"sequence": max(previous_sequence, snapshot["through_sequence"]), "source_key": snapshot["source_key"],
                                         "reviewed_at": at, "run_id": run_id})))
     return {**receipt, "run_id": identifier, "pending_rules": len(accepted)}

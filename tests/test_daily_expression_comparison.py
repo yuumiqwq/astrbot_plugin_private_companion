@@ -311,6 +311,117 @@ class DailyExpressionTests(daily_tests.DailyReviewTests):
         self.assertIsNone(app.runtime.read_one("SELECT value FROM runtime_metadata WHERE key=?", (expression.cursor_key(context),)))
         self.assertEqual(app.runtime.read_one("SELECT COUNT(*) n FROM expression_style_signals", ())["n"], 0)
 
+    async def set_skip_processed(self, app, context, value, operation):
+        manager = ExpressionLearningManagement(app, context)
+        status = manager.status(self.core).unwrap()
+        self.assertIn("skip_processed_replies", status["fields"])
+        manager.configure(self.core, {"operation_key": operation, "edit_token": status["edit_token"],
+            "changes": {"skip_processed_replies": value}}).unwrap()
+        return manager.status(self.core).unwrap()
+
+    async def test_full_review_repeats_without_clearing_progress_or_duplicating_rules(self):
+        app, context = await self.comparison_ready(diary=False, plan=False, memory=False)
+        self.assertTrue(read_settings(app.runtime, context).skip_processed_replies)
+        first = await app.daily_review.run(context, "原角色人格", expression_only=True, operation_key="incremental-before-repeat")
+        self.assertEqual(first["state"], "complete", first)
+        self.assertIsNone(await expression.capture(app.daily_review, context, automatic=False))
+        original = app.runtime.read_one("SELECT value FROM runtime_metadata WHERE key=?", (expression.cursor_key(context),))["value"]
+        configured = await self.set_skip_processed(app, context, False, "repeat-on")
+        self.assertFalse(configured["settings"]["skip_processed_replies"])
+        self.assertEqual(app.runtime.read_one("SELECT value FROM runtime_metadata WHERE key=?", (expression.cursor_key(context),))["value"], original)
+        for attempt in range(2):
+            snapshot = await expression.capture(app.daily_review, context, automatic=False)
+            self.assertEqual(snapshot["after_sequence"], 0)
+            self.assertFalse(snapshot["skip_processed_replies"])
+            self.assertEqual([item["sequence"] for item in snapshot["unreviewed_dialogue"]], [11, 12])
+            self.assertEqual(snapshot["approved_dialogue"], self.source.approved[:1] +
+                [{**self.source.approved[1], "handle": "preset:1"}])
+            result = await app.daily_review.run(context, "原角色人格", expression_only=True,
+                operation_key="repeat-existing-" + str(attempt))
+            self.assertEqual(result["state"], "complete", result)
+            self.assertEqual(result["receipts"]["expression"]["pending_rules"], 0)
+            self.assertIn("全量复查", self.daily_calls()[-1].original.instruction)
+            self.assertEqual(app.runtime.read_one("SELECT COUNT(*) n FROM expression_style_signals", ())["n"], 1)
+        self.assertEqual(len(self.daily_calls()), 3)
+        self.assertIsNone(await expression.capture(app.daily_review, context, automatic=True))
+        await self.set_skip_processed(app, context, True, "repeat-off")
+        self.assertIsNone(await expression.capture(app.daily_review, context, automatic=False))
+        self.source.dialogue.append({"role": "assistant", "content": "我们先看第一步吧。", "_qq_sequence": 13})
+        increment = await expression.capture(app.daily_review, context, automatic=False)
+        self.assertEqual(increment["after_sequence"], 12)
+        self.assertEqual([item["sequence"] for item in increment["unreviewed_dialogue"]], [13])
+
+    async def test_failed_full_review_keeps_the_previous_successful_checkpoint(self):
+        app, context = await self.comparison_ready(diary=False, plan=False, memory=False)
+        await app.daily_review.run(context, "原角色人格", expression_only=True, operation_key="repeat-failure-baseline")
+        previous = app.runtime.read_one("SELECT value FROM runtime_metadata WHERE key=?", (expression.cursor_key(context),))["value"]
+        await self.set_skip_processed(app, context, False, "repeat-failure-toggle")
+        good = self.comparison_reply
+
+        async def invalid(envelope):
+            response = await good(envelope)
+            value = json.loads(response.draft.text)
+            value["expression"]["signals"][0]["approved_quotes"][0]["quote"] = "这条原文不存在"
+            return answered(encode(value))
+
+        self.model_behavior = invalid
+        result = await app.daily_review.run(context, "原角色人格", expression_only=True, operation_key="repeat-fails")
+        self.assertEqual(result["state"], "failed", result)
+        self.assertEqual(app.runtime.read_one("SELECT value FROM runtime_metadata WHERE key=?", (expression.cursor_key(context),))["value"], previous)
+        again = await expression.capture(app.daily_review, context, automatic=False)
+        self.assertEqual([item["sequence"] for item in again["unreviewed_dialogue"]], [11, 12])
+        await self.set_skip_processed(app, context, True, "repeat-failure-incremental")
+        self.assertIsNone(await expression.capture(app.daily_review, context, automatic=False))
+
+    async def test_full_review_of_a_shortened_history_never_moves_the_checkpoint_backwards(self):
+        app, context = await self.comparison_ready(diary=False, plan=False, memory=False)
+        await app.daily_review.run(context, "原角色人格", expression_only=True, operation_key="before-history-shortened")
+        await self.set_skip_processed(app, context, False, "shortened-history-full-review")
+        self.source.dialogue = [{"role": "user", "content": "这题呢？", "_qq_sequence": 5},
+                                {"role": "assistant", "content": "先读题目。", "_qq_sequence": 6}]
+        snapshot = await expression.capture(app.daily_review, context, automatic=False)
+        self.assertEqual(snapshot["after_sequence"], 0)
+        self.assertEqual(snapshot["through_sequence"], 6)
+        result = await app.daily_review.run(context, "原角色人格", expression_only=True, operation_key="review-shorter-history")
+        self.assertEqual(result["state"], "complete", result)
+        checkpoint = json.loads(app.runtime.read_one("SELECT value FROM runtime_metadata WHERE key=?", (expression.cursor_key(context),))["value"])
+        self.assertEqual(checkpoint["sequence"], 12)
+        await self.set_skip_processed(app, context, True, "shortened-history-incremental")
+        self.assertIsNone(await expression.capture(app.daily_review, context, automatic=False))
+
+    async def test_repeat_setting_survives_restart_and_requires_a_boolean(self):
+        app, context = await self.comparison_ready(diary=False, plan=False, memory=False)
+        await self.set_skip_processed(app, context, False, "repeat-persistent")
+        manager = ExpressionLearningManagement(app, context)
+        status = manager.status(self.core).unwrap()
+        invalid = manager.configure(self.core, {"operation_key": "repeat-invalid-value",
+            "edit_token": status["edit_token"], "changes": {"skip_processed_replies": "false"}})
+        self.assertTrue(invalid.failure)
+        await app.close()
+        restarted = await self.start(self.host(runtime=self.runtime), task_generation=1, model_generation=1)
+        self.app = restarted.application
+        self.app.gateway.request_context = self.source
+        self.app.state_maintenance.bind(context, "原角色人格")
+        self.assertFalse(read_settings(self.app.runtime, context).skip_processed_replies)
+        self.assertFalse(ExpressionLearningManagement(self.app, context).status(self.core).unwrap()["settings"]["skip_processed_replies"])
+
+    async def test_more_than_three_rules_do_not_write_or_consume_the_source_window(self):
+        app, context = await self.comparison_ready(diary=False, plan=False, memory=False)
+        good = self.comparison_reply
+
+        async def excessive(envelope):
+            response = await good(envelope)
+            value = json.loads(response.draft.text)
+            value["expression"]["signals"] *= 4
+            return answered(encode(value))
+
+        self.model_behavior = excessive
+        result = await app.daily_review.run(context, "原角色人格", expression_only=True, operation_key="too-many-rules")
+        self.assertEqual(result["state"], "failed", result)
+        self.assertEqual(result["receipts"]["code"], "expression_rule_limit")
+        self.assertIsNone(app.runtime.read_one("SELECT value FROM runtime_metadata WHERE key=?", (expression.cursor_key(context),)))
+        self.assertEqual(app.runtime.read_one("SELECT COUNT(*) n FROM expression_style_signals", ())["n"], 0)
+
     async def test_unapproved_only_evidence_is_rejected_without_advancing(self):
         app, context = await self.comparison_ready(diary=False, plan=False, memory=False)
         good = self.comparison_reply

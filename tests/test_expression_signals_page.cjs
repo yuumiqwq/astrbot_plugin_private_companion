@@ -543,3 +543,152 @@ test("negative-rule counterexample errors show their Chinese reasons without rep
     h.page.unmount();
   }
 });
+
+
+function repeatSourceFixture(key,roleId=key,scope="private") {
+  return {key,scopeKey:key,label:"来源 "+key,replyApi:`/${HOST}/targets/${key}/roles/${roleId}/reply`,
+    target:{scope_kind:scope,bot_id:"bot-one"},role:{role_id:roleId,name:roleId,
+      config_api:`/${HOST}/targets/${key}/roles/${roleId}/config`}};
+}
+async function repeatControlHarness(sources,options={}) {
+  const calls=[],listeners=new Map(),states=new Map(sources.map((source,index)=>[source.role.config_api.slice(HOST.length+2),
+    {value:options.values?.[source.key]??true,token:String(index+1).repeat(64)}]));
+  let readFailure=options.readFailure || false,saveFailure=options.saveFailure || null;
+  let finishSave,finishLearning,finishRead;
+  let saveGate=options.holdSave?new Promise(resolve=>{finishSave=resolve;}):null;
+  let learningGate=options.holdLearning?new Promise(resolve=>{finishLearning=resolve;}):null;
+  let readGate=options.holdRead?new Promise(resolve=>{finishRead=resolve;}):null;
+  const ok=data=>({status:"ok",data});
+  const bridge={apiGet:async(route,query)=>{
+      calls.push({method:"GET",route,query});
+      if(route.endsWith("/style"))return ok({items:[],counts:{pending:0,adopted:0}});
+      if(readGate)await readGate;
+      if(readFailure)throw Object.assign(new Error("configuration_section_read_failed"),{code:"configuration_section_read_failed"});
+      const state=states.get(route);assert.ok(state,route);
+      return ok({sections:{"expression.learning":{settings:{skip_processed_replies:state.value},edit_token:state.token,
+        fields:{skip_processed_replies:{kind:"boolean"}}}}});
+    },apiPost:async(route,body)=>{
+      calls.push({method:"POST",route,body:JSON.parse(JSON.stringify(body))});
+      if(route==="setup/daily-diagnostic"){
+        if(learningGate)await learningGate;
+        return ok({simulation:false,state:"complete",receipts:{empty:true}});
+      }
+      if(saveGate)await saveGate;
+      if(saveFailure)throw Object.assign(new Error(saveFailure),{code:saveFailure});
+      const state=states.get(route.replace(/\/configure$/,""));assert.ok(state,route);
+      state.value=body.changes.skip_processed_replies;state.token="z".repeat(64);
+      if(options.failReadAfterSave)readFailure=true;
+      return ok({result:{operation_id:"repeat-save",replayed:false}});
+    }};
+  const root={isConnected:true,innerHTML:"",addEventListener:(name,fn)=>listeners.set(name,fn),
+    removeEventListener:name=>listeners.delete(name),querySelector:()=>null};
+  const window={CompanionProduct:{bridgeNow:()=>bridge,unwrap:value=>value,
+      role:()=>({config_api:options.currentConfig || sources[0]?.role.config_api})},lucide:{createIcons(){}}};
+  vm.runInContext(source,vm.createContext({window,setTimeout,clearTimeout,Date,Math,Number,Object,Array,String,Set,URLSearchParams}));
+  const page=window.CompanionExpressionSignalsPage;
+  const drain=async()=>{for(let n=0;n<8;n++)await flush();};
+  const mount=()=>page.mount(root,{sources,manual:true,stateFilter:"pending"});
+  mount();await drain();
+  const change=async(selector,value)=>{const target={value,checked:value===true,closest:current=>current===selector?target:null};
+    listeners.get("change")({target});await drain();};
+  const click=async(selector)=>{listeners.get("click")({target:{closest:current=>current===selector?{}:null}});await drain();};
+  return {page,root,calls,states,change,click,drain,
+    remount:async()=>{mount();await drain();},
+    finishRead:async()=>{finishRead?.();readGate=null;await drain();},
+    finishSave:async()=>{finishSave?.();saveGate=null;await drain();},
+    finishLearning:async()=>{finishLearning?.();learningGate=null;await drain();},
+    setReadFailure:value=>{readFailure=value;},setSaveFailure:value=>{saveFailure=value;}};
+}
+const repeatInput=html=>html.match(/<input[^>]*data-skip-processed-replies[^>]*>/)?.[0] || "";
+
+test("skip-processed control reads role defaults, saves one field and confirms it with a reread",async()=>{
+  const source=repeatSourceFixture("one","OvO"),h=await repeatControlHarness([source]);
+  assert.match(repeatInput(h.root.innerHTML),/checked/);assert.doesNotMatch(repeatInput(h.root.innerHTML),/disabled/);
+  const gets=h.calls.filter(call=>call.method==="GET"&&!call.route.endsWith("/style"));
+  assert.equal(gets.length,1);assert.equal(gets[0].query.sections,"expression.learning");
+  await h.change("[data-skip-processed-replies]",false);
+  const writes=h.calls.filter(call=>call.method==="POST");assert.equal(writes.length,1);
+  assert.equal(writes[0].route,"targets/one/roles/OvO/config/configure");
+  assert.equal(writes[0].body.section,"expression.learning");assert.equal(writes[0].body.edit_token,"1".repeat(64));
+  assert.deepEqual(writes[0].body.changes,{skip_processed_replies:false});assert.match(writes[0].body.operation_key,/^expression-repeat-/);
+  assert.equal(Object.keys(writes[0].body).sort().join(","),"changes,edit_token,operation_key,section");
+  assert.doesNotMatch(repeatInput(h.root.innerHTML),/checked/);assert.match(h.root.innerHTML,/已保存。/);
+  assert.equal(h.calls.filter(call=>call.method==="GET"&&!call.route.endsWith("/style")).length,2);
+  await h.remount();assert.doesNotMatch(repeatInput(h.root.innerHTML),/checked/);
+  assert.equal(h.calls.filter(call=>call.method==="POST").length,1);h.page.unmount();
+});
+
+test("same-role private sources share one setting and group sources are excluded",async()=>{
+  const one=repeatSourceFixture("one","OvO"),two=repeatSourceFixture("two","OvO"),group=repeatSourceFixture("group","Other","group");
+  const h=await repeatControlHarness([one,two,group]);
+  assert.doesNotMatch(h.root.innerHTML,/data-expression-repeat-source/);
+  await h.change("[data-skip-processed-replies]",false);
+  const configCalls=h.calls.filter(call=>call.route.includes("/config"));
+  assert.ok(configCalls.every(call=>call.route.startsWith("targets/one/roles/OvO/config")));
+  assert.equal(configCalls.filter(call=>call.method==="POST").length,1);h.page.unmount();
+});
+
+test("different role settings select one role and use that role edit token",async()=>{
+  const one=repeatSourceFixture("one","OvO"),two=repeatSourceFixture("two","Another");
+  const h=await repeatControlHarness([one,two],{values:{one:true,two:false}});
+  assert.match(h.root.innerHTML,/设置角色/);
+  await h.change("[data-expression-repeat-source]","two");
+  assert.doesNotMatch(repeatInput(h.root.innerHTML),/checked/);
+  await h.change("[data-skip-processed-replies]",true);
+  const writes=h.calls.filter(call=>call.method==="POST");assert.equal(writes.length,1);
+  assert.equal(writes[0].route,"targets/two/roles/Another/config/configure");assert.equal(writes[0].body.edit_token,"2".repeat(64));
+  assert.equal(h.states.get("targets/one/roles/OvO/config").value,true);h.page.unmount();
+});
+
+test("settings stay disabled until read and a failed read exposes a retry without model requests",async()=>{
+  const h=await repeatControlHarness([repeatSourceFixture("one","OvO")],{holdRead:true});
+  assert.match(repeatInput(h.root.innerHTML),/disabled/);assert.match(h.root.innerHTML,/读取中/);
+  await h.change("[data-rule-polarity-filter]","negative");assert.match(h.root.innerHTML,/当前筛选下没有表达规则/);
+  await h.change("[data-skip-processed-replies]",false);
+  assert.equal(h.calls.filter(call=>call.method==="POST").length,0);
+  h.setReadFailure(true);await h.finishRead();assert.match(repeatInput(h.root.innerHTML),/disabled/);
+  assert.match(h.root.innerHTML,/设置读取失败/);assert.match(h.root.innerHTML,/data-expression-repeat-refresh/);
+  h.setReadFailure(false);await h.click("[data-expression-repeat-refresh]");
+  assert.match(repeatInput(h.root.innerHTML),/checked/);assert.doesNotMatch(repeatInput(h.root.innerHTML),/disabled/);
+  assert.equal(h.calls.filter(call=>call.method==="POST").length,0);h.page.unmount();
+});
+
+test("a pending setting save keeps the confirmed value and blocks duplicate saves and learning",async()=>{
+  const h=await repeatControlHarness([repeatSourceFixture("one","OvO")],{holdSave:true});
+  await h.change("[data-skip-processed-replies]",false);await h.change("[data-skip-processed-replies]",false);
+  assert.match(repeatInput(h.root.innerHTML),/checked/);assert.match(repeatInput(h.root.innerHTML),/disabled/);
+  assert.match(h.root.innerHTML,/保存中/);assert.doesNotMatch(h.root.innerHTML,/已保存。/);
+  await h.click("[data-expression-learn]");assert.equal(h.calls.filter(call=>call.method==="POST").length,1);
+  await h.finishSave();assert.doesNotMatch(repeatInput(h.root.innerHTML),/checked/);assert.match(h.root.innerHTML,/已保存。/);
+  h.page.unmount();
+});
+
+test("learning disables the repeat setting until the single model task returns",async()=>{
+  const h=await repeatControlHarness([repeatSourceFixture("one","OvO")],{holdLearning:true});
+  await h.click("[data-expression-learn]");assert.match(repeatInput(h.root.innerHTML),/disabled/);
+  await h.change("[data-skip-processed-replies]",false);
+  assert.equal(h.calls.filter(call=>call.method==="POST").length,1);
+  assert.equal(h.calls.find(call=>call.method==="POST").route,"setup/daily-diagnostic");
+  await h.finishLearning();assert.doesNotMatch(repeatInput(h.root.innerHTML),/disabled/);h.page.unmount();
+});
+
+test("conflicted saves and unconfirmed rereads show actual settings without false success",async()=>{
+  const source=repeatSourceFixture("one","OvO"),conflict=await repeatControlHarness([source],{saveFailure:"configuration_revision_conflict"});
+  await conflict.change("[data-skip-processed-replies]",false);
+  assert.match(repeatInput(conflict.root.innerHTML),/checked/);assert.match(conflict.root.innerHTML,/配置已变化/);
+  assert.doesNotMatch(conflict.root.innerHTML,/已保存。/);assert.equal(conflict.calls.filter(call=>call.method==="POST").length,1);
+  conflict.page.unmount();
+  const unconfirmed=await repeatControlHarness([source],{failReadAfterSave:true});
+  await unconfirmed.change("[data-skip-processed-replies]",false);
+  assert.match(repeatInput(unconfirmed.root.innerHTML),/disabled/);assert.match(unconfirmed.root.innerHTML,/保存结果待确认/);
+  assert.doesNotMatch(unconfirmed.root.innerHTML,/已保存。/);
+  unconfirmed.setReadFailure(false);await unconfirmed.click("[data-expression-repeat-refresh]");
+  assert.doesNotMatch(repeatInput(unconfirmed.root.innerHTML),/checked|disabled/);
+  assert.equal(unconfirmed.calls.filter(call=>call.method==="POST").length,1);unconfirmed.page.unmount();
+});
+
+test("the shared positive and negative candidate limit has a specific failure status",async()=>{
+  const h=await manualComparisonHarness({status:"ok",data:{simulation:false,state:"failed",code:"expression_rule_limit",stage:"output_validation"}});
+  assert.match(h.root.innerHTML,/每次最多返回 3 条候选规则，正向与负面合计。/);
+  assert.doesNotMatch(h.root.innerHTML,/对照学习完成/);h.page.unmount();
+});

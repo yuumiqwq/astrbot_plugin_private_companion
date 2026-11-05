@@ -77,7 +77,11 @@ async def capture(service, context, instruction, local_date, zone_name, run_id, 
         else:
             inputs["expression"] = snapshot
             materials.append(PromptMaterial("role.daily", "expression_comparison", encode(snapshot)))
-            instructions.append("表达对照部分：\n" + prompt_values["expression"] + "\n" + expression.CONTRACT_INSTRUCTION)
+            scope_instruction = ("本轮采用增量整理，只分析上次成功整理之后的未认可回复。"
+                if snapshot.get("skip_processed_replies", True) else
+                "本轮采用全量复查，unreviewed_dialogue 包含已整理过的回复，这些回复也参与本轮对照分析。")
+            instructions.append("表达对照部分：\n" + prompt_values["expression"] + "\n" + scope_instruction
+                + "两种范围都持续参考完整认可预设，并对照已有规则提出新候选。\n" + expression.CONTRACT_INSTRUCTION)
     if selected["diary"]:
         target = app.journal_triggers.target(context, JournalKind.DIARY, local_date, zone_name)
         head = app.role_journal.head(target.key)
