@@ -30,6 +30,11 @@ def revise(styles, *, operator, context, signal_id, view_token, operation_key, c
             return {"signal_id": signal_id, "state": row["state"], "replayed": True}
         if view_token != styles._token(operator, context, row, revision):
             raise TaskError("expression_view_stale", "refresh the rule before revising")
+        original_form = rule_details.form_for(styles.runtime, row)
+        original_polarity = original_form["polarity"] if original_form else "positive"
+        if "polarity" in changes["expression"] and form["polarity"] != original_polarity:
+            raise TaskError("expression_revision_invalid", "a rule revision must preserve its evidence polarity")
+        form["polarity"] = original_polarity
         styles._basis(row, owner, context, at)
         identity = form_identity(form)
         if identity is not None:

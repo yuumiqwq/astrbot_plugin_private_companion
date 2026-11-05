@@ -105,8 +105,13 @@ def normalize_pack(raw):
                         and type(rule.get("pattern")) is str and 0 < len(rule["pattern"]) <= 500
                         and len(observation) <= 240):
                     form = {"kind": rule["kind"], "situation": observation,
-                            "pattern": rule["pattern"], "avoid": rule.get("avoid", "")}
+                            "pattern": rule["pattern"], "avoid": rule.get("avoid", ""),
+                            "polarity": rule.get("polarity", "positive")}
+                if type(form) is dict and "polarity" not in form and "polarity" in rule:
+                    form = {**form, "polarity": rule["polarity"]}
                 form = normalize_form(form) if form is not None else None
+                if "polarity" in rule and rule["polarity"] != (form["polarity"] if form else "positive"):
+                    raise ValueError("invalid_expression_polarity")
                 if form:
                     for value in form.values():
                         if value:
@@ -145,6 +150,7 @@ def build_pack(signals, *, title="陪伴表达分享", exported_at=""):
         form = normalize_form(form) if form is not None else None
         groups.append({"id": f"group-{index:03d}", "label": signal["observation"], "rules": [{
             "kind": form["kind"] if form else kind,
+            "polarity": form["polarity"] if form else "positive",
             "dimension": dimension,
             "label": DIMENSION_LABELS.get(dimension, "表达形式"),
             # The observation is the learned note, the situation belongs to the

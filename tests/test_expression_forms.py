@@ -24,7 +24,7 @@ from tests.test_host_application import HostFixture
 from tests.test_role_tool_loop import answered
 
 
-FORM = {"kind": "style", "situation": "彼此已有共识，不需要展开解释时",
+FORM = {"kind": "style", "polarity": "positive", "situation": "彼此已有共识，不需要展开解释时",
         "pattern": "懂的都懂", "avoid": "对方确实在请求解释时不要敷衍"}
 
 

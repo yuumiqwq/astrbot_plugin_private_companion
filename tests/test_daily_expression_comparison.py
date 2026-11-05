@@ -100,6 +100,64 @@ class DailyExpressionTests(daily_tests.DailyReviewTests):
         value["expression"]["signals"] = [unapproved, marker, good]
         return answered(encode(value))
 
+    async def negative_comparison_reply(self, envelope):
+        response = await self.comparison_reply(envelope)
+        value = json.loads(response.draft.text)
+        negative = deepcopy(value["expression"]["signals"][0])
+        negative.update(
+            observation="同样回应共同观看的邀请，认可示例直接答应；普通回复用郑重承诺增加不必要的负担。",
+            proposal="回应普通邀请时避免“我将无条件陪伴你”，用认可示例中的“可以呀。”直接答应。",
+            evidence_handles=["preset:1", "unreviewed:12"],
+            counterexamples=[{"evidence_handle": "unreviewed:12", "quote": "我将无条件陪伴你"}],
+        )
+        negative["expression"].update(polarity="negative", kind="style",
+            pattern="我将无条件陪伴你", situation="回应普通共同活动邀请时", avoid="双方明确讨论郑重承诺时")
+        value["expression"]["signals"].append(negative)
+        return answered(encode(value))
+
+    async def test_positive_and_negative_rules_share_manual_review_and_keep_separate_evidence(self):
+        app, context = await self.comparison_ready(diary=False, plan=False, memory=False)
+        self.source.dialogue[1]["content"] = "一起看看吗？"
+        self.source.dialogue[2]["content"] = "我将无条件陪伴你"
+        self.model_behavior = self.negative_comparison_reply
+        result = await app.daily_review.run(context, "原角色人格", expression_only=True,
+                                             operation_key="two-polarities")
+        self.assertEqual(result["state"], "complete", result)
+        self.assertEqual(result["receipts"]["expression"]["pending_rules"], 2)
+        self.assertTrue(result["receipts"]["expression"]["cursor_advanced"])
+        self.assertEqual(len(self.daily_calls()), 1)
+        manager = ExpressionStyleManagement(app)
+        pending = manager.list(operator=self.core, context=context).unwrap()["items"]
+        negative = next(item for item in pending if item["expression"]["polarity"] == "negative")
+        self.assertTrue(any(text.startswith("认可示例：") for text in negative["evidence"]))
+        self.assertTrue(any(text.startswith("对照反例：") for text in negative["evidence"]))
+        policy = read_settings(app.runtime, context)
+        self.assertEqual(app.expression_style_context.capture(context, self.clock.now(), policy=policy)["references"], [])
+        manager.command(operator=self.core, context=context, signal_id=negative["signal_id"], action="adopt",
+            view_token=negative["view_token"], operation_key="adopt-negative").unwrap()
+        captured = app.expression_style_context.capture(context, self.clock.now(), policy=policy)
+        contributions = app.expression_style_context.contributions(captured, context, self.clock.now(), policy=policy)
+        payload = next(json.loads(item.payload) for item in contributions if item.purpose == "expression_style_rule")
+        self.assertEqual(payload["expression"]["polarity"], "negative")
+        self.assertIn("避免", payload["proposal"])
+        adopted = manager.list(operator=self.core, context=context, state="adopted").unwrap()["items"][0]
+        manager.command(operator=self.core, context=context, signal_id=adopted["signal_id"], action="retire",
+            view_token=adopted["view_token"], operation_key="retire-negative").unwrap()
+        self.assertEqual(app.expression_style_context.capture(context, self.clock.now(), policy=policy)["references"], [])
+
+    async def test_manual_negative_prompt_and_schema_are_available_without_enabling_daily_learning(self):
+        app, context = await self.comparison_ready(diary=False, plan=False, memory=False)
+        self.assertIsNone(await expression.capture(app.daily_review, context, automatic=True))
+        result = await app.daily_review.run(context, "原角色人格", expression_only=True,
+                                             operation_key="negative-contract")
+        self.assertEqual(result["state"], "complete", result)
+        request = self.daily_calls()[0].original
+        self.assertIn("expression.polarity", request.instruction)
+        self.assertIn("负面约束", request.instruction)
+        schema = expression.schema()["properties"]["signals"]["items"]
+        self.assertIn("counterexamples", schema["required"])
+        self.assertEqual(schema["properties"]["expression"]["properties"]["polarity"]["enum"], ["positive", "negative"])
+
     async def test_mixed_candidates_save_only_approved_pending_rules_and_keep_the_window(self):
         app, context = await self.comparison_ready(diary=False, plan=False, memory=False)
         self.model_behavior = self.mixed_comparison_reply
@@ -449,3 +507,105 @@ class ApprovedTargetParserTests(unittest.TestCase):
         signal["expression"]["pattern"] = "不知道诶/（缩被窝)"
         with self.assertRaisesRegex(TaskError, "approved quotation"):
             expression.parse(self.value, self.snapshot)
+
+
+class NegativeConstraintParserTests(unittest.TestCase):
+    setUp = ApprovedTargetParserTests.setUp
+
+    def negative_rule(self):
+        value = deepcopy(self.value)
+        signal = value["signals"][0]
+        signal["evidence_handles"].append("unreviewed:2")
+        signal["counterexamples"] = [{"evidence_handle": "unreviewed:2", "quote": "（缩被窝)"}]
+        signal["expression"].update(polarity="negative", pattern="（缩被窝)",
+            situation="正在讨论具体事情，却用动作回避回应时", avoid="双方正在共同描写场景时")
+        signal["observation"] = "认可示例回应对方正在说的事，未认可回复用单独动作取代回应。"
+        signal["proposal"] = "在需要回应具体内容时避免只说“（缩被窝)”，先表达与当前话题有关的意思。"
+        return value
+
+    def test_negative_example_can_be_preserved_as_an_explicit_constraint(self):
+        value = self.negative_rule()
+        original = encode(value)
+        result = expression.parse(value, self.snapshot)
+        self.assertEqual(result.signals[0].expression["polarity"], "negative")
+        self.assertEqual(result.signals[0].evidence_handles, ("preset:1", "unreviewed:2"))
+        self.assertEqual(encode(value), original)
+        self.assertNotIn("counterexamples", result.signals[0].expression)
+
+    def test_negative_grammar_can_describe_the_problem_without_copying_the_phrase_as_a_template(self):
+        value = self.negative_rule()
+        value["signals"][0]["expression"].update(kind="grammar", pattern="用括号动作代替对当前问题的回应")
+        parsed = expression.parse(value, self.snapshot)
+        self.assertEqual(parsed.signals[0].expression["kind"], "grammar")
+
+    def test_negative_rules_need_both_approved_target_and_exact_counterexample(self):
+        for missing in ("approved_quotes", "counterexamples"):
+            with self.subTest(missing=missing):
+                value = self.negative_rule()
+                value["signals"][0].pop(missing)
+                assessed = expression.assess(value, self.snapshot)
+                self.assertFalse(assessed.signals)
+                self.assertEqual(assessed.rejections[0]["code"],
+                    "expression_approved_quote_required" if missing == "approved_quotes" else "expression_counterexample_required")
+
+    def test_negative_counterexample_does_not_accept_wrong_source_roles_or_fabricated_quotes(self):
+        for handle, quote in (("preset:1", "（委屈"), ("unreviewed:2", "凭空编造的反例")):
+            with self.subTest(handle=handle, quote=quote):
+                value = self.negative_rule()
+                value["signals"][0]["counterexamples"] = [{"evidence_handle": handle, "quote": quote}]
+                assessed = expression.assess(value, self.snapshot)
+                self.assertFalse(assessed.signals)
+                self.assertEqual(assessed.rejections[0]["code"], "expression_counterexample_invalid")
+        self.snapshot["handles"]["unreviewed:2"]["role"] = "user"
+        assessed = expression.assess(self.negative_rule(), self.snapshot)
+        self.assertFalse(assessed.signals)
+        self.assertEqual(assessed.rejections[0]["code"], "expression_counterexample_invalid")
+
+    def test_negative_concrete_pattern_requires_its_counterexample(self):
+        value = self.negative_rule()
+        value["signals"][0]["expression"]["pattern"] = "另一个未曾出现的说法"
+        assessed = expression.assess(value, self.snapshot)
+        self.assertFalse(assessed.signals)
+        self.assertEqual(assessed.rejections[0]["code"], "expression_counterexample_invalid")
+
+    def test_positive_rules_still_reject_negative_examples(self):
+        value = self.negative_rule()
+        value["signals"][0]["expression"]["polarity"] = "positive"
+        assessed = expression.assess(value, self.snapshot)
+        self.assertFalse(assessed.signals)
+        self.assertEqual(assessed.rejections[0]["code"], "expression_counterexample_invalid")
+
+    def test_negative_rules_do_not_authorize_unrelated_unreviewed_examples(self):
+        value = self.negative_rule()
+        self.snapshot["unreviewed_dialogue"].append({"role": "assistant", "content": "先读题目。"})
+        value["signals"][0]["proposal"] += "或者说“先读题目。”。"
+        assessed = expression.assess(value, self.snapshot)
+        self.assertFalse(assessed.signals)
+        self.assertEqual(assessed.rejections[0]["code"], "expression_unapproved_pattern")
+
+    def test_qq_markers_do_not_become_negative_style_rules(self):
+        value = self.negative_rule()
+        self.snapshot["handles"]["unreviewed:2"]["content"] = "[回复]"
+        value["signals"][0]["counterexamples"][0]["quote"] = "[回复]"
+        value["signals"][0]["expression"]["pattern"] = "[回复]"
+        assessed = expression.assess(value, self.snapshot)
+        self.assertFalse(assessed.signals)
+        self.assertEqual(assessed.rejections[0]["code"], "expression_platform_marker")
+
+    def test_review_evidence_labels_counterexamples_only_for_negative_rules(self):
+        window = {"comparison": self.snapshot}
+        handles = ["preset:1", "unreviewed:2"]
+        evidence = expression.evidence(window, handles, polarity="negative")
+        self.assertTrue(evidence[0].startswith("认可示例："))
+        self.assertTrue(evidence[1].startswith("对照反例："))
+        with self.assertRaises(TaskError):
+            expression.evidence(window, handles)
+        with self.assertRaises(TaskError):
+            expression.evidence(window, ["unreviewed:2"], polarity="negative")
+
+    def test_two_polarities_remain_independent_candidates_in_the_same_response(self):
+        value = self.negative_rule()
+        value["signals"].insert(0, deepcopy(self.value["signals"][0]))
+        assessed = expression.assess(value, self.snapshot)
+        self.assertEqual(len(assessed.signals), 2)
+        self.assertFalse(assessed.rejections)

@@ -62,6 +62,7 @@ test("规则库导出与 V1 分享包预览/导入使用已选择角色路由", 
   assert.equal(edit.route,`targets/profile-a/roles/role-a/reply/style/revise`);
   assert.equal(edit.body.view_token,"token");
   assert.equal(edit.body.changes.expression.pattern,"原来如此呀");
+  assert.equal(edit.body.changes.expression.polarity,"positive");
   assert.equal(edit.body.changes.expression.avoid,"认真求助时不用");
   await click("[data-share-toggle]");
   await click("[data-share-export]");
@@ -411,4 +412,134 @@ test("API failures retain rejected-candidate receipts alongside the original fai
   assert.match(h.root.innerHTML,/第 2 条/);assert.match(h.root.innerHTML,/候选说法：\[回复\]/);
   assert.match(h.root.innerHTML,/整理位置已保留/);
   h.page.unmount();
+});
+
+
+function polarityRule(id,polarity) {
+  return {signal_id:id,run_id:"run-"+id,dimension:"diction",source_kind:"conversation_input",
+    observation:"普通私聊",proposal:polarity==="negative"?"避免反复加入动作旁白":"参考认可示例中的简短说法",
+    state:"pending",created_at:"2026-11-06T00:00:00Z",actions:["adopt","reject"],can_revise:true,
+    expression:{kind:polarity==="negative"?"grammar":"style",situation:"普通私聊",pattern:id,
+      avoid:polarity==="negative"?"用户明确要求角色扮演时":"严肃求助时",...(polarity?{polarity}:{})},
+    evidence:polarity==="negative"?["认可示例：嗯，明天见","对照反例：<动作旁白>"]:["认可示例：嗯，明天见"],
+    view_token:"view-"+id};
+}
+async function polarityHarness(rows,{preview=null}={}) {
+  const savedRows=JSON.parse(JSON.stringify(rows)),calls=[],listeners=new Map();
+  const success=data=>({status:"ok",data});
+  const bridge={apiGet:async(route,query)=>{
+      calls.push({method:"GET",route,query});
+      const items=savedRows.filter(row=>row.state===query.state);
+      return success({items,counts:{pending:savedRows.filter(row=>row.state==="pending").length,
+        adopted:savedRows.filter(row=>row.state==="adopted").length}});
+    },apiPost:async(route,body)=>{
+      calls.push({method:"POST",route,body:JSON.parse(JSON.stringify(body))});
+      if(route.endsWith("/style/import/preview"))return success(preview);
+      const item=savedRows.find(row=>row.signal_id===body.signal_id);
+      if(route.endsWith("/style/revise"))Object.assign(item,JSON.parse(JSON.stringify(body.changes)));
+      if(route.endsWith("/style/command")){
+        item.state=body.action==="adopt"?"adopted":"rejected";
+        item.actions=item.state==="adopted"?["retire"]:["reconsider"];
+      }
+      return success({});
+    }};
+  const root={isConnected:true,innerHTML:"",addEventListener:(name,fn)=>listeners.set(name,fn),
+    removeEventListener:name=>listeners.delete(name),querySelector:()=>null};
+  const window={CompanionProduct:{bridgeNow:()=>bridge,unwrap:value=>value},lucide:{createIcons(){}}};
+  vm.runInContext(source,vm.createContext({window,setTimeout,clearTimeout,TextEncoder,Date,Math,Number,Object,Array,String,URLSearchParams}));
+  const page=window.CompanionExpressionSignalsPage;
+  const drain=async()=>{for(let n=0;n<5;n++)await flush();};
+  page.mount(root,{replyApi:`/${HOST}/targets/private/roles/persona/reply`,scopeKey:"polarity",stateFilter:"pending"});
+  await drain();
+  const click=async(selector,dataset={})=>{listeners.get("click")({target:{closest:value=>value===selector?{dataset}:null}});await drain();};
+  const change=async(selector,value)=>{const target={value,closest:current=>current===selector?target:null};
+    listeners.get("change")({target});await drain();};
+  const input=(name,value)=>{const target={value,dataset:{ruleField:name},closest:selector=>selector==="[data-rule-field]"?target:null};listeners.get("input")({target});};
+  const importText=async(value)=>{const target={value,closest:selector=>selector==="[data-share-import-json]"?target:null};
+    listeners.get("input")({target});await drain();};
+  return {page,root,calls,click,change,input,importText,drain};
+}
+
+test("rule polarity labels and filters include legacy positive rules without writing changes",async()=>{
+  const h=await polarityHarness([polarityRule("传统正向示例"),polarityRule("已标正向示例","positive"),polarityRule("反复动作旁白","negative")]);
+  assert.match(h.root.innerHTML,/data-rule-polarity="positive">正向表达/);
+  assert.match(h.root.innerHTML,/data-rule-polarity="negative">负面约束/);
+  assert.match(h.root.innerHTML,/约束建议/);assert.match(h.root.innerHTML,/例外情境/);
+  assert.match(h.root.innerHTML,/认可示例：嗯，明天见/);
+  assert.match(h.root.innerHTML,/对照反例：&lt;动作旁白&gt;/);assert.doesNotMatch(h.root.innerHTML,/<动作旁白>/);
+  await h.change("[data-rule-polarity-filter]","positive");
+  assert.match(h.root.innerHTML,/<h3>传统正向示例<\/h3>/);assert.match(h.root.innerHTML,/<h3>已标正向示例<\/h3>/);
+  assert.doesNotMatch(h.root.innerHTML,/<h3>反复动作旁白<\/h3>/);
+  await h.change("[data-rule-polarity-filter]","negative");
+  assert.match(h.root.innerHTML,/<h3>反复动作旁白<\/h3>/);assert.doesNotMatch(h.root.innerHTML,/<h3>传统正向示例<\/h3>|<h3>已标正向示例<\/h3>/);
+  await h.change("[data-rule-kind-filter]","style");assert.match(h.root.innerHTML,/当前筛选下没有表达规则/);
+  await h.change("[data-rule-kind-filter]","all");assert.match(h.root.innerHTML,/<h3>反复动作旁白<\/h3>/);
+  await h.change("[data-rule-polarity-filter]","all");assert.match(h.root.innerHTML,/<h3>传统正向示例<\/h3>/);
+  assert.equal(h.calls.filter(call=>call.method==="POST").length,0);
+  assert.equal(h.calls.filter(call=>call.method==="GET").length,1);
+  h.page.unmount();
+});
+
+test("negative rule edits keep read-only polarity while kind and constraint fields remain editable",async()=>{
+  const h=await polarityHarness([polarityRule("动作旁白","negative")]);
+  await h.click("[data-signal-edit]",{signalEdit:"polarity::动作旁白"});
+  const editor=h.root.innerHTML.slice(h.root.innerHTML.indexOf('<section class="lh-rule-editor"'));
+  assert.match(editor,/data-rule-polarity="negative">负面约束/);
+  assert.match(editor,/应避免的说法或句式/);assert.match(editor,/约束建议/);assert.match(editor,/例外情境/);
+  assert.doesNotMatch(editor,/data-rule-field="polarity"/);
+  h.input("polarity","positive");h.input("kind","style");h.input("pattern","反复使用括号动作");
+  h.input("proposal","省略没有必要的动作旁白");h.input("avoid","用户明确要求描写动作时");
+  await h.click("[data-rule-save]");
+  const edit=h.calls.find(call=>call.route.endsWith("/style/revise"));
+  assert.equal(edit.body.changes.expression.polarity,"negative");assert.equal(edit.body.changes.expression.kind,"style");
+  assert.equal(edit.body.changes.expression.pattern,"反复使用括号动作");
+  assert.equal(edit.body.changes.expression.avoid,"用户明确要求描写动作时");
+  assert.equal(edit.body.changes.proposal,"省略没有必要的动作旁白");
+  assert.match(h.root.innerHTML,/data-rule-polarity="negative">负面约束/);
+  assert.match(h.root.innerHTML,/表达规则已更新/);h.page.unmount();
+});
+
+test("positive and negative rules share the same pending adoption workflow",async()=>{
+  const h=await polarityHarness([polarityRule("正向候选","positive"),polarityRule("负面候选","negative")]);
+  await h.click("[data-signal-action]",{signalAction:"adopt",id:"polarity::正向候选"});
+  assert.doesNotMatch(h.root.innerHTML,/<h3>正向候选<\/h3>/);assert.match(h.root.innerHTML,/<h3>负面候选<\/h3>/);
+  await h.click("[data-signal-action]",{signalAction:"adopt",id:"polarity::负面候选"});
+  const writes=h.calls.filter(call=>call.method==="POST");assert.equal(writes.length,2);
+  assert.ok(writes.every(call=>call.route.endsWith("/style/command")&&call.body.action==="adopt"));
+  await h.click("[data-signal-state]",{signalState:"active"});
+  assert.match(h.root.innerHTML,/<h3>正向候选<\/h3>/);assert.match(h.root.innerHTML,/<h3>负面候选<\/h3>/);
+  assert.match(h.root.innerHTML,/data-rule-polarity="negative">负面约束/);
+  h.page.unmount();
+});
+
+test("sharing previews show polarity for nested, top-level and legacy candidate forms",async()=>{
+  const h=await polarityHarness([],{preview:{title:"规则预览",importable_rule_count:3,duplicate_rule_count:0,
+    capacity_blocked_count:0,rejected_count:0,preview_token:"b".repeat(64),candidates:[
+      {dimension:"diction",observation:"对照情境",proposal:"避免反复旁白",expression:{polarity:"negative"}},
+      {dimension:"diction",observation:"认可情境",proposal:"采用认可说法",polarity:"positive"},
+      {dimension:"formatting",observation:"旧规则",proposal:"保留自然分段"}]}});
+  await h.click("[data-share-toggle]");
+  const json=JSON.stringify({schema:"private-companion-expression-pack",version:1,rule_groups:[]});
+  await h.importText(json);await h.click("[data-share-preview]");
+  assert.match(h.root.innerHTML,/data-rule-polarity="negative">负面约束 · 措辞/);
+  assert.equal((h.root.innerHTML.match(/<b data-rule-polarity="positive">正向表达/g) || []).length,2);
+  assert.match(h.root.innerHTML,/避免反复旁白/);assert.match(h.root.innerHTML,/保留自然分段/);
+  const writes=h.calls.filter(call=>call.method==="POST");assert.equal(writes.length,1);
+  assert.ok(writes[0].route.endsWith("/style/import/preview"));assert.equal(writes[0].body.package_json,json);
+  h.page.unmount();
+});
+
+
+test("negative-rule counterexample errors show their Chinese reasons without reporting success",async()=>{
+  for(const [code,message] of [
+    ["expression_counterexample_required","负面约束缺少未认可回复中的对照反例。"],
+    ["expression_counterexample_invalid","负面约束引用的对照反例无效。"],
+  ]){
+    const h=await manualComparisonHarness({status:"ok",data:{simulation:false,state:"failed",code,stage:"output_validation",
+      receipts:{code,expression:{pending_rules:0,rejected_rules:1,cursor_advanced:false,rejections:[{index:1,code,pattern:"重复动作旁白"}]}}}});
+    assert.ok(h.root.innerHTML.includes(message));assert.match(h.root.innerHTML,/对照学习失败/);
+    assert.match(h.root.innerHTML,/新增待审 0 条/);assert.match(h.root.innerHTML,/整理位置已保留/);
+    assert.match(h.root.innerHTML,/查看未通过项/);assert.doesNotMatch(h.root.innerHTML,/对照学习完成/);
+    h.page.unmount();
+  }
 });

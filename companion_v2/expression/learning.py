@@ -103,7 +103,7 @@ def form_identity(expression):
         return None
     form = normalize_form(expression)
     compact = lambda value: " ".join(unicodedata.normalize("NFKC", value).casefold().split())
-    return form["kind"], compact(form["situation"]), compact(form["pattern"])
+    return form["polarity"], form["kind"], compact(form["situation"]), compact(form["pattern"])
 
 
 def normalize_applicability(raw=None, *, default_channels=None):
@@ -191,11 +191,12 @@ def laya_intent_matches(applicability, decision):
 
 INSTRUCTION = """只观察可借鉴的表达形式：句长、节奏、标点、措辞、直接程度和排版，捕捉长期相处中自然耳濡目染的呼吸节拍、软化语气的小助词或熟稔接话方式。区分明确反馈与偶然写法，不从少量样本推断身份、性格、情绪、健康、关系或稳定偏好；证据不足就不提候选，一次说法不概括为长期习惯。
 每项引用输入中的真实 evidence_handle，写清可复用形式及使用条件；proposal 写成角色能以自身性格底色自然化用的表达习惯，而非机械复读；这里只提出待审核候选，不宣称已学习或保存。
+expression.polarity 使用 positive 表示可参考的表达，negative 表示需要避免的表达；负面规则的 pattern 标记应避开的具体说法或句法，proposal 描述怎样改进。
 填写 applicability：channels 选 private/group/proactive/qzone/tts，必须包含来源频道；relationship_stages 选 stranger/familiar/close/any，emotion_gates 选 normal/positive/low/guarded/any，intent 选 acknowledgement/question/request/help/comfort/play/tease/intimacy/boundary/emotion/casual/proactive/any，keywords 最多 8 个简短情境词。其他条件依据不足时用 any 或空关键词，不猜身份、关系或心情。条件是建议的使用范围，不是事实声明，应用时缺失不等于匹配。
 每条候选都必须填写 expression：kind=style 时 pattern 是能被自然改写的具体说法；kind=grammar 时 pattern 是可复用的句法结构。observation 和 expression.situation 说明证据发生的情境，不要用“口语化、自然、简短”代替实际模板；语法习惯不要伪装成口头禅。实在没有具体形式时返回空 signals，不要省略 expression 字段凑候选。
 仅输出符合给定 JSON Schema 的 JSON，不附推理过程。"""
 
-FORM_INSTRUCTION = """每条候选填写 expression：kind=style 是具体情境表达，pattern 保留有辨识度的短说法或带占位的说法，例如在彼此已有共识、不需解释时用“懂的都懂”；kind=grammar 是可复用句法，pattern 写出结构，例如“先用两三个字确认，再省略主语接一句补充”。situation 说明何时合适，avoid 说明何时别用，proposal 说明角色怎样自然化用。
+FORM_INSTRUCTION = """每条候选填写 expression：polarity=positive 是可参考的表达，polarity=negative 是需要避免的表达。kind=style 是具体情境表达，pattern 保留有辨识度的短说法或带占位的说法，例如在彼此已有共识、不需解释时用“懂的都懂”；kind=grammar 是可复用句法，pattern 写出结构，例如“先用两三个字确认，再省略主语接一句补充”。正向规则的 situation 说明何时合适，avoid 说明何时别用，proposal 说明角色怎样自然化用；负面规则的 situation 说明反例出现的情境，pattern 标记要避免的说法或结构，proposal 描述改进方向。
 不要把“更自然、简短口语化、温柔一些”这样的泛泛评价当作学到的表达。短而有辨识度的原话可以保留，长句、私人经历和身份信息不照搬；一次出现可成为局部情境候选，但不要宣称是长期习惯。样本、情境、说法、用法须对应，不能编造证据。对照 existing_rules 的情境与模板：同一说法、同一用法即使 observation 或 proposal 有新措辞也不要另提候选；已拒绝或已停用的规则也不要擅自复活。同一情境下不同的说法，以及相同说法在真正不同情境中的用法可以共存。"""
 
 MODE_GUIDANCE = {

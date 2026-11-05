@@ -11,6 +11,8 @@ window.CompanionExpressionSignalsPage = (() => {
   const INTENT = {acknowledgement:"确认接话", question:"提问", request:"请求", help:"求助", comfort:"安慰",
     play:"玩笑", tease:"打趣", intimacy:"亲昵", boundary:"边界", emotion:"情绪表达", casual:"闲聊",
     proactive:"主动联系", any:"不限"};
+  const POLARITY = {positive:"正向表达",negative:"负面约束"};
+  const polarityOf = item => (item?.expression?.polarity || item?.polarity)==="negative"?"negative":"positive";
   const STATE_FILTERS = [["pending", "待审"], ["active", "已启用"], ["retired", "已停用"], ["rejected", "已拒绝"]];
   const FILTERS = [
     ["all", "全部"], ...Object.entries(DIMENSION),
@@ -28,6 +30,8 @@ window.CompanionExpressionSignalsPage = (() => {
     expression_platform_marker: "候选包含平台标记。",
     expression_candidate_invalid: "候选字段或结构不符合要求。",
     expression_output_invalid: "模型返回的候选列表结构不符合要求。",
+    expression_counterexample_required: "负面约束缺少未认可回复中的对照反例。",
+    expression_counterexample_invalid: "负面约束引用的对照反例无效。",
     expression_review_stale: "整理范围已被另一次学习处理，请重新读取。",
     expression_query_invalid: "规则筛选条件无效，请重新读取。",
     expression_revision_invalid: "请填写适用情境、具体说法或句式及使用方式。",
@@ -131,6 +135,7 @@ window.CompanionExpressionSignalsPage = (() => {
   let selectedExportIds = new Set();
   let editor = null;
   let kindFilter = "all";
+  let polarityFilter = "all";
   let sourceFilter = "all";
   let manualEnabled = false;
   let learning = false;
@@ -299,6 +304,7 @@ window.CompanionExpressionSignalsPage = (() => {
       <span>停用这条规则？</span><button type="button" data-signal-confirm="yes" data-id="${e(item._key)}">确认</button>
       <button type="button" data-signal-confirm="no">取消</button></div>` : "";
     const form = item.expression;
+    const negativeRule = polarityOf(item)==="negative";
     const title = unavailable ? "依据已失效" : (form?.pattern || item.proposal || item.observation || "表达规则");
     const body = unavailable ? "" : (form?.situation || item.observation || "");
     const exportChoice = adopted ? `<label class="lh-signal-export-choice"><input type="checkbox" data-signal-export="${e(item._key)}"${selectedExportIds.has(item._key) ? " checked" : ""} ${transferBusy ? "disabled" : ""}><span>导出</span></label>` : "";
@@ -317,9 +323,9 @@ window.CompanionExpressionSignalsPage = (() => {
     return `<article class="lh-signal-card ${pending ? "is-pending" : adopted ? "is-adopted" : "is-retired"}${unavailable ? " is-unavailable" : ""}">
       <header class="lh-signal-card-head"><div class="lh-signal-card-meta"><span class="lh-signal-dimension">${e(DIMENSION[item.dimension] || item.dimension || "表达规则")}</span>
         <span class="lh-signal-source">${source}</span><span class="lh-signal-scope">记录来源 · ${e(sourceLabel(item._source))}</span>
-        <span class="lh-signal-state">${pending ? "待审" : adopted ? "已启用" : item.state === "rejected" ? "已拒绝" : "已停用"}</span>${form ? `<span class="lh-signal-kind">${form.kind === "grammar" ? "语法句式" : "情境表达"}</span>` : ""}</div><div class="lh-signal-card-tools">${exportChoice}<span class="lh-signal-uses">${e(item.injections || 0)} 次引用</span></div></header>
+        <span class="lh-signal-state">${pending ? "待审" : adopted ? "已启用" : item.state === "rejected" ? "已拒绝" : "已停用"}</span><span class="lh-signal-kind" data-rule-polarity="${polarityOf(item)}">${POLARITY[polarityOf(item)]}</span>${form ? `<span class="lh-signal-kind">${form.kind === "grammar" ? "语法句式" : "情境表达"}</span>` : ""}</div><div class="lh-signal-card-tools">${exportChoice}<span class="lh-signal-uses">${e(item.injections || 0)} 次引用</span></div></header>
       <h3>${e(title)}</h3>${body ? `<p class="lh-signal-observation">${e(body)}</p>` : ""}
-      ${form && !unavailable ? `<dl class="lh-signal-usage"><dt>怎么用</dt><dd>${e(item.proposal)}</dd>${form.avoid ? `<dt>何时不用</dt><dd>${e(form.avoid)}</dd>` : ""}</dl>` : ""}
+      ${form && !unavailable ? `<dl class="lh-signal-usage"><dt>${negativeRule?"约束建议":"怎么用"}</dt><dd>${e(item.proposal)}</dd>${form.avoid ? `<dt>${negativeRule?"例外情境":"何时不用"}</dt><dd>${e(form.avoid)}</dd>` : ""}</dl>` : ""}
       ${!unavailable ? renderApplicability(item.applicability) : ""}
       ${item.source_kind === "shared_pack" ? `<p class="lh-signal-import-origin">分享包 · ${e(item.source_title || "导入规则")}</p>` : ""}
       ${feedback}
@@ -330,13 +336,14 @@ window.CompanionExpressionSignalsPage = (() => {
   function renderEditor() {
     if (!editor) return "";
     const draft = editor.changes;
+    const negativeRule = draft.expression.polarity==="negative";
     const field = (name, label, value, maximum) => `<label><span>${label}</span><textarea data-rule-field="${name}" maxlength="${maximum}" ${writing ? "disabled" : ""}>${e(value)}</textarea></label>`;
     const choices = (name, label, values, labels) => `<fieldset><legend>${label}</legend>${Object.entries(labels).map(([key,text])=>`<label><input type="checkbox" data-rule-condition="${name}" value="${e(key)}" ${values.includes(key)?"checked":""} ${writing?"disabled":""}>${e(text)}</label>`).join("")}</fieldset>`;
-    return `<section class="lh-rule-editor" aria-label="编辑表达规则"><header><h3>编辑表达规则</h3><span>${e(sourceLabel(editor.item._source))}</span></header>
+    return `<section class="lh-rule-editor" aria-label="编辑表达规则"><header><h3>编辑表达规则</h3><span data-rule-polarity="${draft.expression.polarity}">${POLARITY[draft.expression.polarity]} · ${e(sourceLabel(editor.item._source))}</span></header>
       <div class="lh-rule-editor-grid"><label><span>学习类型</span><select data-rule-field="kind"><option value="style" ${draft.expression.kind==="style"?"selected":""}>情境表达</option><option value="grammar" ${draft.expression.kind==="grammar"?"selected":""}>语法句式</option></select></label>
       <label><span>表达维度</span><select data-rule-field="dimension">${Object.entries(DIMENSION).map(([key,label])=>`<option value="${key}" ${key===draft.dimension?"selected":""}>${label}</option>`).join("")}</select></label>
-      ${field("situation","适用情境",draft.expression.situation,240)}${field("pattern","具体说法或句式",draft.expression.pattern,500)}
-      ${field("proposal","使用方式",draft.proposal,1200)}${field("avoid","何时不用",draft.expression.avoid,400)}</div>
+      ${field("situation","适用情境",draft.expression.situation,240)}${field("pattern",negativeRule?"应避免的说法或句式":"具体说法或句式",draft.expression.pattern,500)}
+      ${field("proposal",negativeRule?"约束建议":"使用方式",draft.proposal,1200)}${field("avoid",negativeRule?"例外情境":"何时不用",draft.expression.avoid,400)}</div>
       <details><summary>适用范围</summary><div class="lh-rule-editor-conditions">${choices("channels","使用频道",draft.applicability.channels,CHANNEL)}${choices("relationship_stages","关系阶段",draft.applicability.relationship_stages,RELATIONSHIP)}${choices("emotion_gates","对话氛围",draft.applicability.emotion_gates,EMOTION)}
       <label><span>回复意图</span><select data-rule-condition="intent">${Object.entries(INTENT).map(([key,label])=>`<option value="${key}" ${draft.applicability.intent===key?"selected":""}>${label}</option>`).join("")}</select></label>
       <label><span>情境提示词（逗号分隔）</span><input data-rule-condition="keywords" value="${e(draft.applicability.keywords.join("，"))}" maxlength="264"></label></div></details>
@@ -348,7 +355,7 @@ window.CompanionExpressionSignalsPage = (() => {
     const item = items.find(row=>row._key===id);
     if (!item?.can_revise || busy) return;
     editor = {item, changes: {dimension:item.dimension,proposal:item.proposal,
-      expression: item.expression || {kind:item.dimension==="sentence_rhythm"?"grammar":"style",situation:item.observation||"",pattern:item.proposal||"",avoid:""},
+      expression: {...(item.expression || {kind:item.dimension==="sentence_rhythm"?"grammar":"style",situation:item.observation||"",pattern:item.proposal||"",avoid:""}),polarity:polarityOf(item)},
       applicability:item.applicability || {channels:["private","group","proactive"],relationship_stages:["any"],emotion_gates:["any"],intent:"any",keywords:[]}}};
     editor.changes = JSON.parse(JSON.stringify(editor.changes));
     render(); root?.querySelector("[data-rule-field]")?.focus();
@@ -379,6 +386,7 @@ window.CompanionExpressionSignalsPage = (() => {
       return `<button type="button" class="lh-signal-state-tab${stateFilter === key ? " is-active" : ""}" data-signal-state="${key}" aria-pressed="${stateFilter === key}"${writing ? " disabled" : ""}>${label}${count===null?"":`<span>${count}</span>`}</button>`;
     }).join("");
     const visible = items.filter(item=>(kindFilter==="all" || item.expression?.kind===kindFilter)
+      && (polarityFilter==="all" || polarityOf(item)===polarityFilter)
       && (sourceFilter==="all" || item._source.key===sourceFilter));
     const rows = visible.map(renderItem).join("");
     const more = hasMore() ? `<button type="button" class="lh-signal-more lh-command" data-signal-more ${busy ? "disabled" : ""}>加载更多</button>` : "";
@@ -395,18 +403,18 @@ window.CompanionExpressionSignalsPage = (() => {
       <div class="lh-expression-transfer-import">${importTargets}<label for="expressionShareFile">导入表达分享包</label><div class="lh-expression-transfer-file"><input id="expressionShareFile" type="file" accept=".json,application/json" data-share-file ${transferBusy ? "disabled" : ""}><span>JSON · 最大 250 KB</span></div>
         <textarea class="lh-expression-transfer-json" data-share-import-json placeholder="粘贴分享包 JSON" aria-label="待导入的表达分享包" ${transferBusy ? "disabled" : ""}>${e(importJSON)}</textarea>
         <div class="lh-expression-transfer-actions"><button type="button" class="lh-command" data-share-preview ${transferBusy || !importJSON.trim() ? "disabled" : ""}>预览导入</button><button type="button" class="lh-command is-primary" data-share-apply ${transferBusy || !importPreview?.importable_rule_count ? "disabled" : ""}>加入待审队列</button></div>
-        ${importPreview ? `<div class="lh-expression-import-preview" role="status"><div><strong>${e(importPreview.title || "表达分享包")}</strong><span>${e(importPreview.importable_rule_count)} 条待导入 / ${e(importPreview.duplicate_rule_count)} 条重复 / ${e(importPreview.capacity_blocked_count)} 条超出容量</span></div>${importPreview.candidates?.length ? `<ul>${importPreview.candidates.slice(0, 6).map(item => `<li><b>${e(DIMENSION[item.dimension] || item.dimension)}</b><span>${e(item.observation)}</span><small>${e(item.proposal)}</small>${renderApplicability(item.applicability)}</li>`).join("")}</ul>` : ""}${importPreview.rejected_count ? `<details><summary>${e(importPreview.rejected_count)} 项未通过</summary><ul>${(importPreview.rejected || []).slice(0, 10).map(item => `<li>第 ${e(Number(item.group_index) + 1)} 组${item.rule_index == null ? "" : `第 ${e(Number(item.rule_index) + 1)} 条`}：${e(item.reason)}</li>`).join("")}</ul></details>` : ""}<small>确认后进入待审列表，采纳后才会用于回复。</small></div>` : ""}
+        ${importPreview ? `<div class="lh-expression-import-preview" role="status"><div><strong>${e(importPreview.title || "表达分享包")}</strong><span>${e(importPreview.importable_rule_count)} 条待导入 / ${e(importPreview.duplicate_rule_count)} 条重复 / ${e(importPreview.capacity_blocked_count)} 条超出容量</span></div>${importPreview.candidates?.length ? `<ul>${importPreview.candidates.slice(0, 6).map(item => `<li><b data-rule-polarity="${polarityOf(item)}">${POLARITY[polarityOf(item)]} · ${e(DIMENSION[item.dimension] || item.dimension)}</b><span>${e(item.observation)}</span><small>${e(item.proposal)}</small>${renderApplicability(item.applicability)}</li>`).join("")}</ul>` : ""}${importPreview.rejected_count ? `<details><summary>${e(importPreview.rejected_count)} 项未通过</summary><ul>${(importPreview.rejected || []).slice(0, 10).map(item => `<li>第 ${e(Number(item.group_index) + 1)} 组${item.rule_index == null ? "" : `第 ${e(Number(item.rule_index) + 1)} 条`}：${e(item.reason)}</li>`).join("")}</ul></details>` : ""}<small>确认后进入待审列表，采纳后才会用于回复。</small></div>` : ""}
       </div>${transferNotice ? `<p class="lh-inline-status ${transferError ? "is-error" : ""}" role="status">${e(transferNotice)}</p>` : ""}</section>` : "";
     root.innerHTML = `<section class="lh-signal-list" aria-label="表达规则库"><header class="lh-signal-head"><div><h3>表达规则库</h3><span class="lh-signal-capacity">${e(cap)}</span></div>
       <div class="lh-signal-head-tools">${manualEnabled ? `<button type="button" class="lh-command is-primary" data-expression-learn ${busy || transferBusy ? "disabled" : ""}>${learning ? "学习中…" : "立即对照学习"}</button>` : ""}<button type="button" class="lh-command" data-share-toggle aria-expanded="${transferOpen}">${transferOpen ? "收起分享" : "分享 / 导入"}</button><button type="button" class="lh-refresh" data-signal-refresh aria-label="重新读取" title="重新读取" ${busy || transferBusy ? "disabled" : ""}><i data-lucide="refresh-cw"></i></button></div></header>
       <div class="lh-signal-state-filters" role="group" aria-label="规则状态">${stateTabs}</div>
       <div class="lh-signal-toolbar"><div class="lh-signal-filters" role="group" aria-label="表达规则筛选">${filters}</div></div>
-      <div class="lh-signal-selects"><label>学习类型<select data-rule-kind-filter><option value="all">全部类型</option><option value="style" ${kindFilter==="style"?"selected":""}>情境表达</option><option value="grammar" ${kindFilter==="grammar"?"selected":""}>语法句式</option></select></label>
+      <div class="lh-signal-selects"><label>规则类型<select data-rule-polarity-filter><option value="all">全部规则</option>${Object.entries(POLARITY).map(([key,label])=>`<option value="${key}" ${polarityFilter===key?"selected":""}>${label}</option>`).join("")}</select></label><label>学习类型<select data-rule-kind-filter><option value="all">全部类型</option><option value="style" ${kindFilter==="style"?"selected":""}>情境表达</option><option value="grammar" ${kindFilter==="grammar"?"selected":""}>语法句式</option></select></label>
       ${sources.length>1?`<label>记录来源<select data-rule-source-filter><option value="all">全部来源</option>${sources.map(source=>`<option value="${e(source.key)}" ${sourceFilter===source.key?"selected":""}>${e(sourceLabel(source))}</option>`).join("")}</select></label>`:""}</div>
       ${transfer}
       ${renderEditor()}
       ${notice ? `<div class="lh-inline-status ${error ? "is-error" : ""}" role="status"><span>${e(notice)}</span>${renderLearningRejections()}${issueList}</div>` : ""}
-      ${rows || `<div class="lh-signal-empty">${busy ? "正在读取…" : kindFilter!=="all"||sourceFilter!=="all"?"当前筛选下没有表达规则":stateFilter === "pending" ? "还没有待审候选" : stateFilter === "retired" ? "还没有停用的表达规则" : stateFilter==="rejected"?"还没有拒绝的表达规则":"还没有已启用表达规则"}</div>`}${more}</section>`;
+      ${rows || `<div class="lh-signal-empty">${busy ? "正在读取…" : kindFilter!=="all"||polarityFilter!=="all"||sourceFilter!=="all"?"当前筛选下没有表达规则":stateFilter === "pending" ? "还没有待审候选" : stateFilter === "retired" ? "还没有停用的表达规则" : stateFilter==="rejected"?"还没有拒绝的表达规则":"还没有已启用表达规则"}</div>`}${more}</section>`;
     window.lucide?.createIcons({attrs: {"aria-hidden": "true"}});
   }
   async function learn() {
@@ -595,6 +603,8 @@ window.CompanionExpressionSignalsPage = (() => {
     if (updateDraft(event.target)) return;
     const kind = event.target.closest("[data-rule-kind-filter]");
     if (kind) {kindFilter=kind.value;render();return;}
+    const polarity = event.target.closest("[data-rule-polarity-filter]");
+    if (polarity) {polarityFilter=Object.hasOwn(POLARITY,polarity.value)?polarity.value:"all";render();return;}
     const source = event.target.closest("[data-rule-source-filter]");
     if (source) {sourceFilter=source.value;render();return;}
     const destination=event.target.closest("[data-share-target]");
@@ -668,7 +678,7 @@ window.CompanionExpressionSignalsPage = (() => {
     items = []; pages = {}; capacity = null; notice = ""; busy = false; writing = false; error = false; readIssues = []; confirming = null;
     transferOpen = false; transferBusy = false; transferNotice = ""; transferError = false; importJSON = ""; importPreview = null;
     exportPackage = null; selectedExportIds = new Set();
-    editor=null;kindFilter="all";sourceFilter="all";stateFilter=options.stateFilter==="pending"?"pending":"active";
+    editor=null;kindFilter="all";polarityFilter="all";sourceFilter="all";stateFilter=options.stateFilter==="pending"?"pending":"active";
     manualEnabled=options.manual===true;learning=false;learningReport=null;
     root?.addEventListener("click", onClick); root?.addEventListener("change", onChange); root?.addEventListener("input", onInput);
     window.addEventListener?.("companion-expression-updated", onUpdated); const current = ++mountTicket;

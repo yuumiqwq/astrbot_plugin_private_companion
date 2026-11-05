@@ -143,7 +143,8 @@ class ExpressionStyleManagement:
             return []
         if window.get("source_kind") == "preset_comparison":
             from companion_v2.role_work.daily.expression import evidence
-            return evidence(window, handles)
+            form = rule_details.form_for(self.runtime, row)
+            return evidence(window, handles, polarity=form["polarity"] if form else "positive")
         if window.get("source_kind") == "legacy_expression":
             from .legacy_import import evidence
             return evidence(window, handles)
@@ -218,7 +219,9 @@ class ExpressionStyleManagement:
                             evidence = legacy_evidence(window, handles)
                         elif source_kind == "preset_comparison":
                             from companion_v2.role_work.daily.expression import evidence as comparison_evidence
-                            evidence = comparison_evidence(window, handles)
+                            form = rule_details.form_for(self.runtime, row)
+                            evidence = comparison_evidence(window, handles,
+                                polarity=form["polarity"] if form else "positive")
                         elif source_kind != SHARE_PACK_SOURCE:
                             if source_kind == "conversation_input" and not self.samples.reviews.allows_handles(context, handles):
                                 raise TaskError("expression_sample_changed", "sample approval was revoked")
@@ -259,6 +262,7 @@ class ExpressionStyleManagement:
                 injections += legacy["use_count"]
                 items.append({"signal_id": row["signal_id"], "run_id": row["run_id"],
                     "dimension": row["dimension"], "source_kind": source_kind,
+                    "polarity": detail["form"]["polarity"] if detail else "positive",
                     "applicability": applicability,
                     "expression": detail["form"] if detail and unavailable is None else None,
                     "observation": row["observation"] if unavailable is None else None,

@@ -10,9 +10,12 @@ LIMITS = {"situation": 240, "pattern": 500, "avoid": 400}
 
 
 def normalize(raw):
-    if type(raw) is not dict or set(raw) != {"kind", *LIMITS} or raw["kind"] not in ("style", "grammar"):
+    if (type(raw) is not dict or not {"kind", *LIMITS} <= set(raw)
+            or set(raw) - {"kind", "polarity", *LIMITS}
+            or raw["kind"] not in ("style", "grammar")
+            or raw.get("polarity", "positive") not in ("positive", "negative")):
         raise ValueError("invalid_expression_form")
-    result = {"kind": raw["kind"]}
+    result = {"kind": raw["kind"], "polarity": raw.get("polarity", "positive")}
     for name, maximum in LIMITS.items():
         value = raw[name]
         if type(value) is not str or len(value) > maximum or (name != "avoid" and not value.strip()):
@@ -23,7 +26,11 @@ def normalize(raw):
 
 def read(runtime, signal_id):
     row = runtime.read_one("SELECT value FROM runtime_metadata WHERE key = ?", (PREFIX + digest(signal_id),))
-    return json.loads(row["value"]) if row else None
+    if row is None:
+        return None
+    record = json.loads(row["value"])
+    record["form"] = normalize(record["form"])
+    return record
 
 
 def write(runtime, signal_id, form, *, at, actor, operation_key, legacy=None):
@@ -53,5 +60,6 @@ def legacy_counts(record):
 
 FORM_SCHEMA = {"type": "object", "properties": {
     "kind": {"type": "string", "enum": ["style", "grammar"]},
+    "polarity": {"type": "string", "enum": ["positive", "negative"]},
     **{name: {"type": "string", "maxLength": maximum} for name, maximum in LIMITS.items()},
-}, "required": ["kind", *LIMITS], "additionalProperties": False}
+}, "required": ["kind", "polarity", *LIMITS], "additionalProperties": False}
