@@ -31,6 +31,7 @@ CONTRACT_INSTRUCTION = (
     '输出约定：每次最多提出 3 条候选规则，正向表达与负面约束合计计算；优先提出最有依据且与已有规则不同的候选。'
     '每条规则填写 expression.polarity。approved_quotes 每项填写 evidence_handle 和该编号对应的认可 '
     'assistant 中连续、准确的 quote 原文，直接复制编号与原文；两类规则都提供认可原文作为参照。'
+    '引用中的换行按正常 JSON 字符串转义，解码后与原文一致，也可选择不跨行的连续短摘录。'
     'positive 的 counterexamples 填 []，kind=style 的 pattern 从认可摘录中取连续短语，'
     '多个变体可用 / 分隔且分别提供认可原文，句法结构归入 kind=grammar。'
     'negative 的 counterexamples 至少填写一项 unreviewed: 编号及对应 assistant 的准确 quote，'
@@ -169,6 +170,23 @@ async def capture(service, context, *, automatic=True):
             "captured_at": stamp(service.tasks.now())}
 
 
+def source_quotation(handle, quote, originals):
+    """Resolve exact text, accepting one extra serialization of line endings only."""
+    decoded = quote.replace("\\r\\n", "\r\n").replace("\\n", "\n").replace("\\r", "\r")
+    variants = dict.fromkeys((quote, decoded, decoded.replace("\r\n", "\n").replace("\r", "\n")))
+    for text in variants:
+        if not text.strip():
+            continue
+        if text in originals[handle]:
+            return {"evidence_handle": handle, "quote": text}
+        matches = [key for key, content in originals.items() if text in content]
+        if len(matches) == 1:
+            return {"evidence_handle": matches[0], "quote": text}
+        if matches:
+            return None
+    return None
+
+
 def approved_quotations(quotes, handles, approved):
     """Resolve a misnumbered citation only through its unique exact approved text."""
     if not isinstance(quotes, list) or not quotes or len(quotes) > 8:
@@ -179,13 +197,11 @@ def approved_quotations(quotes, handles, approved):
                 or type(item["evidence_handle"]) is not str or item["evidence_handle"] not in handles
                 or type(item["quote"]) is not str or not item["quote"].strip()):
             raise TaskError("expression_approved_quote_required", "each rule needs exact quotations from its approved evidence")
-        handle, quote = item["evidence_handle"], item["quote"]
-        if quote not in approved[handle]:
-            matches = [key for key, content in approved.items() if quote in content]
-            if len(matches) != 1:
-                raise TaskError("expression_approved_quote_required", "each rule needs exact quotations from its approved evidence")
-            handle = matches[0]
-        resolved.append({"evidence_handle": handle, "quote": quote})
+        reference = source_quotation(item["evidence_handle"], item["quote"], approved)
+        if reference is None:
+            raise ExpressionCandidateError("expression_approved_quote_required",
+                "each rule needs exact quotations from its approved evidence", (item["quote"],))
+        resolved.append(reference)
     return resolved
 
 
@@ -218,13 +234,11 @@ def counterexample_quotations(quotes, handles, unreviewed):
                 or type(item["evidence_handle"]) is not str or item["evidence_handle"] not in handles
                 or type(item["quote"]) is not str or not item["quote"].strip()):
             raise TaskError("expression_counterexample_invalid", "counterexamples must quote their unreviewed assistant sources")
-        handle, quote = item["evidence_handle"], item["quote"]
-        if quote not in unreviewed[handle]:
-            matches = [key for key, content in unreviewed.items() if quote in content]
-            if len(matches) != 1:
-                raise TaskError("expression_counterexample_invalid", "counterexamples must quote their unreviewed assistant sources")
-            handle = matches[0]
-        resolved.append({"evidence_handle": handle, "quote": quote})
+        reference = source_quotation(item["evidence_handle"], item["quote"], unreviewed)
+        if reference is None:
+            raise ExpressionCandidateError("expression_counterexample_invalid",
+                "counterexamples must quote their unreviewed assistant sources", (item["quote"],))
+        resolved.append(reference)
     return resolved
 
 
