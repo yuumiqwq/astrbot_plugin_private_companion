@@ -27,6 +27,19 @@ INTENTS = frozenset({
     "acknowledgement", "question", "request", "help", "comfort", "play", "tease",
     "intimacy", "boundary", "emotion", "casual", "proactive", "any",
 })
+
+
+class ApplicabilityIntentError(ValueError):
+    """Retain a precise intent failure through generic applicability parsing."""
+
+    code = "expression_applicability_invalid"
+    field = "intent"
+
+    def __init__(self, reason):
+        super().__init__("invalid_applicability_intent_" + reason)
+        self.reason = reason
+
+
 APPLICABILITY_FIELDS = frozenset({
     "channels", "relationship_stages", "emotion_gates", "intent", "keywords",
 })
@@ -133,8 +146,29 @@ def normalize_applicability(raw=None, *, default_channels=None):
     stages = values("relationship_stages", RELATIONSHIP_STAGES, ("any",), maximum=len(RELATIONSHIP_STAGES))
     emotions = values("emotion_gates", EMOTION_GATES, ("any",), maximum=len(EMOTION_GATES))
     intent = raw.get("intent", "any")
-    if type(intent) is not str or intent not in INTENTS:
-        raise ValueError("invalid_applicability")
+    if type(intent) is str:
+        if not intent.strip():
+            raise ApplicabilityIntentError("empty")
+        if intent not in INTENTS:
+            raise ApplicabilityIntentError("unknown")
+    elif type(intent) is list:
+        if not intent:
+            raise ApplicabilityIntentError("empty")
+        if len(intent) > len(INTENTS):
+            raise ApplicabilityIntentError("limit")
+        if any(type(item) is not str for item in intent):
+            raise ApplicabilityIntentError("type")
+        if any(item not in INTENTS for item in intent):
+            raise ApplicabilityIntentError("unknown")
+        if len(set(intent)) != len(intent):
+            raise ApplicabilityIntentError("duplicate")
+        if "any" in intent and len(intent) != 1:
+            raise ApplicabilityIntentError("any_mixed")
+        intent = sorted(intent)
+        if len(intent) == 1:
+            intent = intent[0]
+    else:
+        raise ApplicabilityIntentError("type")
 
     keywords = raw.get("keywords", [])
     if (type(keywords) is not list or len(keywords) > MAX_KEYWORDS
@@ -170,9 +204,11 @@ def laya_intent_matches(applicability, decision):
         checked = normalize_applicability(applicability)
     except (TypeError, ValueError):
         return False
-    target = checked["intent"]
-    if target == "any":
+    targets = checked["intent"]
+    if targets == "any":
         return True
+    if isinstance(targets, str):
+        targets = [targets]
     if not isinstance(decision, Mapping):
         return False
     reply_intent = decision.get("reply_intent")
@@ -187,12 +223,12 @@ def laya_intent_matches(applicability, decision):
     }.get(reply_intent, set())
     if reply_style == "playful":
         compatible = compatible | {"play", "tease", "intimacy", "casual"}
-    return target in compatible
+    return any(target in compatible for target in targets)
 
 INSTRUCTION = """只观察可借鉴的表达形式：句长、节奏、标点、措辞、直接程度和排版，捕捉长期相处中自然耳濡目染的呼吸节拍、软化语气的小助词或熟稔接话方式。区分明确反馈与偶然写法，不从少量样本推断身份、性格、情绪、健康、关系或稳定偏好；证据不足就不提候选，一次说法不概括为长期习惯。
 每项引用输入中的真实 evidence_handle，写清可复用形式及使用条件；proposal 写成角色能以自身性格底色自然化用的表达习惯，而非机械复读；这里只提出待审核候选，不宣称已学习或保存。
 expression.polarity 使用 positive 表示可参考的表达，negative 表示需要避免的表达；负面规则的 pattern 标记应避开的具体说法或句法，proposal 描述怎样改进。
-填写 applicability：channels 选 private/group/proactive/qzone/tts，必须包含来源频道；relationship_stages 选 stranger/familiar/close/any，emotion_gates 选 normal/positive/low/guarded/any，intent 选 acknowledgement/question/request/help/comfort/play/tease/intimacy/boundary/emotion/casual/proactive/any，keywords 最多 8 个简短情境词。其他条件依据不足时用 any 或空关键词，不猜身份、关系或心情。条件是建议的使用范围，不是事实声明，应用时缺失不等于匹配。
+填写 applicability：channels 选 private/group/proactive/qzone/tts，必须包含来源频道；relationship_stages 选 stranger/familiar/close/any，emotion_gates 选 normal/positive/low/guarded/any，intent 选 acknowledgement/question/request/help/comfort/play/tease/intimacy/boundary/emotion/casual/proactive/any，可用一个字符串或多个不同意图的数组，数组中任一意图满足即可，any 只单独使用；keywords 最多 8 个简短情境词。其他条件依据不足时用 any 或空关键词，不猜身份、关系或心情。条件是建议的使用范围，不是事实声明，应用时缺失不等于匹配。
 每条候选都必须填写 expression：kind=style 时 pattern 是能被自然改写的具体说法；kind=grammar 时 pattern 是可复用的句法结构。observation 和 expression.situation 说明证据发生的情境，不要用“口语化、自然、简短”代替实际模板；语法习惯不要伪装成口头禅。实在没有具体形式时返回空 signals，不要省略 expression 字段凑候选。
 仅输出符合给定 JSON Schema 的 JSON，不附推理过程。"""
 
@@ -237,7 +273,14 @@ def schema(limit=MAX_SIGNALS_PER_RUN):
                                                         "minItems": 1, "maxItems": len(RELATIONSHIP_STAGES)},
                                 "emotion_gates": {"type": "array", "items": {"type": "string", "enum": list(EMOTION_GATES)},
                                                   "minItems": 1, "maxItems": len(EMOTION_GATES)},
-                                "intent": {"type": "string", "enum": sorted(INTENTS)},
+                                "intent": {"oneOf": [
+                                    {"type": "string", "enum": sorted(INTENTS)},
+                                    {"type": "array", "minItems": 1,
+                                     "maxItems": len(INTENTS) - 1, "uniqueItems": True,
+                                     "items": {"type": "string", "enum": sorted(INTENTS - {"any"})}},
+                                    {"type": "array", "minItems": 1, "maxItems": 1,
+                                     "items": {"type": "string", "enum": ["any"]}},
+                                ]},
                                 "keywords": {"type": "array", "maxItems": MAX_KEYWORDS,
                                              "items": {"type": "string", "maxLength": MAX_KEYWORD_CHARS}},
                             },
@@ -306,6 +349,8 @@ def parse_output(raw: object, *, allowed_evidence: set[str] | frozenset[str], de
             raise ValueError("invalid_signal")
         try:
             applicability = normalize_applicability(item.get("applicability"), default_channels=default_channels)
+        except ApplicabilityIntentError:
+            raise
         except (TypeError, ValueError):
             raise ValueError("invalid_applicability") from None
         if default_channels is not None:

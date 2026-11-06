@@ -11,6 +11,7 @@ window.CompanionExpressionSignalsPage = (() => {
   const INTENT = {acknowledgement:"确认接话", question:"提问", request:"请求", help:"求助", comfort:"安慰",
     play:"玩笑", tease:"打趣", intimacy:"亲昵", boundary:"边界", emotion:"情绪表达", casual:"闲聊",
     proactive:"主动联系", any:"不限"};
+  const intentValues = value => Array.isArray(value) && value.length?value:typeof value==="string" && value?[value]:["any"];
   const POLARITY = {positive:"正向表达",negative:"负面约束"};
   const polarityOf = item => (item?.expression?.polarity || item?.polarity)==="negative"?"negative":"positive";
   const STATE_FILTERS = [["pending", "待审"], ["active", "已启用"], ["retired", "已停用"], ["rejected", "已拒绝"]];
@@ -33,6 +34,8 @@ window.CompanionExpressionSignalsPage = (() => {
     expression_counterexample_required: "负面约束缺少未认可回复中的对照反例。",
     expression_counterexample_invalid: "负面约束引用的对照反例无效。",
     expression_rule_limit: "每次最多返回 3 条候选规则，正向与负面合计。",
+    expression_applicability_invalid: "候选适用条件不符合要求。",
+    expression_form_invalid: "候选表达形式不符合要求。",
     configuration_revision_conflict: "配置已变化，请刷新后重试。",
     expression_review_stale: "整理范围已被另一次学习处理，请重新读取。",
     expression_query_invalid: "规则筛选条件无效，请重新读取。",
@@ -363,7 +366,7 @@ window.CompanionExpressionSignalsPage = (() => {
       ["频道", list(app.channels, CHANNEL)],
       ["关系", list(app.relationship_stages, RELATIONSHIP)],
       ["情绪", list(app.emotion_gates, EMOTION)],
-      ["意图", INTENT[app.intent] || app.intent || "不限"],
+      ["意图", list(intentValues(app.intent), INTENT)],
     ];
     if (Array.isArray(app.keywords) && app.keywords.length) {
       conditions.push(["关键词", app.keywords.join("、")]);
@@ -420,7 +423,7 @@ window.CompanionExpressionSignalsPage = (() => {
       ${field("situation","适用情境",draft.expression.situation,240)}${field("pattern",negativeRule?"应避免的说法或句式":"具体说法或句式",draft.expression.pattern,500)}
       ${field("proposal",negativeRule?"约束建议":"使用方式",draft.proposal,1200)}${field("avoid",negativeRule?"例外情境":"何时不用",draft.expression.avoid,400)}</div>
       <details><summary>适用范围</summary><div class="lh-rule-editor-conditions">${choices("channels","使用频道",draft.applicability.channels,CHANNEL)}${choices("relationship_stages","关系阶段",draft.applicability.relationship_stages,RELATIONSHIP)}${choices("emotion_gates","对话氛围",draft.applicability.emotion_gates,EMOTION)}
-      <label><span>回复意图</span><select data-rule-condition="intent">${Object.entries(INTENT).map(([key,label])=>`<option value="${key}" ${draft.applicability.intent===key?"selected":""}>${label}</option>`).join("")}</select></label>
+      ${choices("intent","回复意图",intentValues(draft.applicability.intent),INTENT)}
       <label><span>情境提示词（逗号分隔）</span><input data-rule-condition="keywords" value="${e(draft.applicability.keywords.join("，"))}" maxlength="264"></label></div></details>
       <p class="lh-rule-editor-state">${editor.item.state==="adopted"?"保存后用于后续回复。":editor.item.state==="pending"?"保存后仍待审核。":"保存后保留当前状态。"}</p>
       ${editor.error ? `<p role="alert" class="lh-inline-status is-error">${e(editor.error)}</p>` : ""}
@@ -433,6 +436,8 @@ window.CompanionExpressionSignalsPage = (() => {
       expression: {...(item.expression || {kind:item.dimension==="sentence_rhythm"?"grammar":"style",situation:item.observation||"",pattern:item.proposal||"",avoid:""}),polarity:polarityOf(item)},
       applicability:item.applicability || {channels:["private","group","proactive"],relationship_stages:["any"],emotion_gates:["any"],intent:"any",keywords:[]}}};
     editor.changes = JSON.parse(JSON.stringify(editor.changes));
+    const intents=[...new Set(intentValues(editor.changes.applicability.intent))].sort();
+    editor.changes.applicability.intent=intents.length===1?intents[0]:intents;
     render(); root?.querySelector("[data-rule-field]")?.focus();
   }
   async function saveRule() {
@@ -736,13 +741,15 @@ window.CompanionExpressionSignalsPage = (() => {
     const condition=target.closest("[data-rule-condition]");
     if (!condition) return false;
     const name=condition.dataset.ruleCondition,app=editor.changes.applicability;
-    if (name==="intent") app.intent=condition.value;
-    else if (name==="keywords") app.keywords=condition.value.split(/[,，\n]/).map(value=>value.trim()).filter(Boolean);
-    else if (["channels","relationship_stages","emotion_gates"].includes(name)) {
-      let values=new Set(app[name]);
+    if (name==="keywords") app.keywords=condition.value.split(/[,，\n]/).map(value=>value.trim()).filter(Boolean);
+    else if (["channels","relationship_stages","emotion_gates","intent"].includes(name)) {
+      let values=new Set(name==="intent"?intentValues(app.intent):app[name]);
       if (condition.checked) {if (condition.value==="any") values=new Set();else values.delete("any");values.add(condition.value);}
       else values.delete(condition.value);
-      app[name]=[...values];
+      if(name==="intent"){
+        if(!values.size)values.add("any");
+        const intents=[...values].sort();app.intent=intents.length===1?intents[0]:intents;
+      }else app[name]=[...values];
       root?.querySelectorAll(`[data-rule-condition="${name}"]`).forEach(input=>{
         input.checked=values.has(input.value);
       });

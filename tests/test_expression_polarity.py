@@ -103,7 +103,7 @@ class PolarityReviewTests(HostFixture, unittest.IsolatedAsyncioTestCase):
                                (encode(list(handles)), item["signal_id"]))
         item = manager.list(operator=self.core, context=context).unwrap()["items"][0]
         self.assertIsNone(item["unavailable_reason"])
-        self.assertEqual(item["evidence"], ["认可示例：可以呀。", "对照反例：" + FORM["pattern"]])
+        self.assertEqual(item["evidence"], ["认可示例：[preset:1] 可以呀。", "对照反例：[unreviewed:2] " + FORM["pattern"]])
         self.assertEqual(item["expression"]["polarity"], "negative")
         snapshot = app.expression_style_context.capture(context, self.clock.now())
         self.assertEqual(snapshot["references"], [])

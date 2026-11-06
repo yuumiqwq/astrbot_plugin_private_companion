@@ -444,7 +444,7 @@ async function polarityHarness(rows,{preview=null}={}) {
       return success({});
     }};
   const root={isConnected:true,innerHTML:"",addEventListener:(name,fn)=>listeners.set(name,fn),
-    removeEventListener:name=>listeners.delete(name),querySelector:()=>null};
+    removeEventListener:name=>listeners.delete(name),querySelector:()=>null,querySelectorAll:()=>[]};
   const window={CompanionProduct:{bridgeNow:()=>bridge,unwrap:value=>value},lucide:{createIcons(){}}};
   vm.runInContext(source,vm.createContext({window,setTimeout,clearTimeout,TextEncoder,Date,Math,Number,Object,Array,String,URLSearchParams}));
   const page=window.CompanionExpressionSignalsPage;
@@ -457,7 +457,9 @@ async function polarityHarness(rows,{preview=null}={}) {
   const input=(name,value)=>{const target={value,dataset:{ruleField:name},closest:selector=>selector==="[data-rule-field]"?target:null};listeners.get("input")({target});};
   const importText=async(value)=>{const target={value,closest:selector=>selector==="[data-share-import-json]"?target:null};
     listeners.get("input")({target});await drain();};
-  return {page,root,calls,click,change,input,importText,drain};
+  const condition=async(name,value,checked)=>{const target={value,checked,dataset:{ruleCondition:name},
+    closest:selector=>selector==="[data-rule-condition]"?target:null};listeners.get("change")({target});await drain();};
+  return {page,root,calls,click,change,input,condition,importText,drain};
 }
 
 test("rule polarity labels and filters include legacy positive rules without writing changes",async()=>{
@@ -691,4 +693,69 @@ test("the shared positive and negative candidate limit has a specific failure st
   const h=await manualComparisonHarness({status:"ok",data:{simulation:false,state:"failed",code:"expression_rule_limit",stage:"output_validation"}});
   assert.match(h.root.innerHTML,/每次最多返回 3 条候选规则，正向与负面合计。/);
   assert.doesNotMatch(h.root.innerHTML,/对照学习完成/);h.page.unmount();
+});
+
+
+function intentRule(id,intent) {
+  return {...polarityRule(id,"positive"),applicability:{channels:["private"],relationship_stages:["any"],
+    emotion_gates:["any"],intent,keywords:[]}};
+}
+const checkedIntents=html=>[...html.matchAll(/<input[^>]*data-rule-condition="intent"[^>]*>/g)]
+  .map(match=>match[0]).filter(input=>/\schecked(?:\s|>)/.test(input)).map(input=>input.match(/value="([^"]+)"/)[1]).sort();
+
+test("multiple intent labels use Chinese and editing other fields preserves every matching intent",async()=>{
+  const h=await polarityHarness([intentRule("多意图规则",["help","comfort"]),intentRule("旧单意图规则","question")]);
+  assert.match(h.root.innerHTML,/<b>意图<\/b>求助、安慰/);assert.match(h.root.innerHTML,/<b>意图<\/b>提问/);
+  await h.click("[data-signal-edit]",{signalEdit:"polarity::多意图规则"});
+  assert.deepEqual(checkedIntents(h.root.innerHTML),["comfort","help"]);
+  assert.match(h.root.innerHTML,/<legend>回复意图<\/legend>/);
+  assert.doesNotMatch(h.root.innerHTML,/<select data-rule-condition="intent"/);
+  h.input("pattern","修改后的说法");await h.click("[data-rule-save]");
+  const edit=h.calls.find(call=>call.route.endsWith("/style/revise"));
+  assert.deepEqual(edit.body.changes.applicability.intent,["comfort","help"]);
+  assert.match(h.root.innerHTML,/<b>意图<\/b>安慰、求助/);h.page.unmount();
+});
+
+test("legacy single intent can become multiple intents and any stays exclusive with specific choices",async()=>{
+  const h=await polarityHarness([intentRule("单意图规则","comfort")]);
+  await h.click("[data-signal-edit]",{signalEdit:"polarity::单意图规则"});
+  assert.deepEqual(checkedIntents(h.root.innerHTML),["comfort"]);
+  await h.condition("intent","question",true);await h.change("[data-rule-kind-filter]","all");
+  assert.deepEqual(checkedIntents(h.root.innerHTML),["comfort","question"]);
+  await h.click("[data-rule-save]");
+  assert.deepEqual(h.calls.filter(call=>call.route.endsWith("/style/revise")).at(-1).body.changes.applicability.intent,["comfort","question"]);
+  await h.click("[data-signal-edit]",{signalEdit:"polarity::单意图规则"});
+  await h.condition("intent","any",true);await h.change("[data-rule-kind-filter]","all");
+  assert.deepEqual(checkedIntents(h.root.innerHTML),["any"]);await h.click("[data-rule-save]");
+  assert.equal(h.calls.filter(call=>call.route.endsWith("/style/revise")).at(-1).body.changes.applicability.intent,"any");
+  await h.click("[data-signal-edit]",{signalEdit:"polarity::单意图规则"});
+  await h.condition("intent","help",true);await h.change("[data-rule-kind-filter]","all");
+  assert.deepEqual(checkedIntents(h.root.innerHTML),["help"]);await h.click("[data-rule-save]");
+  assert.equal(h.calls.filter(call=>call.route.endsWith("/style/revise")).at(-1).body.changes.applicability.intent,"help");
+  h.page.unmount();
+});
+
+test("removing intent choices saves one remaining intent as a string and keeps empty selection valid",async()=>{
+  const h=await polarityHarness([intentRule("可减少意图规则",["comfort","help"])]);
+  await h.click("[data-signal-edit]",{signalEdit:"polarity::可减少意图规则"});
+  await h.condition("intent","help",false);await h.click("[data-rule-save]");
+  assert.equal(h.calls.filter(call=>call.route.endsWith("/style/revise")).at(-1).body.changes.applicability.intent,"comfort");
+  await h.click("[data-signal-edit]",{signalEdit:"polarity::可减少意图规则"});
+  await h.condition("intent","comfort",false);await h.change("[data-rule-kind-filter]","all");
+  assert.deepEqual(checkedIntents(h.root.innerHTML),["any"]);await h.click("[data-rule-save]");
+  assert.equal(h.calls.filter(call=>call.route.endsWith("/style/revise")).at(-1).body.changes.applicability.intent,"any");
+  h.page.unmount();
+});
+
+test("applicability and expression form errors have explicit field-level status messages",async()=>{
+  for(const [code,message] of [
+    ["expression_applicability_invalid","候选适用条件不符合要求。"],
+    ["expression_form_invalid","候选表达形式不符合要求。"],
+  ]){
+    const h=await manualComparisonHarness({status:"ok",data:{simulation:false,state:"failed",code,stage:"output_validation",
+      receipts:{expression:{pending_rules:0,rejected_rules:1,cursor_advanced:false,rejections:[{index:1,code}]}}}});
+    assert.ok(h.root.innerHTML.includes(message));assert.match(h.root.innerHTML,/对照学习失败/);
+    assert.match(h.root.innerHTML,/查看未通过项/);assert.doesNotMatch(h.root.innerHTML,/对照学习完成/);
+    h.page.unmount();
+  }
 });

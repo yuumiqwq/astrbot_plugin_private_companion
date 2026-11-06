@@ -27,19 +27,7 @@ COMPARISON_INSTRUCTION = (
 INSTRUCTION += '\n' + COMPARISON_INSTRUCTION
 INSTRUCTION = INSTRUCTION.replace('已经整理过的历史只作其他任务背景，不再作为本轮新的表达学习证据。',
     '表达学习的语料范围以本轮 approved_dialogue 和 unreviewed_dialogue 为准。')
-CONTRACT_INSTRUCTION = (
-    '输出约定：每次最多提出 3 条候选规则，正向表达与负面约束合计计算；优先提出最有依据且与已有规则不同的候选。'
-    '每条规则填写 expression.polarity。approved_quotes 每项填写 evidence_handle 和该编号对应的认可 '
-    'assistant 中连续、准确的 quote 原文，直接复制编号与原文；两类规则都提供认可原文作为参照。'
-    '引用中的换行按正常 JSON 字符串转义，解码后与原文一致，也可选择不跨行的连续短摘录。'
-    'positive 的 counterexamples 填 []，kind=style 的 pattern 从认可摘录中取连续短语，'
-    '多个变体可用 / 分隔且分别提供认可原文，句法结构归入 kind=grammar。'
-    'negative 的 counterexamples 至少填写一项 unreviewed: 编号及对应 assistant 的准确 quote，'
-    'kind=style 的 pattern 取自这些反例，kind=grammar 可概括反例中的句式问题。'
-    'evidence_handles 包含本规则使用的认可及反例编号，反例只说明应避免的表达。'
-    '对方的触发话语写在 expression.situation，对照分析放在 observation；'
-    'proposal 中推荐的例句取自认可原文，负面规则引用反例时明确其为应避免的说法。'
-)
+CONTRACT_INSTRUCTION = '输出约定：每次最多提出 3 条候选规则，正向表达与负面约束合计计算，优先提出有依据且与已有规则不同的候选。evidence_handles 只填写本轮输入已有的消息编号，程序会根据编号取回原文，模型无须复述引用文本。正向规则至少引用一个 preset: 编号，只从认可 assistant 的表达归纳可参考的说法；负面规则同时引用 preset: 与 unreviewed: 编号，对比相似情境下的表达差异，说明应避免什么。pattern 和 proposal 可以概括表达习惯或句式模板，无须与原句逐字一致；具体正向示范以认可示例为参考，未认可内容用于对照与规避分析。applicability.intent 可填单个意图或意图数组，多项表示任一意图适用，any 单独使用。'
 PLATFORM_MARKERS = ("[回复]", "[图片]", "[语音]", "[视频]", "[文件]", "[分享卡片]", "[QQ表情:")
 
 
@@ -69,23 +57,11 @@ class ComparisonAssessment:
 
 
 def schema():
-    """Describe approved targets and explicitly separated negative examples."""
+    """Reference source messages without making the model reproduce quotations."""
     result = learning.schema(MAX_COMPARISON_RULES)
-    signal = result["properties"]["signals"]["items"]
-    signal["properties"]["approved_quotes"] = {
-        "type": "array", "minItems": 1, "maxItems": 8,
-        "items": {"type": "object", "additionalProperties": False,
-                  "required": ["evidence_handle", "quote"], "properties": {
-                      "evidence_handle": {"type": "string", "pattern": "^preset:"},
-                      "quote": {"type": "string", "minLength": 1}}}}
-    signal["required"].append("approved_quotes")
-    signal["properties"]["counterexamples"] = {
-        "type": "array", "maxItems": 8,
-        "items": {"type": "object", "additionalProperties": False,
-                  "required": ["evidence_handle", "quote"], "properties": {
-                      "evidence_handle": {"type": "string", "pattern": "^unreviewed:"},
-                      "quote": {"type": "string", "minLength": 1}}}}
-    signal["required"].append("counterexamples")
+    references = result["properties"]["signals"]["items"]["properties"]["evidence_handles"]
+    references.update(minItems=1, maxItems=16, uniqueItems=True,
+        items={"type": "string", "pattern": r"^(preset|unreviewed):[0-9]+$"})
     return result
 
 
@@ -170,76 +146,10 @@ async def capture(service, context, *, automatic=True):
             "captured_at": stamp(service.tasks.now())}
 
 
-def source_quotation(handle, quote, originals):
-    """Resolve exact text, accepting one extra serialization of line endings only."""
-    decoded = quote.replace("\\r\\n", "\r\n").replace("\\n", "\n").replace("\\r", "\r")
-    variants = dict.fromkeys((quote, decoded, decoded.replace("\r\n", "\n").replace("\r", "\n")))
-    for text in variants:
-        if not text.strip():
-            continue
-        if text in originals[handle]:
-            return {"evidence_handle": handle, "quote": text}
-        matches = [key for key, content in originals.items() if text in content]
-        if len(matches) == 1:
-            return {"evidence_handle": matches[0], "quote": text}
-        if matches:
-            return None
-    return None
-
-
-def approved_quotations(quotes, handles, approved):
-    """Resolve a misnumbered citation only through its unique exact approved text."""
-    if not isinstance(quotes, list) or not quotes or len(quotes) > 8:
-        raise TaskError("expression_approved_quote_required", "each rule needs exact quotations from its approved evidence")
-    resolved = []
-    for item in quotes:
-        if (type(item) is not dict or set(item) != {"evidence_handle", "quote"}
-                or type(item["evidence_handle"]) is not str or item["evidence_handle"] not in handles
-                or type(item["quote"]) is not str or not item["quote"].strip()):
-            raise TaskError("expression_approved_quote_required", "each rule needs exact quotations from its approved evidence")
-        reference = source_quotation(item["evidence_handle"], item["quote"], approved)
-        if reference is None:
-            raise ExpressionCandidateError("expression_approved_quote_required",
-                "each rule needs exact quotations from its approved evidence", (item["quote"],))
-        resolved.append(reference)
-    return resolved
-
-
-def approved_pattern(pattern, quotes):
-    """Require exact approved support for a phrase or every slash-separated variant."""
-    if type(pattern) is not str or not pattern.strip():
-        return False
-    if any(pattern in item["quote"] for item in quotes):
-        return True
-    variants = [item.strip() for item in re.split(r"[/／]", pattern)]
-    return (len(variants) > 1 and all(variants)
-            and all(any(variant in item["quote"] for item in quotes) for variant in variants))
-
-
 def quoted_examples(text):
     """Read illustrative phrases in common prose/code quotation forms."""
     matches = re.findall(r'“([^”]*)”|「([^」]*)」|『([^』]*)』|‘([^’]*)’|"([^"\n]*)"|\'([^\'\n]*)\'|`([^`\n]*)`', text)
     return [value for parts in matches for value in parts if value]
-
-
-def counterexample_quotations(quotes, handles, unreviewed):
-    """Resolve exact counterexamples without treating them as approved targets."""
-    if not isinstance(quotes, list) or not quotes:
-        raise TaskError("expression_counterexample_required", "a negative rule needs an exact unreviewed counterexample")
-    if len(quotes) > 8:
-        raise TaskError("expression_counterexample_invalid", "counterexamples must quote their unreviewed assistant sources")
-    resolved = []
-    for item in quotes:
-        if (type(item) is not dict or set(item) != {"evidence_handle", "quote"}
-                or type(item["evidence_handle"]) is not str or item["evidence_handle"] not in handles
-                or type(item["quote"]) is not str or not item["quote"].strip()):
-            raise TaskError("expression_counterexample_invalid", "counterexamples must quote their unreviewed assistant sources")
-        reference = source_quotation(item["evidence_handle"], item["quote"], unreviewed)
-        if reference is None:
-            raise ExpressionCandidateError("expression_counterexample_invalid",
-                "counterexamples must quote their unreviewed assistant sources", (item["quote"],))
-        resolved.append(reference)
-    return resolved
 
 
 def parse(raw, snapshot):
@@ -247,59 +157,51 @@ def parse(raw, snapshot):
     if isinstance(value, dict) and isinstance(value.get("signals"), list) and len(value["signals"]) > MAX_COMPARISON_RULES:
         raise TaskError("expression_rule_limit", "a comparison may propose at most three rules")
     approved = {key: item["content"] for key, item in snapshot["handles"].items()
-                if item.get("quality") == "approved" and item.get("role") == "assistant"}
+                if key.startswith("preset:") and item.get("quality") == "approved" and item.get("role") == "assistant"}
     comparison = {key: item["content"] for key, item in snapshot["handles"].items()
-                  if item.get("quality") == "unreviewed" and item.get("role") == "assistant"}
+                  if key.startswith("unreviewed:") and item.get("quality") == "unreviewed" and item.get("role") == "assistant"}
+    allowed = set(approved) | set(comparison)
     for signal in value.get("signals", []):
-        references = signal.get("evidence_handles", [])
-        if (not references or any(type(handle) is not str or handle not in snapshot["handles"] for handle in references)):
-            raise TaskError("expression_approved_evidence_required", "rule references must name original sources")
-        handles = [handle for handle in references if handle in approved]
-        if not handles:
+        references = signal.get("evidence_handles")
+        if (type(references) is not list or not references or len(references) > 16
+                or any(type(handle) is not str or handle not in allowed for handle in references)):
+            raise TaskError("expression_approved_evidence_required", "rule references must name original assistant messages")
+        targets = list(dict.fromkeys(handle for handle in references if handle in approved))
+        if not targets:
             raise TaskError("expression_approved_evidence_required", "rule evidence needs approved assistant sources")
-        quotes = approved_quotations(signal.pop("approved_quotes", None), handles, approved)
         form = signal.get("expression", {})
         polarity = form.get("polarity", "positive")
-        counterexamples = signal.pop("counterexamples", [])
-        if not isinstance(counterexamples, list) or len(counterexamples) > 8:
-            raise TaskError("expression_counterexample_invalid", "counterexamples must be a bounded list")
-        if polarity == "negative":
-            comparison_handles = [handle for handle in references if handle in comparison]
-            counterexamples = counterexample_quotations(counterexamples, comparison_handles, comparison)
-        elif counterexamples:
-            raise TaskError("expression_counterexample_invalid", "positive rules do not carry negative examples")
-        signal["evidence_handles"] = list(dict.fromkeys(item["evidence_handle"] for item in [*quotes, *counterexamples]))
+        contrasts = list(dict.fromkeys(handle for handle in references if handle in comparison))
+        if polarity == "negative" and not contrasts:
+            raise TaskError("expression_counterexample_required", "a negative rule needs an unreviewed source message")
+        # Older saved responses may include copied text; message IDs remain
+        # authoritative, and these optional fields never rebind their sources.
+        signal.pop("approved_quotes", None)
+        signal.pop("counterexamples", None)
+        signal["evidence_handles"] = targets + (contrasts if polarity == "negative" else [])
         pattern, proposal = form.get("pattern", ""), signal.get("proposal", "")
         examples = [pattern, *quoted_examples(pattern), *quoted_examples(proposal)]
         markers = [marker for marker in PLATFORM_MARKERS if any(marker in text for text in examples)]
         if markers:
             raise ExpressionCandidateError("expression_platform_marker",
                 "QQ record placeholders do not describe a speaking style", markers)
-        if form.get("kind") == "style":
-            basis = counterexamples if polarity == "negative" else quotes
-            if not approved_pattern(form.get("pattern"), basis):
-                code = "expression_counterexample_invalid" if polarity == "negative" else "expression_unapproved_pattern"
-                raise ExpressionCandidateError(code,
-                    "a concrete expression must occur in its " + ("counterexample" if polarity == "negative" else "approved quotation"),
-                    (form.get("pattern", ""),))
-        canonical = lambda text: "".join(unicodedata.normalize("NFKC", text).split())
-        supported = [canonical(text) for text in approved.values()]
-        supported.extend(canonical(item["quote"]) for item in counterexamples)
-        originals = [item["content"] for item in snapshot["unreviewed_dialogue"] if item["role"] == "assistant"]
-        unreviewed = [canonical(text) for text in originals]
-        unsupported = [text for text in examples if len(canonical(text)) >= 2
-                       and any(canonical(text) in source for source in unreviewed)
-                       and not any(canonical(text) in source for source in supported)]
-        advice = canonical(pattern + "\n" + proposal)
-        unsupported.extend(text for text in originals if len(canonical(text)) >= 4
-                           and canonical(text) in advice
-                           and not any(canonical(text) in source for source in supported))
-        if unsupported:
-            raise ExpressionCandidateError("expression_unapproved_pattern",
-                "an unreviewed-only expression cannot become a rule example", unsupported)
-    result = learning.parse_output(encode(value), allowed_evidence=set(approved) | set(comparison),
-                                   default_channels=("private", "proactive"))
-    return result
+        if polarity == "positive":
+            canonical = lambda text: "".join(unicodedata.normalize("NFKC", text).split())
+            positives = [canonical(text) for text in approved.values()]
+            originals = list(comparison.values())
+            unreviewed = [canonical(text) for text in originals]
+            unsupported = [text for text in examples if len(canonical(text)) >= 2
+                           and any(canonical(text) in source for source in unreviewed)
+                           and not any(canonical(text) in source for source in positives)]
+            advice = canonical(pattern + "\n" + proposal)
+            unsupported.extend(text for text in originals if len(canonical(text)) >= 4
+                               and canonical(text) in advice
+                               and not any(canonical(text) in source for source in positives))
+            if unsupported:
+                raise ExpressionCandidateError("expression_unapproved_pattern",
+                    "an unreviewed-only expression cannot become a positive rule example", unsupported)
+    return learning.parse_output(encode(value), allowed_evidence=allowed,
+                                 default_channels=("private", "proactive"))
 
 
 def assess(raw, snapshot):
@@ -325,7 +227,11 @@ def assess(raw, snapshot):
         except (TaskError, ValueError, TypeError, KeyError, AttributeError) as error:
             form = candidate.get("expression") if isinstance(candidate, dict) else None
             pattern = form.get("pattern", "") if isinstance(form, dict) else ""
-            rejections.append({"index": index, "code": getattr(error, "code", "expression_candidate_invalid"),
+            code = getattr(error, "code", None) or {
+                "invalid_applicability": "expression_applicability_invalid",
+                "invalid_expression_form": "expression_form_invalid",
+            }.get(str(error), "expression_candidate_invalid")
+            rejections.append({"index": index, "code": code,
                 "pattern": pattern[:200] if isinstance(pattern, str) else "",
                 "unsupported_examples": list(getattr(error, "unsupported_examples", ()))})
     return ComparisonAssessment(base.summary, tuple(accepted), tuple(rejections))
@@ -349,7 +255,7 @@ def evidence(window, handles, *, polarity="positive"):
             or polarity == "negative" and not any(values[handle]["quality"] == "unreviewed" for handle in handles)):
         raise TaskError("expression_sample_changed", "comparison evidence is unavailable")
     return [("认可示例" if values[handle]["quality"] == "approved" else "对照反例")
-            + "：" + values[handle]["content"] for handle in handles]
+            + "：[" + handle + "] " + values[handle]["content"] for handle in handles]
 
 
 def commit(service, context, snapshot, result, run_id, connection):

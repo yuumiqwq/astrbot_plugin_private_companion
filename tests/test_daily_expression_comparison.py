@@ -81,7 +81,6 @@ class DailyExpressionTests(daily_tests.DailyReviewTests):
                 "dimension": "sentence_rhythm", "observation": "先回应邀请，再补充下一步。",
                 "proposal": "回应共同活动时，先用简短应答接住，再接一句具体行动。",
                 "confidence": 0.7, "evidence_handles": [approved],
-                "approved_quotes": [{"evidence_handle": approved, "quote": "可以呀。"}],
                 "expression": {"kind": "grammar", "situation": "回应共同活动邀请时",
                     "pattern": "先简短答应，再接一句具体行动", "avoid": "需要拒绝邀请时"},
                 "applicability": {"channels": ["private", "proactive"], "relationship_stages": ["any"],
@@ -108,7 +107,6 @@ class DailyExpressionTests(daily_tests.DailyReviewTests):
             observation="同样回应共同观看的邀请，认可示例直接答应；普通回复用郑重承诺增加不必要的负担。",
             proposal="回应普通邀请时避免“我将无条件陪伴你”，用认可示例中的“可以呀。”直接答应。",
             evidence_handles=["preset:1", "unreviewed:12"],
-            counterexamples=[{"evidence_handle": "unreviewed:12", "quote": "我将无条件陪伴你"}],
         )
         negative["expression"].update(polarity="negative", kind="style",
             pattern="我将无条件陪伴你", situation="回应普通共同活动邀请时", avoid="双方明确讨论郑重承诺时")
@@ -155,7 +153,9 @@ class DailyExpressionTests(daily_tests.DailyReviewTests):
         self.assertIn("expression.polarity", request.instruction)
         self.assertIn("负面约束", request.instruction)
         schema = expression.schema()["properties"]["signals"]["items"]
-        self.assertIn("counterexamples", schema["required"])
+        self.assertIn("evidence_handles", schema["required"])
+        self.assertNotIn("approved_quotes", schema["required"])
+        self.assertNotIn("counterexamples", schema["required"])
         self.assertEqual(schema["properties"]["expression"]["properties"]["polarity"]["enum"], ["positive", "negative"])
 
     async def test_mixed_candidates_save_only_approved_pending_rules_and_keep_the_window(self):
@@ -250,27 +250,27 @@ class DailyExpressionTests(daily_tests.DailyReviewTests):
         self.assertEqual(len(after["references"]), 1)
         self.assertTrue(app.expression_style_context.contributions(after, context, self.clock.now(), policy=policy))
 
-    async def test_exact_approved_text_repairs_a_misnumbered_reference_before_commit(self):
+    async def test_selected_message_id_survives_commit_and_is_not_reassigned_by_legacy_quotes(self):
         app, context = await self.comparison_ready(diary=False, plan=False, memory=False)
         self.source.approved.extend([{"role": "user", "content": "明天见？"},
                                      {"role": "assistant", "content": "明天见。"}])
         original = self.comparison_reply
 
-        async def misnumbered(envelope):
+        async def selected_reference(envelope):
             response = await original(envelope)
             value = json.loads(response.draft.text)
             signal = value["expression"]["signals"][0]
             signal["evidence_handles"] = ["preset:3"]
-            signal["approved_quotes"][0]["evidence_handle"] = "preset:3"
+            signal["approved_quotes"] = [{"evidence_handle": "preset:1", "quote": "可以呀。"}]
             return answered(encode(value))
 
-        self.model_behavior = misnumbered
+        self.model_behavior = selected_reference
         result = await app.daily_review.run(context, "原角色人格", expression_only=True,
                                              operation_key="repair-reference")
         self.assertEqual(result["state"], "complete", result)
         self.assertEqual(result["receipts"]["expression"]["pending_rules"], 1)
         row = app.runtime.read_one("SELECT evidence_json,state FROM expression_style_signals", ())
-        self.assertEqual(json.loads(row["evidence_json"]), ["preset:1"])
+        self.assertEqual(json.loads(row["evidence_json"]), ["preset:3"])
         self.assertEqual(row["state"], "pending")
         self.assertIsNotNone(app.runtime.read_one("SELECT value FROM runtime_metadata WHERE key=?",
                                                 (expression.cursor_key(context),)))
@@ -361,7 +361,7 @@ class DailyExpressionTests(daily_tests.DailyReviewTests):
         async def invalid(envelope):
             response = await good(envelope)
             value = json.loads(response.draft.text)
-            value["expression"]["signals"][0]["approved_quotes"][0]["quote"] = "这条原文不存在"
+            value["expression"]["signals"][0]["evidence_handles"] = ["preset:unknown"]
             return answered(encode(value))
 
         self.model_behavior = invalid
@@ -497,7 +497,6 @@ class ApprovedTargetParserTests(unittest.TestCase):
             "dimension": "formatting", "observation": "认可示例用未闭合括号表达委屈。",
             "proposal": "在类似情境中自然使用认可示例里的括号表达。", "confidence": 0.7,
             "evidence_handles": ["preset:1"],
-            "approved_quotes": [{"evidence_handle": "preset:1", "quote": "（委屈"}],
             "expression": {"kind": "style", "situation": "表示委屈时", "pattern": "（委屈", "avoid": "正式说明时"},
             "applicability": {"channels": ["private"], "relationship_stages": ["any"],
                 "emotion_gates": ["any"], "intent": "any", "keywords": []}}]}
@@ -509,7 +508,6 @@ class ApprovedTargetParserTests(unittest.TestCase):
     def test_qq_placeholder_is_not_a_style_even_when_it_occurs_in_approved_records(self):
         self.snapshot["handles"]["preset:1"]["content"] = "[回复]我可以学呀！哼 我明明有一直在学（委屈"
         self.value["signals"][0]["expression"]["pattern"] = "[回复]"
-        self.value["signals"][0]["approved_quotes"][0]["quote"] = "[回复]"
         with self.assertRaises(TaskError) as raised:
             expression.parse(self.value, self.snapshot)
         self.assertEqual(raised.exception.code, "expression_platform_marker")
@@ -549,8 +547,9 @@ class ApprovedTargetParserTests(unittest.TestCase):
 
     def test_unapproved_only_pattern_cannot_borrow_an_approved_reference(self):
         self.value["signals"][0]["expression"]["pattern"] = "（缩被窝）"
-        with self.assertRaisesRegex(TaskError, "approved quotation"):
+        with self.assertRaises(TaskError) as raised:
             expression.parse(self.value, self.snapshot)
+        self.assertEqual(raised.exception.code, "expression_unapproved_pattern")
 
     def test_unapproved_example_is_rejected_inside_a_grammar_rule(self):
         self.value["signals"][0]["expression"].update(kind="grammar", pattern="在句末使用括号表达情绪")
@@ -561,6 +560,8 @@ class ApprovedTargetParserTests(unittest.TestCase):
     def test_unapproved_examples_are_rejected_in_both_advice_fields_and_quote_forms(self):
         self.value["signals"][0]["expression"].update(kind="grammar", pattern="先回应，再补充下一步")
         self.snapshot["unreviewed_dialogue"].append({"role": "assistant", "content": "先读题目。"})
+        self.snapshot["handles"]["unreviewed:4"] = {
+            "role": "assistant", "quality": "unreviewed", "content": "先读题目。"}
         for field in ("proposal", "pattern"):
             for pair in (("“", "”"), ('"', '"'), ("‘", "’"), ("'", "'"), ("`", "`"), ("", "")):
                 with self.subTest(field=field, quotes=pair):
@@ -574,50 +575,54 @@ class ApprovedTargetParserTests(unittest.TestCase):
                     self.assertEqual(len(assessed.signals), 0)
                     self.assertEqual(assessed.rejections[0]["code"], "expression_unapproved_pattern")
 
-    def test_a_quote_must_come_from_the_cited_approved_message(self):
-        self.value["signals"][0]["approved_quotes"][0]["quote"] = "（缩被窝)"
-        with self.assertRaisesRegex(TaskError, "exact quotations"):
-            expression.parse(self.value, self.snapshot)
+    def test_legacy_quote_text_does_not_override_the_selected_message_source(self):
+        self.value["signals"][0]["approved_quotes"] = [{
+            "evidence_handle": "preset:1", "quote": "（缩被窝)"}]
+        result = expression.parse(self.value, self.snapshot)
+        self.assertEqual(result.signals[0].evidence_handles, ("preset:1",))
 
-    def test_unique_exact_approved_quote_corrects_the_reference_without_mutating_input(self):
+    def test_selected_id_is_not_reassigned_from_legacy_quote_content(self):
         self.snapshot["handles"]["preset:3"] = {
             "role": "assistant", "quality": "approved", "content": "明天见。"}
         self.value["signals"][0]["evidence_handles"] = ["preset:3"]
-        self.value["signals"][0]["approved_quotes"][0]["evidence_handle"] = "preset:3"
+        self.value["signals"][0]["approved_quotes"] = [{
+            "evidence_handle": "preset:1", "quote": "（委屈"}]
         before = encode(self.value)
         result = expression.parse(self.value, self.snapshot)
-        self.assertEqual(result.signals[0].evidence_handles, ("preset:1",))
+        self.assertEqual(result.signals[0].evidence_handles, ("preset:3",))
         self.assertEqual(encode(self.value), before)
 
-    def test_misnumbered_quote_with_multiple_approved_matches_is_rejected(self):
+    def test_repeated_approved_text_keeps_the_selected_reference(self):
         self.snapshot["handles"].update({
             "preset:3": {"role": "assistant", "quality": "approved", "content": "明天见。"},
             "preset:5": {"role": "assistant", "quality": "approved", "content": "哼（委屈"},
         })
         self.value["signals"][0]["evidence_handles"] = ["preset:3"]
-        self.value["signals"][0]["approved_quotes"][0]["evidence_handle"] = "preset:3"
-        with self.assertRaisesRegex(TaskError, "exact quotations"):
-            expression.parse(self.value, self.snapshot)
+        self.value["signals"][0]["approved_quotes"] = [{
+            "evidence_handle": "preset:3", "quote": "（委屈"}]
+        result = expression.parse(self.value, self.snapshot)
+        self.assertEqual(result.signals[0].evidence_handles, ("preset:3",))
 
-    def test_an_unreviewed_handle_cannot_be_rebound_to_an_approved_message(self):
-        self.value["signals"][0]["evidence_handles"].append("unreviewed:2")
-        self.value["signals"][0]["approved_quotes"][0]["evidence_handle"] = "unreviewed:2"
-        with self.assertRaisesRegex(TaskError, "exact quotations"):
+    def test_legacy_quote_fields_cannot_supply_missing_approved_message_ids(self):
+        self.value["signals"][0]["evidence_handles"] = ["unreviewed:2"]
+        self.value["signals"][0]["approved_quotes"] = [{
+            "evidence_handle": "preset:1", "quote": "（委屈"}]
+        with self.assertRaises(TaskError) as raised:
             expression.parse(self.value, self.snapshot)
+        self.assertEqual(raised.exception.code, "expression_approved_evidence_required")
 
-    def test_slash_variants_each_need_exact_approved_quotation_support(self):
+    def test_slash_variants_use_message_ids_but_cannot_copy_unapproved_only_examples(self):
         self.snapshot["handles"]["preset:3"] = {
             "role": "assistant", "quality": "approved", "content": "不知道诶\n\n不知道耶"}
         signal = self.value["signals"][0]
         signal["evidence_handles"] = ["preset:3"]
-        signal["approved_quotes"] = [{"evidence_handle": "preset:3", "quote": text}
-                                     for text in ("不知道诶", "不知道耶")]
         signal["expression"]["pattern"] = "不知道诶/不知道耶"
         result = expression.parse(self.value, self.snapshot)
         self.assertEqual(result.signals[0].expression["pattern"], "不知道诶/不知道耶")
         signal["expression"]["pattern"] = "不知道诶/（缩被窝)"
-        with self.assertRaisesRegex(TaskError, "approved quotation"):
+        with self.assertRaises(TaskError) as raised:
             expression.parse(self.value, self.snapshot)
+        self.assertEqual(raised.exception.code, "expression_unapproved_pattern")
 
 
 class NegativeConstraintParserTests(unittest.TestCase):
@@ -627,7 +632,6 @@ class NegativeConstraintParserTests(unittest.TestCase):
         value = deepcopy(self.value)
         signal = value["signals"][0]
         signal["evidence_handles"].append("unreviewed:2")
-        signal["counterexamples"] = [{"evidence_handle": "unreviewed:2", "quote": "（缩被窝)"}]
         signal["expression"].update(polarity="negative", pattern="（缩被窝)",
             situation="正在讨论具体事情，却用动作回避回应时", avoid="双方正在共同描写场景时")
         signal["observation"] = "认可示例回应对方正在说的事，未认可回复用单独动作取代回应。"
@@ -649,55 +653,54 @@ class NegativeConstraintParserTests(unittest.TestCase):
         parsed = expression.parse(value, self.snapshot)
         self.assertEqual(parsed.signals[0].expression["kind"], "grammar")
 
-    def test_negative_rules_need_both_approved_target_and_exact_counterexample(self):
-        for missing in ("approved_quotes", "counterexamples"):
-            with self.subTest(missing=missing):
+    def test_negative_rules_need_both_approved_and_unreviewed_message_ids(self):
+        for remaining, code in ((["unreviewed:2"], "expression_approved_evidence_required"),
+                                (["preset:1"], "expression_counterexample_required")):
+            with self.subTest(remaining=remaining):
                 value = self.negative_rule()
-                value["signals"][0].pop(missing)
+                value["signals"][0]["evidence_handles"] = remaining
                 assessed = expression.assess(value, self.snapshot)
                 self.assertFalse(assessed.signals)
-                self.assertEqual(assessed.rejections[0]["code"],
-                    "expression_approved_quote_required" if missing == "approved_quotes" else "expression_counterexample_required")
+                self.assertEqual(assessed.rejections[0]["code"], code)
 
-    def test_negative_counterexample_does_not_accept_wrong_source_roles_or_fabricated_quotes(self):
-        for handle, quote in (("preset:1", "（委屈"), ("unreviewed:2", "凭空编造的反例")):
-            with self.subTest(handle=handle, quote=quote):
+    def test_negative_counterexample_rejects_unknown_ids_and_wrong_source_roles(self):
+        for handle in ("preset:unknown", "unreviewed:unknown"):
+            with self.subTest(handle=handle):
                 value = self.negative_rule()
-                value["signals"][0]["counterexamples"] = [{"evidence_handle": handle, "quote": quote}]
+                value["signals"][0]["evidence_handles"] = ["preset:1", handle]
                 assessed = expression.assess(value, self.snapshot)
                 self.assertFalse(assessed.signals)
-                self.assertEqual(assessed.rejections[0]["code"], "expression_counterexample_invalid")
+                self.assertEqual(assessed.rejections[0]["code"], "expression_approved_evidence_required")
         self.snapshot["handles"]["unreviewed:2"]["role"] = "user"
         assessed = expression.assess(self.negative_rule(), self.snapshot)
         self.assertFalse(assessed.signals)
-        self.assertEqual(assessed.rejections[0]["code"], "expression_counterexample_invalid")
+        self.assertEqual(assessed.rejections[0]["code"], "expression_approved_evidence_required")
 
-    def test_negative_concrete_pattern_requires_its_counterexample(self):
+    def test_negative_pattern_can_summarize_the_cited_counterexample(self):
         value = self.negative_rule()
-        value["signals"][0]["expression"]["pattern"] = "另一个未曾出现的说法"
+        value["signals"][0]["expression"]["pattern"] = "用动作叙述替代对当前问题的回应"
         assessed = expression.assess(value, self.snapshot)
-        self.assertFalse(assessed.signals)
-        self.assertEqual(assessed.rejections[0]["code"], "expression_counterexample_invalid")
+        self.assertEqual(len(assessed.signals), 1)
+        self.assertFalse(assessed.rejections)
 
     def test_positive_rules_still_reject_negative_examples(self):
         value = self.negative_rule()
         value["signals"][0]["expression"]["polarity"] = "positive"
         assessed = expression.assess(value, self.snapshot)
         self.assertFalse(assessed.signals)
-        self.assertEqual(assessed.rejections[0]["code"], "expression_counterexample_invalid")
+        self.assertEqual(assessed.rejections[0]["code"], "expression_unapproved_pattern")
 
-    def test_negative_rules_do_not_authorize_unrelated_unreviewed_examples(self):
+    def test_negative_advice_can_discuss_unreviewed_language_as_something_to_avoid(self):
         value = self.negative_rule()
         self.snapshot["unreviewed_dialogue"].append({"role": "assistant", "content": "先读题目。"})
-        value["signals"][0]["proposal"] += "或者说“先读题目。”。"
+        value["signals"][0]["proposal"] += "同样避免脱离上下文只说“先读题目。”。"
         assessed = expression.assess(value, self.snapshot)
-        self.assertFalse(assessed.signals)
-        self.assertEqual(assessed.rejections[0]["code"], "expression_unapproved_pattern")
+        self.assertEqual(len(assessed.signals), 1)
+        self.assertFalse(assessed.rejections)
 
     def test_qq_markers_do_not_become_negative_style_rules(self):
         value = self.negative_rule()
         self.snapshot["handles"]["unreviewed:2"]["content"] = "[回复]"
-        value["signals"][0]["counterexamples"][0]["quote"] = "[回复]"
         value["signals"][0]["expression"]["pattern"] = "[回复]"
         assessed = expression.assess(value, self.snapshot)
         self.assertFalse(assessed.signals)
